@@ -1,0 +1,9 @@
+# dependencies
+node_modules
+
+# environment (contains Supabase service-role key, Betfair + Odds API keys — never commit)
+.env
+
+# macOS + runtime logs
+.DS_Store
+*.log

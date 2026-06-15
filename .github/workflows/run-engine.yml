@@ -1,0 +1,40 @@
+name: Run EVE Engine
+
+# The engine ingests fresh odds and recomputes value signals.
+# - Scheduled every 10 minutes (GitHub's shortest reliable cron granularity)
+# - Manual trigger available via the "Run workflow" button (workflow_dispatch)
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  run-engine:
+    runs-on: ubuntu-latest
+
+    # All three credentials come from GitHub repository secrets.
+    # Add them under: Settings → Secrets and variables → Actions → New repository secret
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # The engine files live at the repository root (this repo IS the engine folder),
+      # so npm install and the node scripts all run from the checkout root.
+      - name: Install dependencies
+        run: npm install
+
+      - name: Ingest odds
+        run: node ingestOdds.js
+
+      - name: Compute values
+        run: node computeValues.js

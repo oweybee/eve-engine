@@ -1,0 +1,16 @@
+{
+  "name": "numbers-game-engine",
+  "version": "1.0.0",
+  "description": "numbers_game — Value Detection Computation Engine",
+  "main": "computeValues.js",
+  "scripts": {
+    "start": "node computeValues.js",
+    "test": "node engine.test.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
