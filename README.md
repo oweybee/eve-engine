@@ -19,7 +19,7 @@ to run on your local machine.
 | `schedule` | Every 10 minutes — `cron: '*/10 * * * *'` |
 | `workflow_dispatch` | On demand, whenever you click **Run workflow** |
 
-Each run, on an `ubuntu-latest` runner with Node.js 18:
+Each run, on an `ubuntu-latest` runner with Node.js 22:
 
 1. Checks out the repo
 2. Installs dependencies (`npm install`)

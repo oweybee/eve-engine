@@ -23,10 +23,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 18
+      # Node 22: @supabase/supabase-js requires native WebSocket support,
+      # which only exists in Node 22+ (Node 18/20 fail at startup).
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 22
 
       # The engine files live at the repository root (this repo IS the engine folder),
       # so npm install and the node scripts all run from the checkout root.
