@@ -18,6 +18,9 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      # Optional — used by fetchResults.js to settle results. If unset, settlement
+      # is skipped gracefully (the run still succeeds).
+      RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
 
     steps:
       - name: Checkout repository
@@ -40,3 +43,6 @@ jobs:
 
       - name: Compute values
         run: node computeValues.js
+
+      - name: Settle results & refresh performance summary
+        run: node fetchResults.js

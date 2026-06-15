@@ -25,6 +25,7 @@ Each run, on an `ubuntu-latest` runner with Node.js 22:
 2. Installs dependencies (`npm install`)
 3. Runs `node ingestOdds.js` — fetches odds → Supabase
 4. Runs `node computeValues.js` — computes edges + records value signals
+5. Runs `node fetchResults.js` — settles results + refreshes performance summary
 
 ---
 
@@ -39,6 +40,7 @@ run time.
 | `SUPABASE_URL` | Your Supabase project URL (`https://<ref>.supabase.co`) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase **service-role** key (server-side; full access) |
 | `ODDS_API_KEY` | Your key for The Odds API (theoddsapi.com) |
+| `RAPIDAPI_KEY` | *(optional)* API-Football key via RapidAPI — settles results for ROI/Yield/Win-rate. Sign up free at rapidapi.com → subscribe to "API-Football" (100 req/day free). If unset, settlement is skipped and the run still succeeds. |
 
 ### How to add them
 

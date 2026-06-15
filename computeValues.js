@@ -35,6 +35,25 @@ const {
 const DC_BASE = 1.35;
 const DC_HOME_ADV = 1.15;
 
+// World Cup 2026 host nations — only these teams get home advantage at the WC.
+// Every other World Cup fixture is played on neutral ground (no home edge).
+const WC_2026_HOSTS = new Set([
+  'USA', 'United States', 'US',
+  'Canada',
+  'Mexico',
+]);
+
+/**
+ * Home-advantage multiplier for a fixture.
+ * - Club / non-World-Cup football: always 1.15 (real home ground).
+ * - World Cup 2026: 1.15 only if the home team is a host nation, else 1.0 (neutral).
+ */
+function homeAdvFor(match) {
+  const isWorldCup = match?.league?.name?.includes('World Cup');
+  const homeName = match?.home_team?.name;
+  return (!isWorldCup || WC_2026_HOSTS.has(homeName)) ? DC_HOME_ADV : 1.0;
+}
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -436,12 +455,12 @@ const MODEL_SHARPNESS = parseFloat(process.env.MODEL_SHARPNESS ?? '1.7');
  * Dixon-Coles inspired 1X2 probabilities from team attack/defence ratings,
  * with optional temperature sharpening. Returns { home, draw, away } summing to 1.
  */
-function matchProbabilities(homeTeam, awayTeam, sharpness = MODEL_SHARPNESS) {
+function matchProbabilities(homeTeam, awayTeam, sharpness = MODEL_SHARPNESS, homeAdv = DC_HOME_ADV) {
   const home = ratingFor(homeTeam);
   const away = ratingFor(awayTeam);
-  const BASE = 1.35, HOME_ADV = 1.15, MAX_GOALS = 7;
+  const BASE = 1.35, MAX_GOALS = 7;
 
-  const lambdaHome = BASE * home.attack * away.defence * HOME_ADV;
+  const lambdaHome = BASE * home.attack * away.defence * homeAdv;
   const lambdaAway = BASE * away.attack * home.defence;
 
   let homeWin = 0, draw = 0, awayWin = 0;
@@ -494,8 +513,14 @@ function computeMatch(match) {
     return null;
   }
 
+  // Home advantage: full for club football, but at the World Cup only host
+  // nations (USA/Canada/Mexico) play "at home" — everyone else is on neutral turf.
+  const homeAdvMultiplier = homeAdvFor(match);
+  const isWorldCup = match.league?.name?.includes('World Cup');
+  console.log(`    [home-adv] ${homeStr} vs ${awayStr}: ${homeAdvMultiplier > 1 ? `APPLIED x${homeAdvMultiplier}` : 'NEUTRAL (x1.0)'}${isWorldCup ? ' [World Cup]' : ''}`);
+
   // Model probability = Dixon-Coles Poisson, OUR own model (not bookmaker-derived)
-  const model = matchProbabilities(homeStr, awayStr);
+  const model = matchProbabilities(homeStr, awayStr, MODEL_SHARPNESS, homeAdvMultiplier);
 
   // Minimum soft book coverage — need at least 3 distinct soft books for the
   // market side of the edge (the price we're judging value against).
@@ -640,8 +665,9 @@ function computeMatch(match) {
   const ev = evForStakes(bestModelProb, bestOdds, [10, 50, 100]);
 
   // Explainability (#8) — decompose the Dixon-Coles goal expectations
+  // (uses the same home-advantage multiplier the model actually applied).
   const hr = ratingFor(homeStr), ar = ratingFor(awayStr);
-  const lambdaHome = DC_BASE * hr.attack * ar.defence * DC_HOME_ADV;
+  const lambdaHome = DC_BASE * hr.attack * ar.defence * homeAdvMultiplier;
   const lambdaAway = DC_BASE * ar.attack * hr.defence;
   const explain = {
     homeXG: +lambdaHome.toFixed(2),
@@ -649,7 +675,7 @@ function computeMatch(match) {
     factors: [
       { label: 'Attack rating',   home: hr.attack,  away: ar.attack },
       { label: 'Defence rating',  home: hr.defence, away: ar.defence },
-      { label: 'Home advantage',  note: `+${Math.round((DC_HOME_ADV - 1) * 100)}% to ${homeStr} xG` },
+      { label: 'Home advantage',  note: homeAdvMultiplier > 1 ? `+${Math.round((homeAdvMultiplier - 1) * 100)}% to ${homeStr} xG` : 'Neutral venue (World Cup)' },
       { label: 'Recent form',     status: 'planned' },
       { label: 'Injuries',        status: 'planned' },
     ],
