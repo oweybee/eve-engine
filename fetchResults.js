@@ -2,14 +2,14 @@
  * fetchResults.js — settles value signals and refreshes the performance summary.
  *
  * 1. Finds value_signals with result = 'pending' whose kickoff was > 2h ago.
- * 2. Looks up the actual match result from API-Football (RapidAPI) and sets
- *    result = 'win' | 'loss' on each signal, plus closing_odds and CLV where a
+ * 2. Looks up the actual match result from API-Football (API-Sports) and sets
+ *   result = 'win' | 'loss' on each signal, plus closing_odds and CLV where a
  *    closing Betfair price is available.
  *      CLV = ln(detected_odds) − ln(closing_odds)   (positive = beat the close)
  * 3. Recomputes performance_summary (win rate, yield, ROI, avg CLV, …) from the
  *    full settled history.
  *
- * Runs after computeValues.js in the GitHub Actions workflow. If RAPIDAPI_KEY is
+ * Runs after computeValues.js in the GitHub Actions workflow. If API_FOOTBALL_KEY is
  * not set it skips settlement (no-op) but still refreshes the summary so the
  * pipeline never fails just because results aren't wired up yet.
  */
@@ -20,10 +20,8 @@ const { createClient } = require('@supabase/supabase-js');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-// Supports both direct API-Sports key (API_FOOTBALL_KEY) and legacy RapidAPI key
-const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY ?? process.env.RAPIDAPI_KEY;
+const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY;
 
-// Direct API-Sports endpoint (dashboard.api-football.com)
 const API_FOOTBALL_HOST = 'v3.football.api-sports.io';
 const SETTLE_DELAY_MS = 2 * 60 * 60 * 1000; // only settle signals 2h+ past kickoff
 
@@ -67,12 +65,10 @@ async function fetchFixturesForDate(date, cache) {
   const url = `https://${API_FOOTBALL_HOST}/fixtures?date=${date}`;
   try {
     const res = await fetch(url, {
-      headers: {
-        'x-apisports-key': API_FOOTBALL_KEY,
-      },
+      headers: { 'x-apisports-key': API_FOOTBALL_KEY },
     });
     if (!res.ok) {
-      console.warn(`  [results] API-Football ${date}: HTTP ${res.status} — check API_FOOTBALL_KEY`);
+      console.warn(`  [results] API-Football ${date}: HTTP ${res.status}`);
       cache.set(date, []);
       return [];
     }
