@@ -20,9 +20,11 @@ const { createClient } = require('@supabase/supabase-js');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
+// Supports both direct API-Sports key (API_FOOTBALL_KEY) and legacy RapidAPI key
+const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY ?? process.env.RAPIDAPI_KEY;
 
-const RAPIDAPI_HOST = 'api-football-v1.p.rapidapi.com';
+// Direct API-Sports endpoint (dashboard.api-football.com)
+const API_FOOTBALL_HOST = 'v3.football.api-sports.io';
 const SETTLE_DELAY_MS = 2 * 60 * 60 * 1000; // only settle signals 2h+ past kickoff
 
 function getClient() {
@@ -62,13 +64,15 @@ function namesMatch(a, b) {
 
 async function fetchFixturesForDate(date, cache) {
   if (cache.has(date)) return cache.get(date);
-  const url = `https://${RAPIDAPI_HOST}/v3/fixtures?date=${date}`;
+  const url = `https://${API_FOOTBALL_HOST}/fixtures?date=${date}`;
   try {
     const res = await fetch(url, {
-      headers: { 'X-RapidAPI-Key': RAPIDAPI_KEY, 'X-RapidAPI-Host': RAPIDAPI_HOST },
+      headers: {
+        'x-apisports-key': API_FOOTBALL_KEY,
+      },
     });
     if (!res.ok) {
-      console.warn(`  [results] API-Football ${date}: HTTP ${res.status}`);
+      console.warn(`  [results] API-Football ${date}: HTTP ${res.status} — check API_FOOTBALL_KEY`);
       cache.set(date, []);
       return [];
     }
@@ -153,8 +157,8 @@ async function settlePendingSignals(supabase) {
     return { settled: 0, unmatched: 0 };
   }
 
-  if (!RAPIDAPI_KEY) {
-    console.log(`[results] ${pending.length} signal(s) pending but RAPIDAPI_KEY not set — skipping settlement`);
+  if (!API_FOOTBALL_KEY) {
+    console.log(`[results] ${pending.length} signal(s) pending but API_FOOTBALL_KEY not set — skipping settlement`);
     return { settled: 0, unmatched: pending.length };
   }
 
