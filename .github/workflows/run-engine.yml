@@ -20,7 +20,7 @@ jobs:
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
       # Optional — used by fetchResults.js to settle results via API-Sports. If unset,
       # is skipped gracefully (the run still succeeds).
-        API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+      API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
 
     steps:
       - name: Checkout repository
