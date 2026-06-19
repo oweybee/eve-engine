@@ -37,6 +37,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       # Node 22: @supabase/supabase-js requires native WebSocket support,
       # which only exists in Node 22+ (Node 18/20 fail at startup).
