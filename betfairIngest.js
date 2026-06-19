@@ -653,12 +653,12 @@ async function ingest() {
         if (overUnderResult) {
           console.log(`  [totals] O:${overUnderResult.overOdds} U:${overUnderResult.underOdds}`);
         }
-      } else if (/^both teams to score$/i.test(mkt.marketName)) {
+      } else if (/^both teams to score\??$/i.test(mkt.marketName)) {
         bttsResult = parseBTTS(book, runners);
         if (bttsResult) {
           console.log(`  [btts]   Y:${bttsResult.yesOdds} N:${bttsResult.noOdds}`);
         }
-      } else if (/booking points?/i.test(mkt.marketName)) {
+      } else if (/bookings?\s+points?/i.test(mkt.marketName)) {
         bookingsResult = parseBookings(book, runners);
         if (bookingsResult) {
           console.log(`  [cards]  line:${bookingsResult.line} O:${bookingsResult.overOdds} U:${bookingsResult.underOdds}`);
