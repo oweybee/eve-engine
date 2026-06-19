@@ -247,6 +247,62 @@ function normaliseEvent(event, leagueName) {
 }
 
 /**
+ * Fetches Both Teams to Score (btts) odds for a single sport/league.
+ */
+async function fetchBttsForLeague(sportKey) {
+  if (!ODDS_API_KEY) throw new Error('ODDS_API_KEY environment variable is not set');
+
+  const url = [
+    `https://api.the-odds-api.com/v4/sports/${sportKey}/odds`,
+    `?apiKey=${ODDS_API_KEY}`,
+    `&regions=uk`,
+    `&markets=btts`,
+    `&oddsFormat=decimal`,
+    `&bookmakers=${BOOKMAKERS}`,
+  ].join('');
+
+  console.log(`  Fetching btts for ${sportKey}...`);
+  const data = await httpGet(url);
+  console.log(`  → ${data.length} btts events returned`);
+  return data;
+}
+
+/**
+ * Normalises a BTTS API event into Yes/No odds rows.
+ * Uses home_odds for Yes price, away_odds for No price, draw_odds null.
+ */
+function normaliseBttsEvent(event) {
+  const { id, bookmakers } = event;
+  const oddsRows = [];
+
+  for (const bm of (bookmakers ?? [])) {
+    const btts = bm.markets?.find(m => m.key === 'btts');
+    if (!btts) continue;
+
+    const outcomes = btts.outcomes ?? [];
+    const yesOutcome = outcomes.find(o => o.name === 'Yes');
+    const noOutcome  = outcomes.find(o => o.name === 'No');
+    if (!yesOutcome || !noOutcome) continue;
+
+    const yesPrice = parseFloat(yesOutcome.price);
+    const noPrice  = parseFloat(noOutcome.price);
+    if (yesPrice <= 1 || noPrice <= 1) continue;
+
+    oddsRows.push({
+      bookmaker:   bm.key,
+      market:      'btts',
+      home_odds:   yesPrice,   // Yes stored as home_odds
+      draw_odds:   null,
+      away_odds:   noPrice,    // No stored as away_odds
+      market_line: null,
+      fetched_at:  new Date().toISOString(),
+    });
+  }
+
+  return { externalId: id, oddsRows };
+}
+
+/**
  * Normalises a totals API event into Over/Under odds rows.
  * Uses home_odds for Over price, away_odds for Under price, draw_odds null.
  */
@@ -526,6 +582,41 @@ async function ingest() {
         }
       } catch (err) {
         console.error(`    [error] totals ${norm.externalId}: ${err.message}`);
+        summary.errors++;
+      }
+    }
+
+    // ── BTTS (both teams to score) ingestion ─────────────────────────────
+    console.log(`\n[btts] ${league.name}`);
+    let bttsEvents;
+    try {
+      bttsEvents = await fetchBttsForLeague(league.sportKey);
+    } catch (err) {
+      console.warn(`  [warn] btts fetch failed: ${err.message}`);
+      bttsEvents = [];
+    }
+
+    for (const event of bttsEvents) {
+      const norm = normaliseBttsEvent(event);
+      if (!norm.oddsRows.length) continue;
+
+      try {
+        if (!DRY_RUN) {
+          const { data: matchRow, error } = await supabase
+            .from('matches')
+            .select('id')
+            .eq('external_id', norm.externalId)
+            .maybeSingle();
+
+          if (error || !matchRow) continue;
+
+          const inserted = await insertOddsForMatch(supabase, matchRow.id, norm.oddsRows);
+          summary.oddsInserted += inserted;
+        } else {
+          console.log(`  [dry-run] btts for ${norm.externalId}: ${norm.oddsRows.length} rows`);
+        }
+      } catch (err) {
+        console.error(`    [error] btts ${norm.externalId}: ${err.message}`);
         summary.errors++;
       }
     }

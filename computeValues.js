@@ -647,6 +647,15 @@ function computeMatch(match) {
     const modelBttsYes = model.bttsYes;
     const modelBttsNo  = 1 - modelBttsYes;
 
+    // Build per-bookmaker BTTS odds maps
+    const allBttsYesOdds = {}, allBttsNoOdds = {};
+    for (const r of bttsOdds) {
+      const name = formatBookName(r.bookmaker);
+      const y = parseFloat(r.home_odds), n = parseFloat(r.away_odds);
+      if (y > 1) allBttsYesOdds[name] = Math.max(allBttsYesOdds[name] ?? 0, y);
+      if (n > 1) allBttsNoOdds[name]  = Math.max(allBttsNoOdds[name] ?? 0, n);
+    }
+
     // Best soft-book BTTS odds (yes → home_odds, no → away_odds per betfairIngest convention)
     const softBtts = bttsOdds.filter(r => SOFT_BOOKS.has(r.bookmaker));
     const bttsSrc  = softBtts.length ? softBtts : bttsOdds;
@@ -664,15 +673,17 @@ function computeMatch(match) {
       const noValue  = noEdge  != null && noEdge  > 0 && bestNoOdds  <= MAX_ODDS_FOR_VALUE;
       console.log(`    btts Y:${bestYesOdds}(${bestYesBook}) N:${bestNoOdds}(${bestNoBook}) modelYes:${(modelBttsYes*100).toFixed(0)}% edge:${yesEdge != null ? (yesEdge*100).toFixed(1)+'%' : '?'} ${yesValue||noValue ? '✓ BTTS VALUE' : ''}`);
       bttsResult = {
-        btts_yes_odds:  bestYesOdds,
-        btts_no_odds:   bestNoOdds,
-        btts_yes_book:  bestYesBook,
-        btts_no_book:   bestNoBook,
-        btts_yes_edge:  yesEdge,
-        btts_no_edge:   noEdge,
-        btts_yes_value: yesValue,
-        btts_no_value:  noValue,
-        btts_model_prob: modelBttsYes,
+        btts_yes_odds:      bestYesOdds,
+        btts_no_odds:       bestNoOdds,
+        btts_yes_book:      bestYesBook,
+        btts_no_book:       bestNoBook,
+        btts_yes_edge:      yesEdge,
+        btts_no_edge:       noEdge,
+        btts_yes_value:     yesValue,
+        btts_no_value:      noValue,
+        btts_model_prob:    modelBttsYes,
+        all_btts_yes_odds:  Object.keys(allBttsYesOdds).length ? allBttsYesOdds : null,
+        all_btts_no_odds:   Object.keys(allBttsNoOdds).length  ? allBttsNoOdds  : null,
       };
     }
   }
