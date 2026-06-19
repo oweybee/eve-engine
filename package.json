@@ -5,7 +5,9 @@
   "main": "computeValues.js",
   "scripts": {
     "start": "node computeValues.js",
-    "test": "node engine.test.js"
+    "test": "node engine.test.js",
+    "post-to-x": "node postToX.js",
+    "post-to-x:dry": "DRY_RUN=1 node postToX.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0"
