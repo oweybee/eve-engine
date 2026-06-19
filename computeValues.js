@@ -31,6 +31,8 @@ const {
   valueScore, signalTier, bestTier,
 } = require('./modelMetrics');
 
+const { computeBookingsModel } = require('./bookingsModel');
+
 // Dixon-Coles structural constants (kept in sync with matchProbabilities)
 const DC_BASE = 1.35;
 const DC_HOME_ADV = 1.15;
@@ -674,10 +676,9 @@ function computeMatch(match) {
   }
 
   // ── Bookings (card points) ──────────────────────────────────────────────────
-  // No internal model for bookings — surface best Betfair exchange price only.
   let bookingsResult = {};
   if (bookingsOdds.length > 0) {
-    // Pick the row with the lowest overround (most liquid line)
+    // Pick the most liquid line (lowest overround)
     let best = null, bestSpread = Infinity;
     for (const r of bookingsOdds) {
       const o = parseFloat(r.home_odds), u = parseFloat(r.away_odds);
@@ -689,11 +690,23 @@ function computeMatch(match) {
       }
     }
     if (best) {
-      console.log(`    bookings line=${best.line} O:${best.over} U:${best.under}`);
+      const isNeutral = match.league?.name?.includes('World Cup') ?? true;
+      const bm = computeBookingsModel(homeStr, awayStr, isNeutral, best.line);
+      const overEdge  = computeEdge(bm.probOver,  best.over);
+      const underEdge = computeEdge(bm.probUnder, best.under);
+      const overValue  = overEdge  != null && overEdge  > 0 && best.over  <= MAX_ODDS_FOR_VALUE;
+      const underValue = underEdge != null && underEdge > 0 && best.under <= MAX_ODDS_FOR_VALUE;
+      console.log(`    bookings line=${best.line} O:${best.over} U:${best.under} modelOver:${(bm.probOver*100).toFixed(0)}% lambda:${bm.lambda.toFixed(1)} ${overValue||underValue ? '✓ CARDS VALUE' : ''}`);
       bookingsResult = {
-        bookings_over_odds:  best.over,
-        bookings_under_odds: best.under,
-        bookings_line:       best.line,
+        bookings_over_odds:   best.over,
+        bookings_under_odds:  best.under,
+        bookings_line:        best.line,
+        bookings_over_edge:   overEdge,
+        bookings_under_edge:  underEdge,
+        bookings_over_value:  overValue,
+        bookings_under_value: underValue,
+        bookings_model_prob:  bm.probOver,
+        bookings_lambda:      parseFloat(bm.lambda.toFixed(2)),
       };
     }
   }
