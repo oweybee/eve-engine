@@ -511,9 +511,10 @@ function computeMatch(match) {
   }
 
   // Split odds by market
-  const h2hOdds     = match.odds.filter(r => (r.market ?? 'h2h') === 'h2h');
-  const totalsOdds  = match.odds.filter(r => r.market === 'totals');
-  const bttsOdds    = match.odds.filter(r => r.market === 'btts');
+  const h2hOdds      = match.odds.filter(r => (r.market ?? 'h2h') === 'h2h');
+  const totalsOdds   = match.odds.filter(r => r.market === 'totals');
+  const bttsOdds     = match.odds.filter(r => r.market === 'btts');
+  const bookingsOdds = match.odds.filter(r => r.market === 'bookings');
 
   const h2hPool = h2hOdds.length ? h2hOdds : match.odds;
 
@@ -672,6 +673,31 @@ function computeMatch(match) {
     }
   }
 
+  // ── Bookings (card points) ──────────────────────────────────────────────────
+  // No internal model for bookings — surface best Betfair exchange price only.
+  let bookingsResult = {};
+  if (bookingsOdds.length > 0) {
+    // Pick the row with the lowest overround (most liquid line)
+    let best = null, bestSpread = Infinity;
+    for (const r of bookingsOdds) {
+      const o = parseFloat(r.home_odds), u = parseFloat(r.away_odds);
+      if (!o || !u || o <= 1 || u <= 1) continue;
+      const spread = Math.abs((1 / o + 1 / u) - 1);
+      if (spread < bestSpread) {
+        bestSpread = spread;
+        best = { over: o, under: u, line: parseFloat(r.market_line ?? 0) };
+      }
+    }
+    if (best) {
+      console.log(`    bookings line=${best.line} O:${best.over} U:${best.under}`);
+      bookingsResult = {
+        bookings_over_odds:  best.over,
+        bookings_under_odds: best.under,
+        bookings_line:       best.line,
+      };
+    }
+  }
+
   // ── Professional metrics layer (Features #2 #3 #4 #5 #8) ─────────────────
   const softRows = h2hPool.filter(r => SOFT_BOOKS.has(r.bookmaker));
   const consensus = consensusStats(softRows, model);
@@ -794,6 +820,7 @@ function computeMatch(match) {
     computed_at:     new Date().toISOString(),
     ...totalsResult,
     ...bttsResult,
+    ...bookingsResult,
     ...metrics,
     _maxEdge:        maxEdge,
     _homeEV:         homeEV,

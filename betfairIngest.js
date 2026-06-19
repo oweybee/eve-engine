@@ -338,6 +338,53 @@ function parseBTTS(book, runners) {
   return { market: 'btts', yesOdds: y, noOdds: n };
 }
 
+/**
+ * Parses a Booking Points market (Betfair: "Booking Points").
+ *
+ * Betfair booking points runner names vary by event but follow patterns like:
+ *   "Under 30.5", "Over 30.5", "Under 35.5 Booking Points", etc.
+ * We find all Over/Under pairs and pick the line with the tightest spread
+ * (most liquid). Stored as: over → home_odds, under → away_odds, line → market_line.
+ */
+function parseBookings(book, runners) {
+  const prices = priceMap(book);
+  const lines = {};  // line → { overSel, underSel }
+
+  for (const r of runners) {
+    const name = r.runnerName ?? '';
+    const overMatch  = name.match(/over\s+([\d.]+)/i);
+    const underMatch = name.match(/under\s+([\d.]+)/i);
+    if (overMatch) {
+      const line = parseFloat(overMatch[1]);
+      if (!lines[line]) lines[line] = {};
+      lines[line].overSel = r.selectionId;
+    } else if (underMatch) {
+      const line = parseFloat(underMatch[1]);
+      if (!lines[line]) lines[line] = {};
+      lines[line].underSel = r.selectionId;
+    }
+  }
+
+  // Find complete (over+under) pairs; pick the most liquid (tightest margin)
+  let best = null, bestSpread = Infinity;
+  for (const [lineStr, sel] of Object.entries(lines)) {
+    if (!sel.overSel || !sel.underSel) continue;
+    const o = prices[sel.overSel], u = prices[sel.underSel];
+    if (!o || !u || o <= 1 || u <= 1) continue;
+    const spread = Math.abs((1 / o + 1 / u) - 1);  // overround — lower = more liquid
+    if (spread < bestSpread) {
+      bestSpread = spread;
+      best = { line: parseFloat(lineStr), overOdds: o, underOdds: u };
+    }
+  }
+
+  if (!best) {
+    console.warn('    [warn] Booking Points runners not matched — skipping market');
+    return null;
+  }
+  return { market: 'bookings', ...best };
+}
+
 // ---------------------------------------------------------------------------
 // 7. Supabase helpers
 // ---------------------------------------------------------------------------
@@ -539,6 +586,7 @@ async function ingest() {
     let matchOddsResult  = null;
     let overUnderResult  = null;
     let bttsResult       = null;
+    let bookingsResult   = null;
 
     for (const mkt of markets) {
       const book = bookMap[mkt.marketId];
@@ -559,6 +607,11 @@ async function ingest() {
         bttsResult = parseBTTS(book, runners);
         if (bttsResult) {
           console.log(`  [btts]   Y:${bttsResult.yesOdds} N:${bttsResult.noOdds}`);
+        }
+      } else if (/booking points?/i.test(mkt.marketName)) {
+        bookingsResult = parseBookings(book, runners);
+        if (bookingsResult) {
+          console.log(`  [cards]  line:${bookingsResult.line} O:${bookingsResult.overOdds} U:${bookingsResult.underOdds}`);
         }
       }
     }
@@ -630,6 +683,21 @@ async function ingest() {
       summary.marketsProcessed++;
     }
 
+    // Insert bookings (card points) odds
+    if (bookingsResult) {
+      const bookingsRow = {
+        bookmaker:   'betfair_ex_uk',
+        market:      'bookings',
+        home_odds:   bookingsResult.overOdds,   // Over → home_odds
+        draw_odds:   null,
+        away_odds:   bookingsResult.underOdds,  // Under → away_odds
+        market_line: bookingsResult.line,
+        fetched_at:  fetchedAt,
+      };
+      if (await insertOddsRow(supabase, matchId, bookingsRow)) summary.oddsInserted++;
+      summary.marketsProcessed++;
+    }
+
     summary.events++;
     await sleep(100); // gentle rate limiting
   }
@@ -653,4 +721,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { ingest, authenticate, parseMatchOdds, parseOverUnder, parseBTTS };
+module.exports = { ingest, authenticate, parseMatchOdds, parseOverUnder, parseBTTS, parseBookings };
