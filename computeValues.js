@@ -474,13 +474,14 @@ function matchProbabilities(homeTeam, awayTeam, sharpness = MODEL_SHARPNESS, hom
   const lambdaHome = BASE * home.attack * away.defence * homeAdv;
   const lambdaAway = BASE * away.attack * home.defence;
 
-  let homeWin = 0, draw = 0, awayWin = 0;
+  let homeWin = 0, draw = 0, awayWin = 0, bttsYes = 0;
   for (let i = 0; i <= MAX_GOALS; i++) {
     for (let j = 0; j <= MAX_GOALS; j++) {
       const p = poisson(i, lambdaHome) * poisson(j, lambdaAway);
       if (i > j) homeWin += p;
       else if (i === j) draw += p;
       else awayWin += p;
+      if (i >= 1 && j >= 1) bttsYes += p;
     }
   }
 
@@ -491,9 +492,9 @@ function matchProbabilities(homeTeam, awayTeam, sharpness = MODEL_SHARPNESS, hom
   if (sharpness !== 1) {
     const ph = Math.pow(h, sharpness), pd = Math.pow(d, sharpness), pa = Math.pow(a, sharpness);
     const t = ph + pd + pa;
-    return { home: ph / t, draw: pd / t, away: pa / t };
+    return { home: ph / t, draw: pd / t, away: pa / t, bttsYes };
   }
-  return { home: h, draw: d, away: a };
+  return { home: h, draw: d, away: a, bttsYes };
 }
 
 // ---------------------------------------------------------------------------
@@ -512,6 +513,7 @@ function computeMatch(match) {
   // Split odds by market
   const h2hOdds     = match.odds.filter(r => (r.market ?? 'h2h') === 'h2h');
   const totalsOdds  = match.odds.filter(r => r.market === 'totals');
+  const bttsOdds    = match.odds.filter(r => r.market === 'btts');
 
   const h2hPool = h2hOdds.length ? h2hOdds : match.odds;
 
@@ -630,6 +632,42 @@ function computeMatch(match) {
         over_value:  overValue,
         under_value: underValue,
         totals_line: sharpTotals.line,
+      };
+    }
+  }
+
+  // ── BTTS ────────────────────────────────────────────────────────────────────
+  let bttsResult = {};
+  if (bttsOdds.length > 0 && model.bttsYes != null) {
+    const modelBttsYes = model.bttsYes;
+    const modelBttsNo  = 1 - modelBttsYes;
+
+    // Best soft-book BTTS odds (yes → home_odds, no → away_odds per betfairIngest convention)
+    const softBtts = bttsOdds.filter(r => SOFT_BOOKS.has(r.bookmaker));
+    const bttsSrc  = softBtts.length ? softBtts : bttsOdds;
+    let bestYesOdds = 0, bestNoOdds = 0, bestYesBook = null, bestNoBook = null;
+    for (const r of bttsSrc) {
+      const y = parseFloat(r.home_odds), n = parseFloat(r.away_odds);
+      if (y > bestYesOdds) { bestYesOdds = y; bestYesBook = formatBookName(r.bookmaker); }
+      if (n > bestNoOdds)  { bestNoOdds  = n; bestNoBook  = formatBookName(r.bookmaker); }
+    }
+
+    if (bestYesOdds > 1 && bestNoOdds > 1) {
+      const yesEdge = computeEdge(modelBttsYes, bestYesOdds);
+      const noEdge  = computeEdge(modelBttsNo,  bestNoOdds);
+      const yesValue = yesEdge != null && yesEdge > 0 && bestYesOdds <= MAX_ODDS_FOR_VALUE;
+      const noValue  = noEdge  != null && noEdge  > 0 && bestNoOdds  <= MAX_ODDS_FOR_VALUE;
+      console.log(`    btts Y:${bestYesOdds}(${bestYesBook}) N:${bestNoOdds}(${bestNoBook}) modelYes:${(modelBttsYes*100).toFixed(0)}% edge:${yesEdge != null ? (yesEdge*100).toFixed(1)+'%' : '?'} ${yesValue||noValue ? '✓ BTTS VALUE' : ''}`);
+      bttsResult = {
+        btts_yes_odds:  bestYesOdds,
+        btts_no_odds:   bestNoOdds,
+        btts_yes_book:  bestYesBook,
+        btts_no_book:   bestNoBook,
+        btts_yes_edge:  yesEdge,
+        btts_no_edge:   noEdge,
+        btts_yes_value: yesValue,
+        btts_no_value:  noValue,
+        btts_model_prob: modelBttsYes,
       };
     }
   }
@@ -755,6 +793,7 @@ function computeMatch(match) {
     odds_fetched_at: soft.fetchedAt,
     computed_at:     new Date().toISOString(),
     ...totalsResult,
+    ...bttsResult,
     ...metrics,
     _maxEdge:        maxEdge,
     _homeEV:         homeEV,

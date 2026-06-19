@@ -1,0 +1,11 @@
+-- Migration 009: BTTS market columns on computed_values
+ALTER TABLE computed_values
+  ADD COLUMN IF NOT EXISTS btts_yes_odds   NUMERIC(8,4) DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS btts_no_odds    NUMERIC(8,4) DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS btts_yes_book   TEXT         DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS btts_no_book    TEXT         DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS btts_yes_edge   NUMERIC(8,6) DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS btts_no_edge    NUMERIC(8,6) DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS btts_yes_value  BOOLEAN      DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS btts_no_value   BOOLEAN      DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS btts_model_prob NUMERIC(8,6) DEFAULT NULL;
