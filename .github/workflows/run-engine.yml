@@ -10,7 +10,7 @@ on:
 
 jobs:
   run-engine:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     # All three credentials come from GitHub repository secrets.
     # Add them under: Settings → Secrets and variables → Actions → New repository secret
