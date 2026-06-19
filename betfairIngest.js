@@ -385,6 +385,52 @@ function parseBookings(book, runners) {
   return { market: 'bookings', ...best };
 }
 
+/**
+ * Parses a Total Corners market (Betfair: "Total Corners" or "Asian Corners").
+ *
+ * Runner names follow patterns like:
+ *   "Under 9.5 Corners", "Over 9.5 Corners", "Under 10.5", "Over 10.5"
+ * Picks the most liquid line (lowest overround) when multiple lines exist.
+ * Stored as: over → home_odds, under → away_odds, line → market_line.
+ */
+function parseCorners(book, runners) {
+  const prices = priceMap(book);
+  const lines = {};
+
+  for (const r of runners) {
+    const name = r.runnerName ?? '';
+    const overMatch  = name.match(/over\s+([\d.]+)/i);
+    const underMatch = name.match(/under\s+([\d.]+)/i);
+    if (overMatch) {
+      const line = parseFloat(overMatch[1]);
+      if (!lines[line]) lines[line] = {};
+      lines[line].overSel = r.selectionId;
+    } else if (underMatch) {
+      const line = parseFloat(underMatch[1]);
+      if (!lines[line]) lines[line] = {};
+      lines[line].underSel = r.selectionId;
+    }
+  }
+
+  let best = null, bestSpread = Infinity;
+  for (const [lineStr, sel] of Object.entries(lines)) {
+    if (!sel.overSel || !sel.underSel) continue;
+    const o = prices[sel.overSel], u = prices[sel.underSel];
+    if (!o || !u || o <= 1 || u <= 1) continue;
+    const spread = Math.abs((1 / o + 1 / u) - 1);
+    if (spread < bestSpread) {
+      bestSpread = spread;
+      best = { line: parseFloat(lineStr), overOdds: o, underOdds: u };
+    }
+  }
+
+  if (!best) {
+    console.warn('    [warn] Total Corners runners not matched — skipping market');
+    return null;
+  }
+  return { market: 'corners', ...best };
+}
+
 // ---------------------------------------------------------------------------
 // 7. Supabase helpers
 // ---------------------------------------------------------------------------
@@ -587,6 +633,7 @@ async function ingest() {
     let overUnderResult  = null;
     let bttsResult       = null;
     let bookingsResult   = null;
+    let cornersResult    = null;
 
     for (const mkt of markets) {
       const book = bookMap[mkt.marketId];
@@ -612,6 +659,11 @@ async function ingest() {
         bookingsResult = parseBookings(book, runners);
         if (bookingsResult) {
           console.log(`  [cards]  line:${bookingsResult.line} O:${bookingsResult.overOdds} U:${bookingsResult.underOdds}`);
+        }
+      } else if (/total corners?|asian corners?/i.test(mkt.marketName)) {
+        cornersResult = parseCorners(book, runners);
+        if (cornersResult) {
+          console.log(`  [corners] line:${cornersResult.line} O:${cornersResult.overOdds} U:${cornersResult.underOdds}`);
         }
       }
     }
@@ -698,6 +750,21 @@ async function ingest() {
       summary.marketsProcessed++;
     }
 
+    // Insert corners odds
+    if (cornersResult) {
+      const cornersRow = {
+        bookmaker:   'betfair_ex_uk',
+        market:      'corners',
+        home_odds:   cornersResult.overOdds,   // Over → home_odds
+        draw_odds:   null,
+        away_odds:   cornersResult.underOdds,  // Under → away_odds
+        market_line: cornersResult.line,
+        fetched_at:  fetchedAt,
+      };
+      if (await insertOddsRow(supabase, matchId, cornersRow)) summary.oddsInserted++;
+      summary.marketsProcessed++;
+    }
+
     summary.events++;
     await sleep(100); // gentle rate limiting
   }
@@ -721,4 +788,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { ingest, authenticate, parseMatchOdds, parseOverUnder, parseBTTS, parseBookings };
+module.exports = { ingest, authenticate, parseMatchOdds, parseOverUnder, parseBTTS, parseBookings, parseCorners };

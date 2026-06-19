@@ -32,6 +32,7 @@ const {
 } = require('./modelMetrics');
 
 const { computeBookingsModel } = require('./bookingsModel');
+const { computeCornersModel }  = require('./cornersModel');
 
 // Dixon-Coles structural constants (kept in sync with matchProbabilities)
 const DC_BASE = 1.35;
@@ -517,6 +518,7 @@ function computeMatch(match) {
   const totalsOdds   = match.odds.filter(r => r.market === 'totals');
   const bttsOdds     = match.odds.filter(r => r.market === 'btts');
   const bookingsOdds = match.odds.filter(r => r.market === 'bookings');
+  const cornersOdds  = match.odds.filter(r => r.market === 'corners');
 
   const h2hPool = h2hOdds.length ? h2hOdds : match.odds;
 
@@ -711,6 +713,41 @@ function computeMatch(match) {
     }
   }
 
+  // ── Corners ─────────────────────────────────────────────────────────────────
+  let cornersResult = {};
+  if (cornersOdds.length > 0) {
+    let best = null, bestSpread = Infinity;
+    for (const r of cornersOdds) {
+      const o = parseFloat(r.home_odds), u = parseFloat(r.away_odds);
+      if (!o || !u || o <= 1 || u <= 1) continue;
+      const spread = Math.abs((1 / o + 1 / u) - 1);
+      if (spread < bestSpread) {
+        bestSpread = spread;
+        best = { over: o, under: u, line: parseFloat(r.market_line ?? 0) };
+      }
+    }
+    if (best) {
+      const isNeutral = match.league?.name?.includes('World Cup') ?? true;
+      const cm = computeCornersModel(homeStr, awayStr, isNeutral, best.line);
+      const overEdge  = computeEdge(cm.probOver,  best.over);
+      const underEdge = computeEdge(cm.probUnder, best.under);
+      const overValue  = overEdge  != null && overEdge  > 0 && best.over  <= MAX_ODDS_FOR_VALUE;
+      const underValue = underEdge != null && underEdge > 0 && best.under <= MAX_ODDS_FOR_VALUE;
+      console.log(`    corners line=${best.line} O:${best.over} U:${best.under} modelOver:${(cm.probOver*100).toFixed(0)}% lambda:${cm.lambda.toFixed(1)} ${overValue||underValue ? '✓ CORNERS VALUE' : ''}`);
+      cornersResult = {
+        corners_over_odds:   best.over,
+        corners_under_odds:  best.under,
+        corners_line:        best.line,
+        corners_over_edge:   overEdge,
+        corners_under_edge:  underEdge,
+        corners_over_value:  overValue,
+        corners_under_value: underValue,
+        corners_model_prob:  cm.probOver,
+        corners_lambda:      parseFloat(cm.lambda.toFixed(2)),
+      };
+    }
+  }
+
   // ── Professional metrics layer (Features #2 #3 #4 #5 #8) ─────────────────
   const softRows = h2hPool.filter(r => SOFT_BOOKS.has(r.bookmaker));
   const consensus = consensusStats(softRows, model);
@@ -834,6 +871,7 @@ function computeMatch(match) {
     ...totalsResult,
     ...bttsResult,
     ...bookingsResult,
+    ...cornersResult,
     ...metrics,
     _maxEdge:        maxEdge,
     _homeEV:         homeEV,
