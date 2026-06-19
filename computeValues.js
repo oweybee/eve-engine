@@ -643,6 +643,10 @@ function computeMatch(match) {
 
   // ── BTTS ────────────────────────────────────────────────────────────────────
   let bttsResult = {};
+  // Always store the model probability so the UI can show it even before odds flow in
+  if (model.bttsYes != null) {
+    bttsResult.btts_model_prob = model.bttsYes;
+  }
   if (bttsOdds.length > 0 && model.bttsYes != null) {
     const modelBttsYes = model.bttsYes;
     const modelBttsNo  = 1 - modelBttsYes;
