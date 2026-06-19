@@ -21,6 +21,14 @@ jobs:
       # Optional — used by fetchResults.js to settle results via API-Sports. If unset,
       # is skipped gracefully (the run still succeeds).
       API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+      # X (Twitter) — required by postToX.js
+      X_API_KEY: ${{ secrets.X_API_KEY }}
+      X_API_SECRET: ${{ secrets.X_API_SECRET }}
+      X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+      X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+      # Telegram — used by postToX.js to post signals to the channel
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     steps:
       - name: Checkout repository
@@ -46,3 +54,24 @@ jobs:
 
       - name: Settle results & refresh performance summary
         run: node fetchResults.js
+
+      # .x_state.json tracks which signal IDs have already been posted so that
+      # the 10-minute cron never re-tweets the same signal. The cache persists
+      # the file across workflow runs; each run saves under a unique key and
+      # restores from the most recent prior key.
+      - name: Restore X post state
+        uses: actions/cache@v4
+        with:
+          path: .x_state.json
+          key: x-state-${{ github.run_id }}
+          restore-keys: x-state-
+
+      - name: Post signals to X
+        run: node postToX.js
+
+      - name: Save X post state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .x_state.json
+          key: x-state-${{ github.run_id }}
