@@ -183,11 +183,19 @@ function extractBest(rows) {
   let bestHome = 0, bestDraw = 0, bestAway = 0;
   let homeBook = null, drawBook = null, awayBook = null;
   let latestFetchedAt = null;
+  // Per-bookmaker odds maps for betslip intersection engine
+  const allHomeOdds = {};
+  const allDrawOdds = {};
+  const allAwayOdds = {};
 
   for (const row of rows) {
     const h = parseFloat(row.home_odds);
     const d = parseFloat(row.draw_odds);
     const a = parseFloat(row.away_odds);
+    const name = formatBookName(row.bookmaker);
+    if (h > 1) allHomeOdds[name] = Math.max(allHomeOdds[name] ?? 0, h);
+    if (d > 1) allDrawOdds[name] = Math.max(allDrawOdds[name] ?? 0, d);
+    if (a > 1) allAwayOdds[name] = Math.max(allAwayOdds[name] ?? 0, a);
     if (h > bestHome) { bestHome = h; homeBook = row.bookmaker; }
     if (d > bestDraw) { bestDraw = d; drawBook = row.bookmaker; }
     if (a > bestAway) { bestAway = a; awayBook = row.bookmaker; }
@@ -203,6 +211,9 @@ function extractBest(rows) {
     draw: bestDraw, drawBook: formatBookName(drawBook),
     away: bestAway, awayBook: formatBookName(awayBook),
     fetchedAt: latestFetchedAt,
+    allHomeOdds: Object.keys(allHomeOdds).length ? allHomeOdds : null,
+    allDrawOdds: Object.keys(allDrawOdds).length ? allDrawOdds : null,
+    allAwayOdds: Object.keys(allAwayOdds).length ? allAwayOdds : null,
   };
 }
 
@@ -729,6 +740,9 @@ function computeMatch(match) {
     best_home_book:  soft.homeBook,
     best_draw_book:  soft.drawBook,
     best_away_book:  soft.awayBook,
+    all_home_odds:   soft.allHomeOdds ?? null,
+    all_draw_odds:   soft.allDrawOdds ?? null,
+    all_away_odds:   soft.allAwayOdds ?? null,
     fair_home_odds:  fairOdds.home,
     fair_draw_odds:  fairOdds.draw,
     fair_away_odds:  fairOdds.away,
