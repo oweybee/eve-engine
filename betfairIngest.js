@@ -116,7 +116,7 @@ async function authenticate() {
     throw new Error('Missing BETFAIR_APP_KEY, BETFAIR_USERNAME, or BETFAIR_PASSWORD');
   }
 
-  console.log('[auth] logging in as', USERNAME);
+  console.log('[auth] logging in as', USERNAME, '| app key length:', APP_KEY.length, '| key prefix:', APP_KEY.slice(0, 4) + '****');
 
   const formBody = `username=${encodeURIComponent(USERNAME)}&password=${encodeURIComponent(PASSWORD)}`;
 
@@ -127,7 +127,10 @@ async function authenticate() {
     formBody
   );
 
-  if (status !== 200) throw new Error(`Auth HTTP ${status}`);
+  if (status !== 200) {
+    console.error('[auth] HTTP', status, 'response body:', JSON.stringify(body));
+    throw new Error(`Auth HTTP ${status}`);
+  }
   if (body.status !== 'SUCCESS') throw new Error(`Auth failed: ${body.status} — ${body.error ?? ''}`);
 
   const token = body.token;
