@@ -35,10 +35,23 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     steps:
+      # git 2.21.1 (macOS system git) has a broken protocol v2 implementation
+      # over HTTPS. actions/checkout forces -c protocol.version=2 which returns
+      # HTTP 400. Instead pull manually with protocol v0.
       - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [ -d "$GITHUB_WORKSPACE/.git" ]; then
+            git -c protocol.version=0 -c http.version=HTTP/1.1 \
+              fetch --depth=1 origin main
+            git reset --hard origin/main
+          else
+            git -c protocol.version=0 -c http.version=HTTP/1.1 \
+              clone --depth=1 \
+              "https://oauth2:${GITHUB_TOKEN}@github.com/oweybee/eve-engine.git" \
+              "$GITHUB_WORKSPACE"
+          fi
 
       # Node 22: @supabase/supabase-js requires native WebSocket support,
       # which only exists in Node 22+ (Node 18/20 fail at startup).
