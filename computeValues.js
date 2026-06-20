@@ -33,6 +33,8 @@ const {
 
 const { computeBookingsModel } = require('./bookingsModel');
 const { computeCornersModel }  = require('./cornersModel');
+const { buildFeatureVector, MIN_COMPLETENESS } = require('./features');
+const { ensembleInference, ensembleAvailable } = require('./ensemble/inference');
 
 // Dixon-Coles structural constants (kept in sync with matchProbabilities)
 const DC_BASE = 1.35;
@@ -504,7 +506,7 @@ function matchProbabilities(homeTeam, awayTeam, sharpness = MODEL_SHARPNESS, hom
 // 7. Per-match computation
 // ---------------------------------------------------------------------------
 
-function computeMatch(match) {
+async function computeMatch(match, supabase = null) {
   const homeStr = match.home_team?.name ?? 'Home';
   const awayStr = match.away_team?.name ?? 'Away';
 
@@ -537,8 +539,38 @@ function computeMatch(match) {
   const isWorldCup = match.league?.name?.includes('World Cup');
   console.log(`    [home-adv] ${homeStr} vs ${awayStr}: ${homeAdvMultiplier > 1 ? `APPLIED x${homeAdvMultiplier}` : 'NEUTRAL (x1.0)'}${isWorldCup ? ' [World Cup]' : ''}`);
 
-  // Model probability = Dixon-Coles Poisson, OUR own model (not bookmaker-derived)
-  const model = matchProbabilities(homeStr, awayStr, MODEL_SHARPNESS, homeAdvMultiplier);
+  // Model probability — try ML Ensemble first, fall back to Dixon-Coles Poisson.
+  let model;
+  let modelArchitecture = 'DIXON_COLES';
+  let featureCompleteness = null;
+
+  try {
+    if (supabase && ensembleAvailable()) {
+      const fv = await buildFeatureVector(supabase, match);
+      if (fv) {
+        featureCompleteness = fv.completeness;
+        const ensembleResult = await ensembleInference(fv.features, fv.completeness, MIN_COMPLETENESS);
+        if (ensembleResult) {
+          model = {
+            home:    ensembleResult.home,
+            draw:    ensembleResult.draw,
+            away:    ensembleResult.away,
+            bttsYes: ensembleResult.btts ?? null,
+            overProb: ensembleResult.over ?? null,
+          };
+          modelArchitecture = 'ML_ENSEMBLE';
+          console.log(`    [ensemble] ${homeStr} vs ${awayStr}: H=${(model.home*100).toFixed(0)}% D=${(model.draw*100).toFixed(0)}% A=${(model.away*100).toFixed(0)}% (completeness ${(featureCompleteness*100).toFixed(0)}%)`);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`    [ensemble] error, falling back to Dixon-Coles: ${err.message}`);
+  }
+
+  if (!model) {
+    model = matchProbabilities(homeStr, awayStr, MODEL_SHARPNESS, homeAdvMultiplier);
+    console.log(`    [dixon-coles] ${homeStr} vs ${awayStr}: H=${(model.home*100).toFixed(0)}% D=${(model.draw*100).toFixed(0)}% A=${(model.away*100).toFixed(0)}%`);
+  }
 
   // Minimum soft book coverage — need at least 3 distinct soft books for the
   // market side of the edge (the price we're judging value against).
@@ -859,7 +891,7 @@ function computeMatch(match) {
   };
 
   const probStr = `H:${(model.home*100).toFixed(0)}% D:${(model.draw*100).toFixed(0)}% A:${(model.away*100).toFixed(0)}%`;
-  console.log(`  ${homeStr} vs ${awayStr} | ${probStr} | src:Dixon-Coles | edge:${maxEdge != null ? (maxEdge*100).toFixed(1)+'%' : 'none'} | conf:${confidence}(${tier}) | MES:${mes} ${hasValue ? '✓ VALUE' : ''}`);
+  console.log(`  ${homeStr} vs ${awayStr} | ${probStr} | src:${modelArchitecture} | edge:${maxEdge != null ? (maxEdge*100).toFixed(1)+'%' : 'none'} | conf:${confidence}(${tier}) | MES:${mes} ${hasValue ? '✓ VALUE' : ''}`);
 
   return {
     match_id:        match.id,
@@ -888,6 +920,8 @@ function computeMatch(match) {
     ...bookingsResult,
     ...cornersResult,
     ...metrics,
+    model_architecture:   modelArchitecture,
+    feature_completeness: featureCompleteness,
     _maxEdge:        maxEdge,
     _homeEV:         homeEV,
     _drawEV:         drawEV,
@@ -1023,7 +1057,7 @@ async function run() {
 
   for (const match of matches) {
     try {
-      const result = computeMatch(match);
+      const result = await computeMatch(match, supabase);
       if (result) rows.push(result);
       else skipped++;
     } catch (err) {

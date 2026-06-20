@@ -12,6 +12,9 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0"
   },
+  "optionalDependencies": {
+    "onnxruntime-node": "^1.17.3"
+  },
   "engines": {
     "node": ">=18"
   }

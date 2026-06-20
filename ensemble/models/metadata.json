@@ -1,0 +1,40 @@
+{
+  "trained_at": "2026-06-20T01:39:35.503039",
+  "n_samples": 1315,
+  "feature_names": [
+    "home_xg_created_10",
+    "home_xg_conceded_10",
+    "home_ppda_10",
+    "home_sot_ratio_10",
+    "home_goals_scored_10",
+    "home_goals_conceded_10",
+    "home_xg_created_5",
+    "home_xg_conceded_5",
+    "home_ppda_5",
+    "home_sot_ratio_5",
+    "away_xg_created_10",
+    "away_xg_conceded_10",
+    "away_ppda_10",
+    "away_sot_ratio_10",
+    "away_goals_scored_10",
+    "away_goals_conceded_10",
+    "away_xg_created_5",
+    "away_xg_conceded_5",
+    "away_ppda_5",
+    "away_sot_ratio_5",
+    "rest_days_differential",
+    "is_neutral_venue"
+  ],
+  "label_classes": [
+    "away",
+    "draw",
+    "home"
+  ],
+  "btts_base_rate": 0.49429657794676807,
+  "over_base_rate": 0.5095057034220533,
+  "models": [
+    "match_odds.onnx",
+    "btts.onnx",
+    "over_under.onnx"
+  ]
+}
