@@ -83,7 +83,7 @@ XGBOOST_PARAMS = {
     'num_class':       3,
     'max_depth':       4,
     'learning_rate':   0.05,
-    'n_estimators':    1000,   # high ceiling — early_stopping_rounds will cut this down
+    'n_estimators':    1000,
     'subsample':       0.7,
     'colsample_bytree': 0.7,
     'reg_alpha':       0.5,
@@ -114,7 +114,7 @@ XGB_BINARY_PARAMS = {
     'objective':       'binary:logistic',
     'max_depth':       4,
     'learning_rate':   0.05,
-    'n_estimators':    1000,   # early_stopping_rounds cuts this down
+    'n_estimators':    1000,
     'subsample':       0.7,
     'colsample_bytree': 0.7,
     'reg_alpha':       0.5,
@@ -135,112 +135,196 @@ def make_binary_classifier():
 
 # ── Data loading ───────────────────────────────────────────────────────────────
 
+NAME_MAP = {
+    'United States': 'USA', 'Korea Republic': 'South Korea',
+    "Côte d'Ivoire": 'Ivory Coast', "Cote d'Ivoire": 'Ivory Coast',
+    'IR Iran': 'Iran', 'Bosnia and Herzegovina': 'Bosnia & Herzegovina',
+    'Türkiye': 'Turkey', 'Czechia': 'Czech Republic',
+}
+
+
+def _normalise(name):
+    return NAME_MAP.get(name, name)
+
+
+def _load_all_pages(client, table, select_fields, filters=None, page=500):
+    """Paginate through a Supabase table, returning all rows."""
+    count_q = client.table(table).select("id", count="exact")
+    if filters:
+        for col, op, val in filters:
+            count_q = count_q.filter(col, op, val)
+    total = (count_q.execute().count or 0)
+    rows = []
+    for start in range(0, max(total, 1), page):
+        end = min(start + page - 1, total - 1)
+        q = client.table(table).select(select_fields).order("kickoff_at", desc=False).range(start, end)
+        if filters:
+            for col, op, val in filters:
+                q = q.filter(col, op, val)
+        rows.extend(q.execute().data or [])
+    return rows
+
+
+def _rolling_stats(games: pd.DataFrame, before: pd.Timestamp, window: int) -> dict:
+    """Return rolling window stats for a team from games played strictly before `before`."""
+    past = games[games['kickoff_at'] < before].tail(window)
+    if past.empty:
+        return {}
+    avgs = past[['xg_created', 'xg_conceded', 'ppda_index',
+                  'goals_scored', 'goals_conceded']].mean()
+    return {
+        'xg_created':    float(avgs['xg_created']),
+        'xg_conceded':   float(avgs['xg_conceded']),
+        'ppda_index':    float(avgs['ppda_index']),
+        'sot_ratio':     0.38,   # no shot data in fixture_predictions
+        'goals_scored':  float(avgs['goals_scored']),
+        'goals_conceded': float(avgs['goals_conceded']),
+        'games':         len(past),
+    }
+
+
 def load_training_data(supabase_url: str, supabase_key: str) -> pd.DataFrame:
     """
-    Pull completed fixtures with their pre-match rolling stats from Supabase.
-    Joins matches (results) ← team_stats_cache (features) for both teams.
+    Build a point-in-time feature matrix from fixture_predictions + matches.
+
+    For every completed match, rolling stats are computed from games each team
+    played BEFORE that match date — no look-ahead bias. This gives BTTS and
+    Over/Under models the temporal signal they need.
     """
     client = create_client(supabase_url, supabase_key)
 
-    print("Fetching completed fixtures with results...")
+    # ── 1. Load game log from fixture_predictions ──────────────────────────────
+    print("Loading game log from fixture_predictions...")
+    count_resp = client.table("fixture_predictions").select("fixture_id", count="exact").execute()
+    total_fp = count_resp.count or 0
+    fp_rows = []
+    for start in range(0, max(total_fp, 1), 500):
+        end = min(start + 499, total_fp - 1)
+        resp = (client.table("fixture_predictions")
+                .select("home_team_name, away_team_name, match_kickoff_at, "
+                        "home_goals_scored, away_goals_scored, "
+                        "xg_created, xg_conceded, ppda_intensity_index")
+                .order("match_kickoff_at", desc=False)
+                .range(start, end).execute())
+        fp_rows.extend(resp.data or [])
+    print(f"  {len(fp_rows)} fixture_predictions rows loaded")
+
+    fp = pd.DataFrame(fp_rows)
+    fp['kickoff_at'] = pd.to_datetime(fp['match_kickoff_at'], utc=True)
+    for col in ['xg_created', 'xg_conceded', 'ppda_intensity_index',
+                'home_goals_scored', 'away_goals_scored']:
+        fp[col] = pd.to_numeric(fp[col], errors='coerce').fillna(0.0)
+
+    # Build per-team game log (home perspective + away perspective)
+    ppda_away = (30.0 - fp['ppda_intensity_index']).clip(7.5, 15.5)
+    home_log = pd.DataFrame({
+        'team':           fp['home_team_name'].apply(_normalise),
+        'kickoff_at':     fp['kickoff_at'],
+        'xg_created':     fp['xg_created'],
+        'xg_conceded':    fp['xg_conceded'],
+        'ppda_index':     fp['ppda_intensity_index'],
+        'goals_scored':   fp['home_goals_scored'],
+        'goals_conceded': fp['away_goals_scored'],
+    })
+    away_log = pd.DataFrame({
+        'team':           fp['away_team_name'].apply(_normalise),
+        'kickoff_at':     fp['kickoff_at'],
+        'xg_created':     fp['xg_conceded'],
+        'xg_conceded':    fp['xg_created'],
+        'ppda_index':     ppda_away,
+        'goals_scored':   fp['away_goals_scored'],
+        'goals_conceded': fp['home_goals_scored'],
+    })
+    game_log = pd.concat([home_log, away_log], ignore_index=True).sort_values('kickoff_at')
+
+    # Index: team name (normalised) → sorted DataFrame of their games
+    team_games = {name: grp.sort_values('kickoff_at')
+                  for name, grp in game_log.groupby('team')}
+    print(f"  {len(team_games)} unique teams in game log")
+
+    # ── 2. Load completed matches with results ─────────────────────────────────
+    print("Fetching completed matches with results...")
     FIELDS = (
         "id, kickoff_at, result, goals_home, goals_away, "
-        "xg_home, xg_away, "
         "home_team_id, away_team_id, "
         "home_team:teams!matches_home_team_id_fkey(name), "
         "away_team:teams!matches_away_team_id_fkey(name)"
     )
-    count_resp = (
-        client.table("matches")
-        .select("id", count="exact")
-        .filter("result", "not.is", "null")
-        .execute()
-    )
-    total = count_resp.count or len(count_resp.data or [])
-    PAGE = 500
-    matches = []
-    for start in range(0, total, PAGE):
-        end = min(start + PAGE - 1, total - 1)
-        batch = (
-            client.table("matches")
-            .select(FIELDS)
-            .filter("result", "not.is", "null")
-            .order("kickoff_at", desc=False)
-            .range(start, end)
-            .execute()
-        )
-        matches.extend(batch.data or [])
-    print(f"Found {len(matches)} completed fixtures")
-
+    matches = _load_all_pages(client, "matches", FIELDS,
+                              filters=[("result", "not.is", "null")])
+    print(f"  {len(matches)} completed matches")
     if not matches:
         return pd.DataFrame()
 
-    # Fetch all team_stats_cache rows in one call to avoid N+1
-    all_team_ids = list(set(
-        [m['home_team_id'] for m in matches] +
-        [m['away_team_id'] for m in matches]
-    ))
+    # ── 3. Build feature rows with point-in-time rolling stats ────────────────
+    print("Computing point-in-time features...")
+    B = BASELINES
 
-    print("Fetching team rolling stats...")
-    stats_resp = (
-        client.table("team_stats_cache")
-        .select("*")
-        .in_("team_id", all_team_ids)
-        .execute()
-    )
-
-    # Index: (team_id, roll_window, as_of) → stats row
-    stats_index = {}
-    for row in (stats_resp.data or []):
-        key = (row['team_id'], row['roll_window'])
-        if key not in stats_index or row['as_of'] > stats_index[key]['as_of']:
-            stats_index[key] = row
+    def feat(stats, key):
+        v = stats.get(key)
+        return float(v) if v is not None else B.get(key, 0.0)
 
     rows = []
+    skipped = 0
     for m in matches:
-        h_id = m['home_team_id']
-        a_id = m['away_team_id']
-        h10 = stats_index.get((h_id, 10), {})
-        h5  = stats_index.get((h_id, 5),  {})
-        a10 = stats_index.get((a_id, 10), {})
-        a5  = stats_index.get((a_id, 5),  {})
+        home_name = _normalise(m['home_team'].get('name', '') if isinstance(m.get('home_team'), dict) else '')
+        away_name = _normalise(m['away_team'].get('name', '') if isinstance(m.get('away_team'), dict) else '')
+        if not home_name or not away_name:
+            skipped += 1
+            continue
 
-        def g(d, key):
-            v = d.get(key)
-            return float(v) if v is not None else None
+        match_ts = pd.Timestamp(m['kickoff_at'])
+        if match_ts.tzinfo is None:
+            match_ts = match_ts.tz_localize('UTC')
 
-        row = {
+        h_games = team_games.get(home_name, pd.DataFrame())
+        a_games = team_games.get(away_name, pd.DataFrame())
+
+        h10 = _rolling_stats(h_games, match_ts, 10) if not h_games.empty else {}
+        h5  = _rolling_stats(h_games, match_ts, 5)  if not h_games.empty else {}
+        a10 = _rolling_stats(a_games, match_ts, 10) if not a_games.empty else {}
+        a5  = _rolling_stats(a_games, match_ts, 5)  if not a_games.empty else {}
+
+        # Only include matches where at least one team has prior game history
+        if not h10 and not a10:
+            skipped += 1
+            continue
+
+        hg = m.get('goals_home') or 0
+        ag = m.get('goals_away') or 0
+
+        rows.append({
             'match_id':               m['id'],
             'kickoff_at':             m['kickoff_at'],
-            'result':                 m['result'],           # 'home'|'draw'|'away'
-            'btts_result':            1 if (m.get('goals_home', 0) or 0) >= 1
-                                        and (m.get('goals_away', 0) or 0) >= 1 else 0,
-            'over_result':            1 if ((m.get('goals_home', 0) or 0) +
-                                            (m.get('goals_away', 0) or 0)) > 2.5 else 0,
-            'is_neutral_venue':       0,  # not in matches schema; WC matches are neutral but model learns from context
-            'home_xg_created_10':     g(h10, 'xg_created')     or BASELINES['xg_created'],
-            'home_xg_conceded_10':    g(h10, 'xg_conceded')    or BASELINES['xg_conceded'],
-            'home_ppda_10':           g(h10, 'ppda_index')      or BASELINES['ppda_index'],
-            'home_sot_ratio_10':      g(h10, 'sot_ratio')       or BASELINES['sot_ratio'],
-            'home_goals_scored_10':   g(h10, 'goals_scored')    or BASELINES['goals_scored'],
-            'home_goals_conceded_10': g(h10, 'goals_conceded')  or BASELINES['goals_conceded'],
-            'home_xg_created_5':      g(h5,  'xg_created')     or BASELINES['xg_created'],
-            'home_xg_conceded_5':     g(h5,  'xg_conceded')    or BASELINES['xg_conceded'],
-            'home_ppda_5':            g(h5,  'ppda_index')      or BASELINES['ppda_index'],
-            'home_sot_ratio_5':       g(h5,  'sot_ratio')       or BASELINES['sot_ratio'],
-            'away_xg_created_10':     g(a10, 'xg_created')     or BASELINES['xg_created'],
-            'away_xg_conceded_10':    g(a10, 'xg_conceded')    or BASELINES['xg_conceded'],
-            'away_ppda_10':           g(a10, 'ppda_index')      or BASELINES['ppda_index'],
-            'away_sot_ratio_10':      g(a10, 'sot_ratio')       or BASELINES['sot_ratio'],
-            'away_goals_scored_10':   g(a10, 'goals_scored')    or BASELINES['goals_scored'],
-            'away_goals_conceded_10': g(a10, 'goals_conceded')  or BASELINES['goals_conceded'],
-            'away_xg_created_5':      g(a5,  'xg_created')     or BASELINES['xg_created'],
-            'away_xg_conceded_5':     g(a5,  'xg_conceded')    or BASELINES['xg_conceded'],
-            'away_ppda_5':            g(a5,  'ppda_index')      or BASELINES['ppda_index'],
-            'away_sot_ratio_5':       g(a5,  'sot_ratio')       or BASELINES['sot_ratio'],
-            'rest_days_differential': 0,   # placeholder — computed from kickoff_at diffs
-        }
-        rows.append(row)
+            'result':                 m['result'],
+            'btts_result':            1 if hg >= 1 and ag >= 1 else 0,
+            'over_result':            1 if (hg + ag) > 2.5 else 0,
+            'is_neutral_venue':       0,
+            'home_xg_created_10':     feat(h10, 'xg_created'),
+            'home_xg_conceded_10':    feat(h10, 'xg_conceded'),
+            'home_ppda_10':           feat(h10, 'ppda_index'),
+            'home_sot_ratio_10':      feat(h10, 'sot_ratio'),
+            'home_goals_scored_10':   feat(h10, 'goals_scored'),
+            'home_goals_conceded_10': feat(h10, 'goals_conceded'),
+            'home_xg_created_5':      feat(h5,  'xg_created'),
+            'home_xg_conceded_5':     feat(h5,  'xg_conceded'),
+            'home_ppda_5':            feat(h5,  'ppda_index'),
+            'home_sot_ratio_5':       feat(h5,  'sot_ratio'),
+            'away_xg_created_10':     feat(a10, 'xg_created'),
+            'away_xg_conceded_10':    feat(a10, 'xg_conceded'),
+            'away_ppda_10':           feat(a10, 'ppda_index'),
+            'away_sot_ratio_10':      feat(a10, 'sot_ratio'),
+            'away_goals_scored_10':   feat(a10, 'goals_scored'),
+            'away_goals_conceded_10': feat(a10, 'goals_conceded'),
+            'away_xg_created_5':      feat(a5,  'xg_created'),
+            'away_xg_conceded_5':     feat(a5,  'xg_conceded'),
+            'away_ppda_5':            feat(a5,  'ppda_index'),
+            'away_sot_ratio_5':       feat(a5,  'sot_ratio'),
+            'rest_days_differential': 0,
+        })
+
+    if skipped:
+        print(f"  Skipped {skipped} matches (no team name or no prior game history)")
 
     return pd.DataFrame(rows)
 
