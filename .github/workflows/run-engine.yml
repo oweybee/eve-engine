@@ -10,7 +10,7 @@ on:
 
 jobs:
   run-engine:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     # All three credentials come from GitHub repository secrets.
     # Add them under: Settings → Secrets and variables → Actions → New repository secret
@@ -35,10 +35,6 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     steps:
-      # Prepend Homebrew bin so the runner uses git 2.54 (not macOS system git 2.21).
-      - name: Add Homebrew to PATH
-        run: echo "/usr/local/bin" >> $GITHUB_PATH
-
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
