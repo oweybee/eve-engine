@@ -333,29 +333,28 @@ def load_training_data(supabase_url: str, supabase_key: str) -> pd.DataFrame:
 
 def export_to_onnx(model, model_name: str, n_features: int, output_dir: Path):
     """Convert model to ONNX and write to disk.
-    Uses onnxmltools for XGBoost (skl2onnx lacks a native XGB converter).
+    Uses onnxmltools for both XGBoost and LightGBM (skl2onnx lacks converters for both).
     """
     import onnx as onnx_lib
     out_path = output_dir / f"{model_name}.onnx"
 
     model_type = type(model).__name__
 
+    try:
+        from onnxmltools.convert.common.data_types import FloatTensorType as OMLFloatTensorType
+    except ImportError:
+        sys.exit("ERROR: onnxmltools not installed. Run: pip install onnxmltools")
+
+    initial_type = [('float_input', OMLFloatTensorType([None, n_features]))]
+
     if 'XGB' in model_type:
-        try:
-            from onnxmltools import convert_xgboost
-            from onnxmltools.convert.common.data_types import FloatTensorType as OMLFloatTensorType
-        except ImportError:
-            sys.exit("ERROR: onnxmltools not installed. Run: pip install onnxmltools")
-        initial_type = [('float_input', OMLFloatTensorType([None, n_features]))]
+        from onnxmltools import convert_xgboost
         onnx_model = convert_xgboost(model, initial_types=initial_type)
+    elif 'LGBM' in model_type:
+        from onnxmltools import convert_lightgbm
+        onnx_model = convert_lightgbm(model, initial_types=initial_type)
     else:
-        try:
-            from skl2onnx import to_onnx
-            from skl2onnx.common.data_types import FloatTensorType
-        except ImportError:
-            sys.exit("ERROR: skl2onnx not installed. Run: pip install skl2onnx onnx")
-        initial_type = [('float_input', FloatTensorType([None, n_features]))]
-        onnx_model = to_onnx(model, initial_types=initial_type, target_opset=15)
+        sys.exit(f"ERROR: No ONNX converter registered for model type '{model_type}'")
 
     with open(out_path, 'wb') as f:
         f.write(onnx_model.SerializeToString())
