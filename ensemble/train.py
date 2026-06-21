@@ -331,6 +331,39 @@ def load_training_data(supabase_url: str, supabase_key: str) -> pd.DataFrame:
 
 # ── Export to ONNX ─────────────────────────────────────────────────────────────
 
+def _strip_zipmap(onnx_model):
+    """Remove ZipMap node from a LightGBM ONNX graph.
+
+    onnxmltools wraps LightGBM probability outputs in a ZipMap (dict), which
+    onnxruntime-node cannot deserialise. This replaces the ZipMap output with
+    the raw float tensor that feeds into it.
+    """
+    from onnx import helper, TensorProto
+    g = onnx_model.graph
+    zipmap_input = next(
+        (n.input[0] for n in g.node if n.op_type == 'ZipMap'), None
+    )
+    if zipmap_input is None:
+        return onnx_model  # nothing to strip
+
+    nodes = [n for n in g.node if n.op_type != 'ZipMap']
+    new_outputs = []
+    for out in g.output:
+        if out.name == 'probabilities':
+            new_outputs.append(
+                helper.make_tensor_value_info(zipmap_input, TensorProto.FLOAT, [None, None])
+            )
+        else:
+            new_outputs.append(out)
+
+    new_graph = helper.make_graph(
+        nodes, g.name, list(g.input), new_outputs, list(g.initializer)
+    )
+    new_model = helper.make_model(new_graph, opset_imports=onnx_model.opset_import)
+    new_model.ir_version = onnx_model.ir_version
+    return new_model
+
+
 def export_to_onnx(model, model_name: str, n_features: int, output_dir: Path):
     """Convert model to ONNX and write to disk.
     Uses onnxmltools for both XGBoost and LightGBM (skl2onnx lacks converters for both).
@@ -353,6 +386,9 @@ def export_to_onnx(model, model_name: str, n_features: int, output_dir: Path):
     elif 'LGBM' in model_type:
         from onnxmltools import convert_lightgbm
         onnx_model = convert_lightgbm(model, initial_types=initial_type)
+        # onnxmltools emits a ZipMap node for LightGBM that onnxruntime-node
+        # cannot handle. Strip it and wire the raw float tensor directly.
+        onnx_model = _strip_zipmap(onnx_model)
     else:
         sys.exit(f"ERROR: No ONNX converter registered for model type '{model_type}'")
 
