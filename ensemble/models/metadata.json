@@ -1,6 +1,6 @@
 {
-  "trained_at": "2026-06-21T02:38:11.280771",
-  "n_samples": 1277,
+  "trained_at": "2026-06-21T03:05:25.222256",
+  "n_samples": 37436,
   "feature_names": [
     "home_xg_created_10",
     "home_xg_conceded_10",
@@ -30,8 +30,8 @@
     "draw",
     "home"
   ],
-  "btts_base_rate": 0.49569303054032887,
-  "over_base_rate": 0.5121378230227095,
+  "btts_base_rate": 0.5199807671759803,
+  "over_base_rate": 0.5076397050966983,
   "models": [
     "match_odds.onnx",
     "btts.onnx",
