@@ -54,6 +54,7 @@ jobs:
 
       - name: Ingest Betfair Exchange odds (BTTS, cards, h2h)
         run: node betfairIngest.js
+        continue-on-error: true  # Betfair geo-blocks non-UK IPs; skip gracefully
 
       - name: Ingest soft-book odds
         run: node ingestOdds.js
