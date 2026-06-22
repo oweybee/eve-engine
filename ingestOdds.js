@@ -132,6 +132,7 @@ async function fetchFixtureOdds(fixtureId) {
   const path = `/football-event-odds?eventid=${fixtureId}&countrycode=${ODDS_COUNTRY}`;
   console.log(`  [odds] GET ${path}`);
   const json = await httpGet(path);
+  console.log(`  [odds] raw: ${JSON.stringify(json).slice(0, 300)}`);
   return json.response ?? json ?? null;
 }
 
