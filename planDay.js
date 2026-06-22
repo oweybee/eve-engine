@@ -63,7 +63,7 @@ const ACTIVE_START_HOUR   = parseInt(process.env.ACTIVE_START_HOUR    ?? '8',   
 const ACTIVE_END_HOUR     = parseInt(process.env.ACTIVE_END_HOUR      ?? '24',  10);
 const DAYS_AHEAD          = parseInt(process.env.DAYS_AHEAD ?? '3', 10);
 // All leagueIds used by this API for the FIFA World Cup (groups, knockouts etc.)
-const WC_LEAGUE_IDS       = (process.env.WORLD_CUP_LEAGUE_IDS ?? '894796,894797,894798,894799,894800')
+const WC_LEAGUE_IDS       = (process.env.WORLD_CUP_LEAGUE_IDS ?? '894796,894797,894798,894799,894800,894801,894802,894803,894804,894805')
   .split(',').map(Number);
 const DRY_RUN             = process.argv.includes('--dry-run');
 
@@ -118,6 +118,8 @@ async function fetchFixturesForDate(date) {
   const leagueIds = [...new Set(matches.map(m => m.leagueId))];
   console.log(`[plan]   ${date}: ${matches.length} total — league IDs: ${leagueIds.join(', ')}`);
   const wcMatches = matches.filter(m => WC_LEAGUE_IDS.includes(m.leagueId));
+  const unmatched = matches.filter(m => !WC_LEAGUE_IDS.includes(m.leagueId) && m.leagueId > 890000);
+  if (unmatched.length) { const info = [...new Set(unmatched.map(m => m.leagueId + '(' + (m.home?.name ?? '?') + ' v ' + (m.away?.name ?? '?') + ')'))].join(', '); console.log('[plan]   ' + date + ': possible missed WC leagues: ' + info); };
   console.log(`[plan]   ${date}: ${wcMatches.length} WC matches`);
   return wcMatches;
 }
