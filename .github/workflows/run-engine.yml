@@ -17,10 +17,7 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-      # Optional — used by fetchResults.js to settle results via API-Sports. If unset,
-      # is skipped gracefully (the run still succeeds).
-      API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+      RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
       # Betfair Exchange — required by betfairIngest.js (BTTS, cards, h2h exchange prices)
       BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
       BETFAIR_USERNAME: ${{ secrets.BETFAIR_USERNAME }}

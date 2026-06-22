@@ -1,14 +1,15 @@
 /**
  * EVE — Odds Ingestion Script
  *
- * Fetches live 1X2 odds from The Odds API and writes them into Supabase.
+ * Fetches live 1X2 odds from API-Football (RapidAPI) and writes them into Supabase.
  * Also upserts match and team records so the DB stays in sync with the feed.
  *
  * Execution flow:
- *   1. Fetch odds for each configured league from The Odds API
- *   2. Upsert leagues → teams → matches (in dependency order)
- *   3. Insert new odds rows (append-only — never overwrites history)
- *   4. Log a usage summary (API requests are metered on free tier)
+ *   1. For each league, fetch upcoming fixtures from API-Football /fixtures
+ *   2. Fetch odds for the league from /odds, paginating as needed
+ *   3. Join odds to fixtures by fixture ID
+ *   4. Upsert leagues → teams → matches (in dependency order)
+ *   5. Insert new odds rows (append-only — never overwrites history)
  *
  * Idempotent: safe to run multiple times. Duplicate odds rows are prevented
  * by only inserting when odds have changed from the last snapshot.
@@ -20,59 +21,41 @@
 
 'use strict';
 
-const https        = require('https');
+const https            = require('https');
 const { createClient } = require('@supabase/supabase-js');
 
 // ---------------------------------------------------------------------------
-// Config — all values from environment variables
+// Config
 // ---------------------------------------------------------------------------
 
-const ODDS_API_KEY   = process.env.ODDS_API_KEY;       // from theoddsapi.com
-const SUPABASE_URL   = process.env.SUPABASE_URL;
-const SUPABASE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const DRY_RUN        = process.argv.includes('--dry-run');
+const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
+const RAPIDAPI_HOST = 'api-football-v1.p.rapidapi.com';
 
-// Leagues to ingest. These are The Odds API sport keys.
-// Full list: https://the-odds-api.com/sports-odds-data/sports-apis.html
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const DRY_RUN      = process.argv.includes('--dry-run');
+
+// Season year (the year the season starts — e.g. 2025 for 2025-26).
+// Override with FOOTBALL_SEASON env var if needed.
+const SEASON = parseInt(process.env.FOOTBALL_SEASON ?? new Date().getFullYear(), 10);
+
+// Leagues: API-Football league IDs.
+// Full list: https://www.api-football.com/documentation-v3#tag/Leagues
 const LEAGUES = [
-  { sportKey: 'soccer_fifa_world_cup',             name: 'FIFA World Cup',    country: 'International' },
-  { sportKey: 'soccer_conmebol_copa_libertadores', name: 'Copa Libertadores', country: 'South America' },
-  { sportKey: 'soccer_norway_eliteserien',         name: 'Eliteserien',       country: 'Norway'        },
-  { sportKey: 'soccer_sweden_allsvenskan',         name: 'Allsvenskan',       country: 'Sweden'        },
-  { sportKey: 'soccer_brazil_serie_b',             name: 'Brazil Serie B',    country: 'Brazil'        },
+  { id: 39, name: 'Premier League',   country: 'England' },
+  { id: 40, name: 'EFL Championship', country: 'England' },
 ];
 
-// Bookmakers to request. The Odds API returns all available by default,
-// but explicitly listing the main ones keeps response size predictable.
-// Full list: https://the-odds-api.com/sports-odds-data/bookmakers.html
-const BOOKMAKERS = [
-  // Exchanges — sharp baseline
-  'betfair_ex_uk',
-  'smarkets',
-  'matchbook',
-  // UK soft books
-  'bet365',
-  'skybet',
-  'williamhill',
-  'paddypower',
-  'coral',
-  'ladbrokes_uk',
-  'betfred_uk',
-  'betway',
-  'betvictor',
-  'boylesports',
-  'betfair_sb_uk',
-  'unibet_uk',
-  'virginbet',
-  'sport888',
-].join(',');
+// API-Football bet type IDs.
+const BET_MATCH_WINNER = 1;   // 1X2
+const BET_OVER_UNDER   = 5;   // Goals Over/Under
+const BET_BTTS         = 8;   // Both Teams To Score
 
 // Only insert a new odds row if price has moved by more than this amount.
-// Prevents flooding the table with duplicate rows on unchanged prices.
 const MIN_PRICE_MOVEMENT = 0.01;
 
 // ---------------------------------------------------------------------------
-// Supabase client
+// Supabase
 // ---------------------------------------------------------------------------
 
 function getSupabase() {
@@ -83,114 +66,132 @@ function getSupabase() {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP helper — wraps Node https in a promise
+// HTTP helper — RapidAPI requires headers, not a query param
 // ---------------------------------------------------------------------------
 
-function httpGet(url) {
+function httpGet(path) {
+  if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY environment variable is not set');
+
+  const url = `https://${RAPIDAPI_HOST}/v3${path}`;
+
   return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
+    const options = {
+      method: 'GET',
+      hostname: RAPIDAPI_HOST,
+      path: `/v3${path}`,
+      headers: {
+        'x-rapidapi-key':  RAPIDAPI_KEY,
+        'x-rapidapi-host': RAPIDAPI_HOST,
+      },
+    };
+
+    https.request(options, (res) => {
       let body = '';
       res.on('data', chunk => { body += chunk; });
       res.on('end', () => {
-        if (res.statusCode === 401) {
-          reject(new Error('ODDS_API_KEY is invalid or missing'));
+        if (res.statusCode === 429) {
+          reject(new Error('API-Football rate limit hit — too many requests'));
           return;
         }
-        if (res.statusCode === 422) {
-          reject(new Error('Sport key not found or not active on your plan'));
+        if (res.statusCode === 401 || res.statusCode === 403) {
+          reject(new Error('RAPIDAPI_KEY is invalid or missing subscription'));
           return;
         }
         if (res.statusCode !== 200) {
-          reject(new Error(`HTTP ${res.statusCode}: ${body}`));
+          reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`));
           return;
         }
-        // Expose remaining quota from response headers
-        const remaining = res.headers['x-requests-remaining'];
-        const used      = res.headers['x-requests-used'];
-        if (remaining !== undefined) {
-          console.log(`  [quota] used=${used} remaining=${remaining}`);
-        }
         try {
-          resolve(JSON.parse(body));
+          const parsed = JSON.parse(body);
+          // API-Football surfaces errors in the response body
+          if (parsed.errors && Object.keys(parsed.errors).length > 0) {
+            reject(new Error(`API error: ${JSON.stringify(parsed.errors)}`));
+            return;
+          }
+          resolve(parsed);
         } catch (e) {
           reject(new Error(`JSON parse error: ${e.message}`));
         }
       });
-    }).on('error', reject);
+    }).on('error', reject).end();
   });
 }
 
 // ---------------------------------------------------------------------------
-// 1. Fetch odds from The Odds API
+// 1. Fetch fixtures (team names + kickoff times)
 // ---------------------------------------------------------------------------
 
 /**
- * Fetches 1X2 (h2h) odds for a single sport/league.
- * Returns the raw API response array.
- *
- * API docs: https://the-odds-api.com/liveapi/guides/v4/#get-odds
+ * Fetches upcoming fixtures for a league.
+ * Returns a Map of fixtureId → { homeTeam, awayTeam, kickoffAt }.
  */
-async function fetchOddsForLeague(sportKey) {
-  if (!ODDS_API_KEY) throw new Error('ODDS_API_KEY environment variable is not set');
+async function fetchFixturesForLeague(leagueId) {
+  // next=100 returns the next 100 upcoming fixtures; also grab in-progress
+  const path = `/fixtures?league=${leagueId}&season=${SEASON}&next=100`;
+  console.log(`  [fixtures] GET ${path}`);
+  const json = await httpGet(path);
 
-  const url = [
-    `https://api.the-odds-api.com/v4/sports/${sportKey}/odds`,
-    `?apiKey=${ODDS_API_KEY}`,
-    `&regions=uk`,           // UK region for UK bookmakers
-    `&markets=h2h`,          // head-to-head = 1X2 match result
-    `&oddsFormat=decimal`,
-    `&bookmakers=${BOOKMAKERS}`,
-  ].join('');
-
-  console.log(`  Fetching ${sportKey}...`);
-  const data = await httpGet(url);
-  console.log(`  → ${data.length} events returned`);
-  return data;
-}
-
-/**
- * Fetches over/under (totals) odds for a single sport/league.
- */
-async function fetchTotalsForLeague(sportKey) {
-  if (!ODDS_API_KEY) throw new Error('ODDS_API_KEY environment variable is not set');
-
-  const url = [
-    `https://api.the-odds-api.com/v4/sports/${sportKey}/odds`,
-    `?apiKey=${ODDS_API_KEY}`,
-    `&regions=uk`,
-    `&markets=totals`,
-    `&oddsFormat=decimal`,
-    `&bookmakers=${BOOKMAKERS}`,
-  ].join('');
-
-  console.log(`  Fetching totals for ${sportKey}...`);
-  const data = await httpGet(url);
-  console.log(`  → ${data.length} totals events returned`);
-  return data;
+  const map = new Map();
+  for (const item of (json.response ?? [])) {
+    map.set(item.fixture.id, {
+      homeTeam:  item.teams.home.name,
+      awayTeam:  item.teams.away.name,
+      kickoffAt: item.fixture.date,
+    });
+  }
+  console.log(`  → ${map.size} upcoming fixtures`);
+  return map;
 }
 
 // ---------------------------------------------------------------------------
-// 2. Normalise API response → our DB shape
+// 2. Fetch odds (paginated)
 // ---------------------------------------------------------------------------
 
 /**
- * The Odds API event shape (simplified):
+ * Fetches all odds pages for a league + bet type.
+ * Returns array of raw API response items.
+ */
+async function fetchOddsPages(leagueId, betId) {
+  const all = [];
+  let page = 1;
+
+  while (true) {
+    const path = `/odds?league=${leagueId}&season=${SEASON}&bet=${betId}&page=${page}`;
+    console.log(`  [odds] GET ${path}`);
+    const json = await httpGet(path);
+    const items = json.response ?? [];
+    all.push(...items);
+
+    const { current, total } = json.paging ?? { current: 1, total: 1 };
+    if (current >= total) break;
+    page++;
+    await sleep(300); // respect rate limit between pages
+  }
+
+  console.log(`  → ${all.length} odds records`);
+  return all;
+}
+
+// ---------------------------------------------------------------------------
+// 3. Normalise API-Football response → our DB shape
+// ---------------------------------------------------------------------------
+
+/**
+ * API-Football odds item shape:
  * {
- *   id: "abc123",
- *   sport_key: "soccer_epl",
- *   home_team: "Arsenal",
- *   away_team: "Chelsea",
- *   commence_time: "2024-06-12T19:45:00Z",
+ *   fixture: { id: 868077 },
  *   bookmakers: [
  *     {
- *       key: "bet365",
- *       markets: [
+ *       id: 8,
+ *       name: "Bet365",
+ *       bets: [
  *         {
- *           key: "h2h",
- *           outcomes: [
- *             { name: "Arsenal", price: 2.10 },
- *             { name: "Chelsea", price: 3.50 },
- *             { name: "Draw",    price: 3.20 }
+ *           id: 1,
+ *           name: "Match Winner",
+ *           values: [
+ *             { value: "Home", odd: "1.83" },
+ *             { value: "Draw", odd: "3.75" },
+ *             { value: "Away", odd: "4.20" }
  *           ]
  *         }
  *       ]
@@ -198,36 +199,64 @@ async function fetchTotalsForLeague(sportKey) {
  *   ]
  * }
  */
-function normaliseEvent(event, leagueName) {
-  const { id, home_team, away_team, commence_time, bookmakers } = event;
 
-  // Extract odds per bookmaker
+/**
+ * Normalise bookmaker name to a consistent slug.
+ * e.g. "Bet365" → "bet365", "William Hill" → "williamhill"
+ */
+function slugifyBookmaker(name) {
+  const overrides = {
+    'Bet365':          'bet365',
+    'William Hill':    'williamhill',
+    'Ladbrokes':       'ladbrokes_uk',
+    'Coral':           'coral',
+    'Paddy Power':     'paddypower',
+    'Betfair':         'betfair_sb_uk',
+    'Betfair Exchange':'betfair_ex_uk',
+    'Betway':          'betway',
+    'Unibet':          'unibet_uk',
+    'SkyBet':          'skybet',
+    'Sky Bet':         'skybet',
+    'Betfred':         'betfred_uk',
+    'BetVictor':       'betvictor',
+    'Boylesports':     'boylesports',
+    'BoyleSports':     'boylesports',
+    'Virgin Bet':      'virginbet',
+    '888sport':        'sport888',
+    'Smarkets':        'smarkets',
+    'Matchbook':       'matchbook',
+  };
+  return overrides[name] ?? name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+}
+
+/**
+ * Extract 1X2 odds rows from a single API-Football odds item.
+ */
+function normaliseH2hItem(item, fixtureMap) {
+  const fixtureId = item.fixture?.id;
+  const fixture   = fixtureMap.get(fixtureId);
+  if (!fixture) return null; // fixture not in our upcoming window
+
   const oddsRows = [];
 
-  for (const bm of (bookmakers ?? [])) {
-    const h2h = bm.markets?.find(m => m.key === 'h2h');
-    if (!h2h) continue;
+  for (const bm of (item.bookmakers ?? [])) {
+    const h2hBet = bm.bets?.find(b => b.id === BET_MATCH_WINNER);
+    if (!h2hBet) continue;
 
-    const outcomes = h2h.outcomes ?? [];
+    const homeVal = h2hBet.values?.find(v => v.value === 'Home');
+    const drawVal = h2hBet.values?.find(v => v.value === 'Draw');
+    const awayVal = h2hBet.values?.find(v => v.value === 'Away');
 
-    // Map outcome names to home/draw/away
-    // The Odds API returns team names for win outcomes and "Draw" for the draw
-    const homeOutcome = outcomes.find(o => o.name === home_team);
-    const awayOutcome = outcomes.find(o => o.name === away_team);
-    const drawOutcome = outcomes.find(o => o.name === 'Draw');
+    if (!homeVal || !drawVal || !awayVal) continue;
 
-    if (!homeOutcome || !awayOutcome || !drawOutcome) continue;
+    const h = parseFloat(homeVal.odd);
+    const d = parseFloat(drawVal.odd);
+    const a = parseFloat(awayVal.odd);
 
-    // Validate odds are sensible (> 1.0, < 1000)
-    const h = parseFloat(homeOutcome.price);
-    const d = parseFloat(drawOutcome.price);
-    const a = parseFloat(awayOutcome.price);
-
-    if (h <= 1 || d <= 1 || a <= 1) continue;
-    if (h > 999 || d > 999 || a > 999) continue;
+    if (h <= 1 || d <= 1 || a <= 1 || h > 999 || d > 999 || a > 999) continue;
 
     oddsRows.push({
-      bookmaker:  bm.key,
+      bookmaker:  slugifyBookmaker(bm.name),
       market:     'h2h',
       home_odds:  h,
       draw_odds:  d,
@@ -237,175 +266,138 @@ function normaliseEvent(event, leagueName) {
   }
 
   return {
-    externalId:  id,
-    homeTeam:    home_team,
-    awayTeam:    away_team,
-    kickoffAt:   commence_time,
-    leagueName,
+    externalId: String(fixtureId),
+    ...fixture,
     oddsRows,
   };
 }
 
 /**
- * Fetches Both Teams to Score (btts) odds for a single sport/league.
+ * Extract Over/Under odds rows from a single API-Football odds item.
  */
-async function fetchBttsForLeague(sportKey) {
-  if (!ODDS_API_KEY) throw new Error('ODDS_API_KEY environment variable is not set');
+function normaliseTotalsItem(item) {
+  const fixtureId = item.fixture?.id;
+  const oddsRows  = [];
 
-  const url = [
-    `https://api.the-odds-api.com/v4/sports/${sportKey}/odds`,
-    `?apiKey=${ODDS_API_KEY}`,
-    `&regions=uk`,
-    `&markets=btts`,
-    `&oddsFormat=decimal`,
-    `&bookmakers=${BOOKMAKERS}`,
-  ].join('');
+  for (const bm of (item.bookmakers ?? [])) {
+    const totalsBet = bm.bets?.find(b => b.id === BET_OVER_UNDER);
+    if (!totalsBet) continue;
 
-  console.log(`  Fetching btts for ${sportKey}...`);
-  const data = await httpGet(url);
-  console.log(`  → ${data.length} btts events returned`);
-  return data;
+    // API-Football returns multiple lines (e.g. Over 2.5, Over 3.5)
+    // Group by line — pick the 2.5 line if available, else first
+    const lines = new Map();
+    for (const v of (totalsBet.values ?? [])) {
+      // value format: "Over 2.5" or "Under 2.5"
+      const match = v.value.match(/^(Over|Under)\s+([\d.]+)$/);
+      if (!match) continue;
+      const [, side, lineStr] = match;
+      const line = parseFloat(lineStr);
+      if (!lines.has(line)) lines.set(line, {});
+      lines.get(line)[side] = parseFloat(v.odd);
+    }
+
+    // Prefer 2.5 line; fall back to first available
+    const targetLine = lines.has(2.5) ? 2.5 : [...lines.keys()][0];
+    if (targetLine == null) continue;
+
+    const { Over: overPrice, Under: underPrice } = lines.get(targetLine);
+    if (!overPrice || !underPrice || overPrice <= 1 || underPrice <= 1) continue;
+
+    oddsRows.push({
+      bookmaker:   slugifyBookmaker(bm.name),
+      market:      'totals',
+      home_odds:   overPrice,
+      draw_odds:   null,
+      away_odds:   underPrice,
+      market_line: targetLine,
+      fetched_at:  new Date().toISOString(),
+    });
+  }
+
+  return { externalId: String(fixtureId), oddsRows };
 }
 
 /**
- * Normalises a BTTS API event into Yes/No odds rows.
- * Uses home_odds for Yes price, away_odds for No price, draw_odds null.
+ * Extract BTTS odds rows from a single API-Football odds item.
  */
-function normaliseBttsEvent(event) {
-  const { id, bookmakers } = event;
-  const oddsRows = [];
+function normaliseBttsItem(item) {
+  const fixtureId = item.fixture?.id;
+  const oddsRows  = [];
 
-  for (const bm of (bookmakers ?? [])) {
-    const btts = bm.markets?.find(m => m.key === 'btts');
-    if (!btts) continue;
+  for (const bm of (item.bookmakers ?? [])) {
+    const bttsBet = bm.bets?.find(b => b.id === BET_BTTS);
+    if (!bttsBet) continue;
 
-    const outcomes = btts.outcomes ?? [];
-    const yesOutcome = outcomes.find(o => o.name === 'Yes');
-    const noOutcome  = outcomes.find(o => o.name === 'No');
-    if (!yesOutcome || !noOutcome) continue;
+    const yesVal = bttsBet.values?.find(v => v.value === 'Yes');
+    const noVal  = bttsBet.values?.find(v => v.value === 'No');
+    if (!yesVal || !noVal) continue;
 
-    const yesPrice = parseFloat(yesOutcome.price);
-    const noPrice  = parseFloat(noOutcome.price);
+    const yesPrice = parseFloat(yesVal.odd);
+    const noPrice  = parseFloat(noVal.odd);
     if (yesPrice <= 1 || noPrice <= 1) continue;
 
     oddsRows.push({
-      bookmaker:   bm.key,
+      bookmaker:   slugifyBookmaker(bm.name),
       market:      'btts',
-      home_odds:   yesPrice,   // Yes stored as home_odds
+      home_odds:   yesPrice,
       draw_odds:   null,
-      away_odds:   noPrice,    // No stored as away_odds
+      away_odds:   noPrice,
       market_line: null,
       fetched_at:  new Date().toISOString(),
     });
   }
 
-  return { externalId: id, oddsRows };
-}
-
-/**
- * Normalises a totals API event into Over/Under odds rows.
- * Uses home_odds for Over price, away_odds for Under price, draw_odds null.
- */
-function normaliseTotalsEvent(event) {
-  const { id, bookmakers } = event;
-  const oddsRows = [];
-
-  for (const bm of (bookmakers ?? [])) {
-    const totals = bm.markets?.find(m => m.key === 'totals');
-    if (!totals) continue;
-
-    const outcomes = totals.outcomes ?? [];
-    const overOutcome  = outcomes.find(o => o.name === 'Over');
-    const underOutcome = outcomes.find(o => o.name === 'Under');
-    if (!overOutcome || !underOutcome) continue;
-
-    const overPrice  = parseFloat(overOutcome.price);
-    const underPrice = parseFloat(underOutcome.price);
-    const line       = parseFloat(overOutcome.point ?? underOutcome.point ?? 0);
-
-    if (overPrice <= 1 || underPrice <= 1) continue;
-
-    oddsRows.push({
-      bookmaker:   bm.key,
-      market:      'totals',
-      home_odds:   overPrice,   // Over stored as home_odds
-      draw_odds:   null,
-      away_odds:   underPrice,  // Under stored as away_odds
-      market_line: line,
-      fetched_at:  new Date().toISOString(),
-    });
-  }
-
-  return { externalId: id, oddsRows };
+  return { externalId: String(fixtureId), oddsRows };
 }
 
 // ---------------------------------------------------------------------------
-// 3. Upsert reference data (leagues, teams, matches)
+// 4. Upsert reference data (leagues, teams, matches) — unchanged from before
 // ---------------------------------------------------------------------------
 
-/**
- * Upserts a league row and returns its UUID.
- * Uses name as the unique key.
- */
 async function upsertLeague(supabase, { name, country }) {
   const { data, error } = await supabase
     .from('leagues')
     .upsert({ name, country }, { onConflict: 'name' })
     .select('id')
     .single();
-
   if (error) throw new Error(`upsertLeague(${name}): ${error.message}`);
   return data.id;
 }
 
-/**
- * Upserts a team row and returns its UUID.
- * Uses name as the unique key — requires a unique constraint on teams(name).
- */
 async function upsertTeam(supabase, name) {
   const { data, error } = await supabase
     .from('teams')
     .upsert({ name, short_name: makeShortName(name) }, { onConflict: 'name' })
     .select('id')
     .single();
-
   if (error) throw new Error(`upsertTeam(${name}): ${error.message}`);
   return data.id;
 }
 
-/**
- * Upserts a match row and returns its UUID.
- * Uses external_id (The Odds API event id) as the unique key.
- * Requires an external_id column on matches — see migration note below.
- */
 async function upsertMatch(supabase, { externalId, homeTeamId, awayTeamId, leagueId, kickoffAt }) {
   const { data, error } = await supabase
     .from('matches')
     .upsert(
       {
-        external_id:   externalId,
-        home_team_id:  homeTeamId,
-        away_team_id:  awayTeamId,
-        league_id:     leagueId,
-        kickoff_at:    kickoffAt,
-        status:        'scheduled',
+        external_id:  externalId,
+        home_team_id: homeTeamId,
+        away_team_id: awayTeamId,
+        league_id:    leagueId,
+        kickoff_at:   kickoffAt,
+        status:       'scheduled',
       },
       { onConflict: 'external_id' }
     )
     .select('id')
     .single();
-
   if (error) throw new Error(`upsertMatch(${externalId}): ${error.message}`);
   return data.id;
 }
 
 // ---------------------------------------------------------------------------
-// 4. Insert odds (append-only, deduped by price movement)
+// 5. Insert odds (append-only, deduped by price movement) — unchanged
 // ---------------------------------------------------------------------------
 
-/**
- * Fetches the most recent odds row for this match+bookmaker+market combination.
- */
 async function getLastOdds(supabase, matchId, bookmaker, market = 'h2h') {
   const { data, error } = await supabase
     .from('odds')
@@ -416,90 +408,78 @@ async function getLastOdds(supabase, matchId, bookmaker, market = 'h2h') {
     .order('fetched_at', { ascending: false })
     .limit(1)
     .maybeSingle();
-
   if (error) throw new Error(`getLastOdds: ${error.message}`);
   return data;
 }
 
-/**
- * Returns true if the new odds differ from the last stored odds
- * by more than MIN_PRICE_MOVEMENT on any outcome.
- */
 function oddsHaveMoved(lastOdds, newRow) {
   if (!lastOdds) return true;
   const homeMove = Math.abs((newRow.home_odds ?? 0) - (lastOdds.home_odds ?? 0));
   const awayMove = Math.abs((newRow.away_odds ?? 0) - (lastOdds.away_odds ?? 0));
-  // draw_odds is null for totals, skip if both are null
   const drawMove = (newRow.draw_odds != null && lastOdds.draw_odds != null)
     ? Math.abs(newRow.draw_odds - lastOdds.draw_odds)
     : 0;
   return homeMove > MIN_PRICE_MOVEMENT || awayMove > MIN_PRICE_MOVEMENT || drawMove > MIN_PRICE_MOVEMENT;
 }
 
-/**
- * Inserts odds rows for all bookmakers for a single match.
- * Only inserts rows where prices have actually moved.
- * Returns count of rows inserted.
- */
 async function insertOddsForMatch(supabase, matchId, oddsRows) {
   let inserted = 0;
-
   for (const row of oddsRows) {
     const market = row.market ?? 'h2h';
     const last   = await getLastOdds(supabase, matchId, row.bookmaker, market);
-
     if (!oddsHaveMoved(last, row)) continue;
 
     if (DRY_RUN) {
-      if (market === 'totals') {
-        console.log(`    [dry-run] totals: ${row.bookmaker} O=${row.home_odds} U=${row.away_odds} line=${row.market_line}`);
-      } else {
-        console.log(`    [dry-run] h2h: ${row.bookmaker} H=${row.home_odds} D=${row.draw_odds} A=${row.away_odds}`);
-      }
+      console.log(`    [dry-run] ${market}: ${row.bookmaker} H=${row.home_odds} D=${row.draw_odds ?? '—'} A=${row.away_odds}`);
       inserted++;
       continue;
     }
 
-    const { error } = await supabase
-      .from('odds')
-      .insert({ match_id: matchId, ...row });
-
+    const { error } = await supabase.from('odds').insert({ match_id: matchId, ...row });
     if (error) {
       console.warn(`    [warn] odds insert failed (${row.bookmaker} ${market}): ${error.message}`);
     } else {
       inserted++;
     }
   }
-
   return inserted;
 }
 
 // ---------------------------------------------------------------------------
-// 5. Main ingestion loop
+// 6. Main ingestion loop
 // ---------------------------------------------------------------------------
 
 async function ingest() {
-  console.log(`\n[ingest] starting ${DRY_RUN ? '(DRY RUN) ' : ''}at ${new Date().toISOString()}`);
+  console.log(`\n[ingest] starting ${DRY_RUN ? '(DRY RUN) ' : ''}at ${new Date().toISOString()} — season ${SEASON}`);
 
   const supabase = getSupabase();
   const summary  = { leagues: 0, events: 0, oddsInserted: 0, errors: 0 };
 
   for (const league of LEAGUES) {
-    console.log(`\n[league] ${league.name}`);
+    console.log(`\n[league] ${league.name} (id=${league.id})`);
 
-    // Fetch from The Odds API
-    let events;
+    // ── Step 1: fixtures ────────────────────────────────────────────────────
+    let fixtureMap;
     try {
-      events = await fetchOddsForLeague(league.sportKey);
+      fixtureMap = await fetchFixturesForLeague(league.id);
     } catch (err) {
-      console.error(`  [error] fetch failed: ${err.message}`);
+      console.error(`  [error] fixtures fetch failed: ${err.message}`);
       summary.errors++;
       continue;
     }
 
-    if (!events.length) {
-      console.log('  no events returned (off-season or no upcoming fixtures)');
+    if (fixtureMap.size === 0) {
+      console.log('  no upcoming fixtures — skipping');
       continue;
+    }
+
+    // ── Step 2: 1X2 odds ───────────────────────────────────────────────────
+    let h2hItems = [];
+    try {
+      h2hItems = await fetchOddsPages(league.id, BET_MATCH_WINNER);
+    } catch (err) {
+      console.error(`  [error] h2h odds fetch failed: ${err.message}`);
+      summary.errors++;
     }
 
     // Upsert league
@@ -512,73 +492,60 @@ async function ingest() {
       continue;
     }
 
-    // Process each event (h2h)
-    for (const event of events) {
-      const norm = normaliseEvent(event, league.name);
-
-      if (!norm.oddsRows.length) {
-        console.log(`  [skip] ${norm.homeTeam} vs ${norm.awayTeam} — no valid bookmaker odds`);
-        continue;
-      }
+    // Process h2h items
+    for (const item of h2hItems) {
+      const norm = normaliseH2hItem(item, fixtureMap);
+      if (!norm || !norm.oddsRows.length) continue;
 
       console.log(`  ${norm.homeTeam} vs ${norm.awayTeam} (${norm.oddsRows.length} books)`);
 
       try {
-        // Upsert teams
         const homeTeamId = DRY_RUN ? 'dry-id' : await upsertTeam(supabase, norm.homeTeam);
         const awayTeamId = DRY_RUN ? 'dry-id' : await upsertTeam(supabase, norm.awayTeam);
+        const matchId    = DRY_RUN ? 'dry-match-id' : await upsertMatch(supabase, {
+          externalId:  norm.externalId,
+          homeTeamId,
+          awayTeamId,
+          leagueId,
+          kickoffAt:   norm.kickoffAt,
+        });
 
-        // Upsert match
-        const matchId = DRY_RUN
-          ? 'dry-match-id'
-          : await upsertMatch(supabase, {
-              externalId:  norm.externalId,
-              homeTeamId,
-              awayTeamId,
-              leagueId,
-              kickoffAt:   norm.kickoffAt,
-            });
-
-        // Insert h2h odds
         const inserted = await insertOddsForMatch(supabase, matchId, norm.oddsRows);
         summary.oddsInserted += inserted;
         summary.events++;
-
       } catch (err) {
         console.error(`    [error] ${norm.homeTeam} vs ${norm.awayTeam}: ${err.message}`);
         summary.errors++;
       }
     }
 
-    // ── Totals (over/under) ingestion ────────────────────────────────────
+    await sleep(500); // pause between h2h and over/under fetches
+
+    // ── Step 3: Over/Under odds ────────────────────────────────────────────
     console.log(`\n[totals] ${league.name}`);
-    let totalsEvents;
+    let totalsItems = [];
     try {
-      totalsEvents = await fetchTotalsForLeague(league.sportKey);
+      totalsItems = await fetchOddsPages(league.id, BET_OVER_UNDER);
     } catch (err) {
       console.warn(`  [warn] totals fetch failed: ${err.message}`);
-      totalsEvents = [];
     }
 
-    for (const event of totalsEvents) {
-      const norm = normaliseTotalsEvent(event);
+    for (const item of totalsItems) {
+      const norm = normaliseTotalsItem(item);
       if (!norm.oddsRows.length) continue;
 
       try {
-        // Look up existing match by external_id — already upserted above
         if (!DRY_RUN) {
           const { data: matchRow, error } = await supabase
             .from('matches')
             .select('id')
             .eq('external_id', norm.externalId)
             .maybeSingle();
-
-          if (error || !matchRow) continue; // match not in DB yet, skip
-
+          if (error || !matchRow) continue;
           const inserted = await insertOddsForMatch(supabase, matchRow.id, norm.oddsRows);
           summary.oddsInserted += inserted;
         } else {
-          console.log(`  [dry-run] totals for ${norm.externalId}: ${norm.oddsRows.length} rows`);
+          console.log(`  [dry-run] totals for fixture ${norm.externalId}: ${norm.oddsRows.length} rows`);
         }
       } catch (err) {
         console.error(`    [error] totals ${norm.externalId}: ${err.message}`);
@@ -586,18 +553,19 @@ async function ingest() {
       }
     }
 
-    // ── BTTS (both teams to score) ingestion ─────────────────────────────
+    await sleep(500);
+
+    // ── Step 4: BTTS odds ──────────────────────────────────────────────────
     console.log(`\n[btts] ${league.name}`);
-    let bttsEvents;
+    let bttsItems = [];
     try {
-      bttsEvents = await fetchBttsForLeague(league.sportKey);
+      bttsItems = await fetchOddsPages(league.id, BET_BTTS);
     } catch (err) {
       console.warn(`  [warn] btts fetch failed: ${err.message}`);
-      bttsEvents = [];
     }
 
-    for (const event of bttsEvents) {
-      const norm = normaliseBttsEvent(event);
+    for (const item of bttsItems) {
+      const norm = normaliseBttsItem(item);
       if (!norm.oddsRows.length) continue;
 
       try {
@@ -607,13 +575,11 @@ async function ingest() {
             .select('id')
             .eq('external_id', norm.externalId)
             .maybeSingle();
-
           if (error || !matchRow) continue;
-
           const inserted = await insertOddsForMatch(supabase, matchRow.id, norm.oddsRows);
           summary.oddsInserted += inserted;
         } else {
-          console.log(`  [dry-run] btts for ${norm.externalId}: ${norm.oddsRows.length} rows`);
+          console.log(`  [dry-run] btts for fixture ${norm.externalId}: ${norm.oddsRows.length} rows`);
         }
       } catch (err) {
         console.error(`    [error] btts ${norm.externalId}: ${err.message}`);
@@ -622,9 +588,7 @@ async function ingest() {
     }
 
     summary.leagues++;
-
-    // Brief pause between leagues to avoid hammering the API
-    await sleep(300);
+    await sleep(500);
   }
 
   console.log('\n[ingest] complete:', summary);
@@ -639,30 +603,31 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-/**
- * Generate a short name from a full team name.
- * e.g. "Manchester City" → "Man City", "Arsenal" → "Arsenal"
- */
 function makeShortName(name) {
   const overrides = {
-    'Manchester City':    'Man City',
-    'Manchester United':  'Man Utd',
-    'Tottenham Hotspur':  'Spurs',
-    'Newcastle United':   'Newcastle',
-    'Nottingham Forest':  'Nottm Forest',
-    'West Ham United':    'West Ham',
-    'Wolverhampton Wanderers': 'Wolves',
-    'Brighton & Hove Albion':  'Brighton',
-    'Bayer 04 Leverkusen':     'Leverkusen',
-    'Borussia Dortmund':       'Dortmund',
-    'Borussia Mönchengladbach':'Gladbach',
-    'Atletico Madrid':         'Atletico',
-    'Real Sociedad':           'Sociedad',
-    'Inter Milan':             'Inter',
-    'AC Milan':                'Milan',
-    'Paris Saint-Germain':     'PSG',
+    'Manchester City':          'Man City',
+    'Manchester United':        'Man Utd',
+    'Tottenham Hotspur':        'Spurs',
+    'Newcastle United':         'Newcastle',
+    'Nottingham Forest':        'Nottm Forest',
+    'West Ham United':          'West Ham',
+    'Wolverhampton Wanderers':  'Wolves',
+    'Brighton & Hove Albion':   'Brighton',
+    'Sheffield United':         'Sheffield Utd',
+    'Sheffield Wednesday':      'Sheff Wed',
+    'Queens Park Rangers':      'QPR',
+    'Stoke City':               'Stoke',
+    'Blackburn Rovers':         'Blackburn',
+    'Swansea City':             'Swansea',
+    'Cardiff City':             'Cardiff',
+    'Preston North End':        'Preston',
+    'Coventry City':            'Coventry',
+    'Bristol City':             'Bristol C',
+    'Bayer 04 Leverkusen':      'Leverkusen',
+    'Borussia Dortmund':        'Dortmund',
+    'Paris Saint-Germain':      'PSG',
   };
-  return overrides[name] ?? (name.length > 12 ? name.split(' ').slice(0, 2).join(' ') : name);
+  return overrides[name] ?? (name.length > 14 ? name.split(' ').slice(0, 2).join(' ') : name);
 }
 
 // ---------------------------------------------------------------------------
@@ -676,4 +641,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { ingest, normaliseEvent, oddsHaveMoved };
+module.exports = { ingest, normaliseH2hItem, oddsHaveMoved };
