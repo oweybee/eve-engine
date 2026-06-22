@@ -114,10 +114,16 @@ async function fetchTodayFixtures(date) {
   console.log(`[plan] GET ${path}`);
   const json = await httpGet(path);
   const matches = json.response?.matches ?? json.matches ?? [];
+  // Log all unique competition names so we can identify the correct one
+  const names = [...new Set(matches.map(m =>
+    m.league?.name ?? m.tournament?.name ?? m.competition?.name ?? m.league_name ?? m.tournament_name ?? 'unknown'
+  ))];
+  console.log(`[plan] competitions today: ${names.join(' | ')}`);
+
   // Filter to World Cup matches only
   const wcMatches = matches.filter(m => {
-    const league = (m.league?.name ?? m.tournament?.name ?? m.competition?.name ?? '').toLowerCase();
-    return league.includes('world cup');
+    const league = (m.league?.name ?? m.tournament?.name ?? m.competition?.name ?? m.league_name ?? m.tournament_name ?? '').toLowerCase();
+    return league.includes('world cup') || league.includes('fifa wc') || league.includes('wc 2026');
   });
   console.log(`[plan] ${matches.length} total matches, ${wcMatches.length} World Cup`);
   return wcMatches;
