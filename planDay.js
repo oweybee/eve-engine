@@ -114,11 +114,8 @@ async function fetchTodayFixtures(date) {
   console.log(`[plan] GET ${path}`);
   const json = await httpGet(path);
   const matches = json.response?.matches ?? json.matches ?? [];
-  // Log all unique competition names so we can identify the correct one
-  const names = [...new Set(matches.map(m =>
-    m.league?.name ?? m.tournament?.name ?? m.competition?.name ?? m.league_name ?? m.tournament_name ?? 'unknown'
-  ))];
-  console.log(`[plan] competitions today: ${names.join(' | ')}`);
+  // Log first match raw structure to identify field names
+  if (matches.length > 0) console.log(`[plan] sample match keys: ${JSON.stringify(matches[0]).slice(0, 500)}`);
 
   // Filter to World Cup matches only
   const wcMatches = matches.filter(m => {
