@@ -23,7 +23,7 @@ const { getClient } = require('./lib/supabaseClient');
 
 const {
   consensusStats, dispersion, confidenceScore, confidenceTier, maxEdgeScore, evForStakes, clamp,
-  valueScore, signalTier, bestTier, categorizeSignal,
+  valueScore, signalTier, bestTier, categorizeSignal, OUTSIDER_PROB_THRESHOLD,
 } = require('./modelMetrics');
 
 const { computeBookingsModel } = require('./bookingsModel');
@@ -1048,19 +1048,30 @@ async function upsertComputedValues(supabase, rows) {
  */
 async function insertValueSignals(supabase, rows) {
   // 1. Collect every (match_id, outcome) currently flagged as value.
+  //    signal_category is derived from the pre-computed _*Cat objects on each
+  //    row (set by categorizeSignal() in computeMatch). The outsider threshold
+  //    (OUTSIDER_PROB_THRESHOLD = 15%) is baked into those objects, so:
+  //      Prime        — edge in sweet spot AND model prob ≥ 15%
+  //      Longshot Edge— edge in sweet spot AND model prob <  15%
+  //      Standard     — edge below sweet-spot floor (< 5pp)
   const candidates = [];
   for (const row of rows) {
     const flagged = { home: row.home_value, draw: row.draw_value, away: row.away_value };
+    // Map outcome → its pre-computed categorization from computeMatch.
+    const catByOutcome = { home: row._homeCat, draw: row._drawCat, away: row._awayCat };
+
     for (const outcome of ['home', 'draw', 'away']) {
       if (!flagged[outcome]) continue;
+      const signal_category = catByOutcome[outcome]?.tier ?? 'Standard';
       candidates.push({
-        match_id:      row.match_id,
+        match_id:         row.match_id,
         outcome,
-        detected_odds: row[`best_${outcome}_odds`],   // best soft odds for this outcome
-        detected_edge: row[`${outcome}_edge`],
-        detected_mes:  row.max_edge_score ?? null,
-        bookmaker:     row[`best_${outcome}_book`],    // best book for this outcome
-        kickoff_at:    row._kickoff_at ?? null,
+        detected_odds:    row[`best_${outcome}_odds`],
+        detected_edge:    row[`${outcome}_edge`],
+        detected_mes:     row.max_edge_score ?? null,
+        bookmaker:        row[`best_${outcome}_book`],
+        kickoff_at:       row._kickoff_at ?? null,
+        signal_category,
       });
     }
   }
@@ -1068,6 +1079,15 @@ async function insertValueSignals(supabase, rows) {
     console.log('[value_signals] no value outcomes to record');
     return 0;
   }
+
+  // Log the tier breakdown so CI output shows the split at a glance.
+  const primeCount    = candidates.filter(c => c.signal_category === 'Prime').length;
+  const longshotCount = candidates.filter(c => c.signal_category === 'Longshot Edge').length;
+  const standardCount = candidates.filter(c => c.signal_category === 'Standard').length;
+  console.log(
+    `[value_signals] tier split — Prime:${primeCount} LongshotEdge:${longshotCount} Standard:${standardCount}` +
+    ` (OUTSIDER_PROB_THRESHOLD=${OUTSIDER_PROB_THRESHOLD})`,
+  );
 
   // 2. Find signals already recorded for these matches in the last 2 hours.
   const matchIds = [...new Set(candidates.map(c => c.match_id))];
@@ -1237,4 +1257,5 @@ module.exports = {
   matchProbabilities, ratingFor, isRated, poisson, fetchMatchesForComputation, getClient,
   insertValueSignals, withPool,
   SOFT_BOOKS, SHARPNESS_MULTI_BOOK, SHARPNESS_SINGLE_BOOK, MULTI_BOOK_THRESHOLD, COMPUTE_CONCURRENCY,
+  OUTSIDER_PROB_THRESHOLD,
 };
