@@ -114,15 +114,13 @@ async function fetchTodayFixtures(date) {
   console.log(`[plan] GET ${path}`);
   const json = await httpGet(path);
   const matches = json.response?.matches ?? json.matches ?? [];
-  // Log first match raw structure to identify field names
-  if (matches.length > 0) console.log(`[plan] sample match keys: ${JSON.stringify(matches[0]).slice(0, 500)}`);
+  // Log unique league IDs to identify the World Cup
+  const leagueIds = [...new Set(matches.map(m => m.leagueId))];
+  console.log(`[plan] league IDs today: ${leagueIds.join(', ')}`);
 
-  // Filter to World Cup matches only
-  const wcMatches = matches.filter(m => {
-    const league = (m.league?.name ?? m.tournament?.name ?? m.competition?.name ?? m.league_name ?? m.tournament_name ?? '').toLowerCase();
-    return league.includes('world cup') || league.includes('fifa wc') || league.includes('wc 2026');
-  });
-  console.log(`[plan] ${matches.length} total matches, ${wcMatches.length} World Cup`);
+  const WC_LEAGUE_ID = parseInt(process.env.WORLD_CUP_LEAGUE_ID ?? '894796', 10);
+  const wcMatches = matches.filter(m => m.leagueId === WC_LEAGUE_ID);
+  console.log(`[plan] ${matches.length} total matches, ${wcMatches.length} with leagueId ${WC_LEAGUE_ID}`);
   return wcMatches;
 }
 
@@ -131,7 +129,7 @@ async function fetchTodayFixtures(date) {
 // ---------------------------------------------------------------------------
 
 function calcPlan(fixtures, today) {
-  const fixtureIds = fixtures.map(f => f.id ?? f.match_id ?? f.event_id);
+  const fixtureIds = fixtures.map(f => f.id);
 
   if (fixtureIds.length === 0) {
     console.log(`[plan] rest day — no World Cup fixtures on ${today}`);
