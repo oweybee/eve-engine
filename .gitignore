@@ -10,3 +10,8 @@ node_modules
 
 # X posting state (tracks which signal IDs have been tweeted)
 .x_state.json
+
+# env copies / shell accidents
+.env.*
+"cat .env"
+_csv_cache.csv.gz

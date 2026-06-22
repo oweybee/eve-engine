@@ -3,25 +3,35 @@
  *
  * Three model tiers, used in priority order:
  *
- *   1. SUPERMODEL_HALFTIME (supermodel_halftime.onnx)
- *      26-feature XGBoost trained on 34,519 matches. Requires half-time stats
- *      (HTHG, HTAG, HST, AST, HR, AR). ~65-70% accuracy.
+ *   1. SUPERMODEL_HALFTIME v2 (supermodel_halftime_v2.onnx) — preferred
+ *      30-feature XGBoost (leak-free, chronological validation).
+ *      Falls back to v1 (26-feature) if v2 not present.
  *      Use: in-play/half-time betting signals.
  *
  *   2. ML_ENSEMBLE (match_odds.onnx + btts.onnx + over_under.onnx)
  *      22-feature pre-match ensemble from rolling xG/PPDA/goals stats.
- *      ~50% accuracy (pre-match is fundamentally harder).
  *      Use: pre-match value detection.
  *
  *   3. Dixon-Coles (fallback in computeValues.js)
  *      Used when models are absent or feature completeness is too low.
  *
- * SUPERMODEL FEATURE VECTOR (26 dims) — see train_supermodel.py:
- *   Pre-match (18): home_elo, away_elo, elo_differential,
- *                   home/away win_rate_10, draw_rate_10, goals_scored_10,
- *                   goals_conceded_10, sot_rate_10, clean_sheet_rate_10,
- *                   red_card_rate_10, h2h_home_win_rate_5
- *   In-play  (8):  HTHG, HTAG, HST, AST, HR, AR, ht_lead, is_home_leading
+ * SUPERMODEL v2 FEATURE VECTOR
+ * ─────────────────────────────
+ * Halftime (30 dims) — see train_supermodel_v2.py:
+ *   ELO       (3):  home_elo, away_elo, elo_differential
+ *   Home form (7):  home_win_rate_10, home_draw_rate_10, home_goals_scored_10,
+ *                   home_goals_conceded_10, home_sot_rate_10,
+ *                   home_clean_sheet_rate_10, home_red_card_rate_10
+ *   Away form (7):  same 7 for away team
+ *   H2H       (1):  h2h_home_win_rate_5
+ *   League OHE(5):  league_epl, league_laliga, league_bundesliga,
+ *                   league_seriea, league_ligue1
+ *   HT buckets(5):  ht_losing_2plus, ht_losing_1, ht_draw,
+ *                   ht_winning_1, ht_winning_2plus
+ *   HT cards  (2):  HR, AR
+ *   NOTE: HST/AST removed (data leakage — full-match stats unavailable at HT)
+ *
+ * Prematch (23 dims): ELO + Home form + Away form + H2H + League OHE
  */
 
 'use strict';
@@ -91,13 +101,17 @@ async function runModel(modelName, features) {
 
 /**
  * Run the supermodel (halftime) when in-play stats are available.
- * Label encoding from train_supermodel.py: A=0, D=1, H=2 (alphabetical).
+ * Label encoding: A=0, D=1, H=2 (alphabetical).
+ * Prefers v2 (30-dim, leak-free) over v1 (26-dim) when both are present.
  *
- * @param {number[]} superFeatures - 26-dim vector (18 pre-match + 8 in-play)
+ * @param {number[]} superFeatures - 30-dim (v2) or 26-dim (v1) feature vector
  * @returns {object|null}
  */
 async function supermodelHalftimeInference(superFeatures) {
-  const probs = await runModel('supermodel_halftime', superFeatures);
+  // Try v2 first; fall back to v1 for backwards compatibility
+  const v2Exists = fs.existsSync(path.join(MODEL_DIR, 'supermodel_halftime_v2.onnx'));
+  const modelName = v2Exists ? 'supermodel_halftime_v2' : 'supermodel_halftime';
+  const probs = await runModel(modelName, superFeatures);
   if (!probs || probs.length < 3) return null;
 
   return {
@@ -113,12 +127,15 @@ async function supermodelHalftimeInference(superFeatures) {
 /**
  * Run the supermodel (prematch) using pre-match features only.
  * Label encoding: A=0, D=1, H=2.
+ * Prefers v2 (23-dim, with league OHE) over v1 (18-dim).
  *
- * @param {number[]} prematchFeatures - 18-dim vector (pre-match only)
+ * @param {number[]} prematchFeatures - 23-dim (v2) or 18-dim (v1) feature vector
  * @returns {object|null}
  */
 async function supermodelPrematchInference(prematchFeatures) {
-  const probs = await runModel('supermodel_prematch', prematchFeatures);
+  const v2Exists = fs.existsSync(path.join(MODEL_DIR, 'supermodel_prematch_v2.onnx'));
+  const modelName = v2Exists ? 'supermodel_prematch_v2' : 'supermodel_prematch';
+  const probs = await runModel(modelName, prematchFeatures);
   if (!probs || probs.length < 3) return null;
 
   return {
@@ -169,7 +186,8 @@ async function ensembleInference(features, completeness, minCompleteness = 0.60)
  */
 function ensembleAvailable() {
   if (!getOrt()) return false;
-  const models = ['supermodel_halftime', 'supermodel_prematch', 'match_odds'];
+  const models = ['supermodel_halftime_v2', 'supermodel_halftime',
+                  'supermodel_prematch_v2', 'supermodel_prematch', 'match_odds'];
   return models.some(m => fs.existsSync(path.join(MODEL_DIR, `${m}.onnx`)));
 }
 

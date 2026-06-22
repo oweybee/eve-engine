@@ -10,17 +10,21 @@
  * Signal tiers:
  *   VALUE  — edge ≥ 2%   (⚡)
  *   RUBY   — edge ≥ 8%   (◆) — scarce, elite-confidence signals
+ *
+ * P0-1 fix: dedup state moved from ephemeral .x_state.json (destroyed on every
+ * GitHub Actions runner restart) to posted_signals Supabase table with
+ * UNIQUE(signal_id, channel) — survives restarts and scale-out.
  */
 'use strict';
 
 const https = require('https');
+const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
-const fs   = require('fs');
-const path = require('path');
 
-const STATE_FILE         = path.join(__dirname, '.x_state.json');
 const MAX_SIGNAL_AGE_HOURS = parseInt(process.env.X_MAX_AGE_HOURS ?? '4', 10);
-const DRY_RUN            = process.env.DRY_RUN === '1';
+const DRY_RUN              = process.env.DRY_RUN === '1';
+const CHANNEL              = 'telegram';
+const RUN_ID               = process.env.GITHUB_RUN_ID ?? 'local';
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 
@@ -38,22 +42,53 @@ function getTelegramConfig() {
   return { token, chatId };
 }
 
-// ── State: which signal IDs have already been posted ─────────────────────────
+// ── Durable dedup state via posted_signals table (replaces .x_state.json) ────
 
-function loadPostedIds() {
-  try {
-    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')).posted ?? {};
-  } catch {
-    return {};
-  }
+/**
+ * Load IDs that have already been posted to `channel` within the lookback window.
+ * Returns a Set<string> of signal UUIDs.
+ *
+ * @param {ReturnType<typeof createClient>} supabase
+ * @returns {Promise<Set<string>>}
+ */
+async function loadPostedIds(supabase) {
+  const since = new Date(Date.now() - MAX_SIGNAL_AGE_HOURS * 60 * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from('posted_signals')
+    .select('signal_id')
+    .eq('channel', CHANNEL)
+    .gte('posted_at', since);
+
+  if (error) throw new Error(`loadPostedIds: ${error.message}`);
+  return new Set((data ?? []).map(r => r.signal_id));
 }
 
-function savePostedIds(posted) {
-  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const pruned = Object.fromEntries(
-    Object.entries(posted).filter(([, ts]) => new Date(ts).getTime() > cutoff)
-  );
-  fs.writeFileSync(STATE_FILE, JSON.stringify({ posted: pruned }, null, 2));
+/**
+ * Record a successful post. Upserts on (signal_id, channel) so this is
+ * idempotent — re-runs will update posted_at and message_hash without
+ * creating a second row.
+ *
+ * @param {ReturnType<typeof createClient>} supabase
+ * @param {string} signalId
+ * @param {string} messageHash  - SHA-256 of the rendered message body
+ * @param {string|null} externalMsgId - Telegram message_id or null (dry run)
+ */
+async function markPosted(supabase, signalId, messageHash, externalMsgId) {
+  const { error } = await supabase
+    .from('posted_signals')
+    .upsert(
+      {
+        signal_id:       signalId,
+        channel:         CHANNEL,
+        posted_at:       new Date().toISOString(),
+        message_hash:    messageHash,
+        external_msg_id: externalMsgId ? String(externalMsgId) : null,
+        run_id:          RUN_ID,
+      },
+      { onConflict: 'signal_id,channel' },
+    );
+
+  if (error) throw new Error(`markPosted: ${error.message}`);
 }
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
@@ -96,13 +131,24 @@ function formatKickoff(isoStr) {
   return `${days[d.getUTCDay()]} ${d.getUTCDate()} ${months[d.getUTCMonth()]} ${hh}:${mm} UTC`;
 }
 
+/**
+ * Build the Telegram message body for a signal.
+ *
+ * P2-6 fix: detected_odds and detected_edge are validated before formatting.
+ * Null/NaN odds → signal is skipped by the caller (not silently formatted as 0.00).
+ *
+ * @param {object} signal
+ * @returns {string}
+ */
 function buildMessage(signal) {
   const home    = signal.match?.home_team?.name ?? 'Home';
   const away    = signal.match?.away_team?.name ?? 'Away';
   const league  = signal.match?.league?.name ?? '';
   const outcome = signal.outcome.toUpperCase();
-  const odds    = Number(signal.detected_odds).toFixed(2);
-  const edgePct = (Number(signal.detected_edge) * 100).toFixed(1);
+
+  // Validated upstream — odds and edge are guaranteed finite here.
+  const odds    = signal.detected_odds.toFixed(2);
+  const edgePct = (signal.detected_edge * 100).toFixed(1);
   const mes     = signal.detected_mes != null ? ` | MES: ${signal.detected_mes}/100` : '';
   const book    = signal.bookmaker ?? 'Best price';
   const kickoff = formatKickoff(signal.kickoff_at);
@@ -139,27 +185,70 @@ function buildMessage(signal) {
   return lines.filter(l => l !== null).join('\n');
 }
 
+/**
+ * SHA-256 hex digest of a message string.
+ * Used to detect if odds have drifted materially between runs.
+ *
+ * @param {string} message
+ * @returns {string}
+ */
+function hashMessage(message) {
+  return crypto.createHash('sha256').update(message).digest('hex');
+}
+
 // ── Telegram posting ──────────────────────────────────────────────────────────
 
+/**
+ * Send a message via Telegram Bot API. Returns the sent message object.
+ * Throws on non-ok response or network error.
+ * No retry here — caller handles retry logic at the signal loop level.
+ *
+ * @param {string} token
+ * @param {string} chatId
+ * @param {string} text
+ * @returns {Promise<{message_id: number}>}
+ */
 function telegramPost(token, chatId, text) {
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown', disable_web_page_preview: false });
-    const req  = https.request({
+    const payload = JSON.stringify({
+      chat_id: chatId,
+      text,
+      parse_mode: 'Markdown',
+      disable_web_page_preview: false,
+    });
+    const req = https.request({
       hostname: 'api.telegram.org',
       path: `/bot${token}/sendMessage`,
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
     }, res => {
       let raw = '';
       res.on('data', c => { raw += c; });
       res.on('end', () => {
-        const json = JSON.parse(raw);
-        if (json.ok) resolve(json.result);
-        else reject(new Error(`Telegram error ${json.error_code}: ${json.description}`));
+        let json;
+        try {
+          json = JSON.parse(raw);
+        } catch (e) {
+          return reject(new Error(`Telegram response not JSON: ${raw.slice(0, 200)}`));
+        }
+        if (json.ok) {
+          resolve(json.result);
+        } else {
+          const err = new Error(`Telegram error ${json.error_code}: ${json.description}`);
+          // Attach retry_after so the caller can back off on flood control (429)
+          err.retryAfterSec = json.parameters?.retry_after ?? null;
+          reject(err);
+        }
       });
     });
+    req.setTimeout(15_000, () => {
+      req.destroy(new Error('Telegram request timed out after 15s'));
+    });
     req.on('error', reject);
-    req.write(body);
+    req.write(payload);
     req.end();
   });
 }
@@ -169,14 +258,34 @@ function telegramPost(token, chatId, text) {
 async function run() {
   console.log(`\n[postToX] ${new Date().toISOString()}${DRY_RUN ? ' [DRY RUN]' : ''}`);
 
-  const supabase  = getSupabase();
-  const telegram  = getTelegramConfig();
-  const postedIds = loadPostedIds();
+  const supabase = getSupabase();
+  const telegram = getTelegramConfig();
+
+  // Load durable dedup set from DB — survives runner restarts (P0-1 fix)
+  const postedIds = await loadPostedIds(supabase);
   const signals   = await fetchRecentSignals(supabase);
 
   console.log(`[postToX] ${signals.length} signal(s) in last ${MAX_SIGNAL_AGE_HOURS}h`);
 
-  const toPost     = signals.filter(s => !postedIds[s.id]);
+  // P2-6 fix: filter out signals with null/NaN odds before any formatting
+  const validSignals = signals.filter(s => {
+    const odds = parseFloat(s.detected_odds);
+    const edge = parseFloat(s.detected_edge);
+    if (!Number.isFinite(odds) || odds <= 1) {
+      console.warn(`[postToX] skip signal ${s.id} — invalid odds: ${s.detected_odds}`);
+      return false;
+    }
+    if (!Number.isFinite(edge)) {
+      console.warn(`[postToX] skip signal ${s.id} — invalid edge: ${s.detected_edge}`);
+      return false;
+    }
+    // Coerce to number so buildMessage doesn't call .toFixed on raw string
+    s.detected_odds = odds;
+    s.detected_edge = edge;
+    return true;
+  });
+
+  const toPost      = validSignals.filter(s => !postedIds.has(s.id));
   const alreadySeen = signals.length - toPost.length;
 
   console.log(`[postToX] ${toPost.length} new | ${alreadySeen} already posted`);
@@ -195,11 +304,12 @@ async function run() {
   let failed = 0;
 
   for (let i = 0; i < toPost.length; i++) {
-    const signal  = toPost[i];
-    const label   = isRuby(signal.detected_edge) ? 'RUBY' : 'VALUE';
-    const home    = signal.match?.home_team?.name ?? '?';
-    const away    = signal.match?.away_team?.name ?? '?';
-    const message = buildMessage(signal);
+    const signal = toPost[i];
+    const label  = isRuby(signal.detected_edge) ? 'RUBY' : 'VALUE';
+    const home   = signal.match?.home_team?.name ?? '?';
+    const away   = signal.match?.away_team?.name ?? '?';
+    const message     = buildMessage(signal);
+    const messageHash = hashMessage(message);
 
     console.log(`\n[postToX] ${label} — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
     console.log('─'.repeat(50));
@@ -207,7 +317,7 @@ async function run() {
     console.log('─'.repeat(50));
 
     if (DRY_RUN) {
-      postedIds[signal.id] = new Date().toISOString();
+      await markPosted(supabase, signal.id, messageHash, null);
       posted++;
       continue;
     }
@@ -215,19 +325,24 @@ async function run() {
     try {
       const res = await telegramPost(telegram.token, telegram.chatId, message);
       console.log(`[postToX] ✓ posted — message id: ${res.message_id}`);
-      postedIds[signal.id] = new Date().toISOString();
+      await markPosted(supabase, signal.id, messageHash, String(res.message_id));
       posted++;
     } catch (err) {
       console.error(`[postToX] ✗ failed: ${err.message}`);
+      // Respect Telegram flood control retry_after
+      if (err.retryAfterSec) {
+        const waitMs = (err.retryAfterSec + 1) * 1000;
+        console.warn(`[postToX] Telegram flood control — waiting ${waitMs}ms before next attempt`);
+        await new Promise(r => setTimeout(r, waitMs));
+      }
       failed++;
     }
 
+    // Rate-limit courtesy gap between messages
     if (i < toPost.length - 1) {
       await new Promise(r => setTimeout(r, 1000));
     }
   }
-
-  savePostedIds(postedIds);
 
   const summary = { posted, failed, skipped: alreadySeen };
   console.log(`\n[postToX] done —`, summary);

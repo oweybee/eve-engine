@@ -19,12 +19,7 @@
 
 'use strict';
 
-let createClient;
-try {
-  ({ createClient } = require('@supabase/supabase-js'));
-} catch (_) {
-  createClient = null;
-}
+const { getClient } = require('./lib/supabaseClient');
 
 const {
   consensusStats, dispersion, confidenceScore, confidenceTier, maxEdgeScore, evForStakes, clamp,
@@ -63,9 +58,6 @@ function homeAdvFor(match) {
 // Config
 // ---------------------------------------------------------------------------
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
 // EV threshold — 2% edge over sharp baseline
 const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD ?? '0.02');
 
@@ -87,17 +79,6 @@ const SOFT_BOOKS = new Set([
   'boylesports', 'betfair_sb_uk', 'unibet_uk', 'virginbet',
   'sport888', 'leovegas', 'casumo', 'grosvenor', 'livescorebet',
 ]);
-
-// ---------------------------------------------------------------------------
-// Supabase client
-// ---------------------------------------------------------------------------
-
-function getClient() {
-  if (!SUPABASE_URL || !SUPABASE_KEY) {
-    throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars');
-  }
-  return createClient(SUPABASE_URL, SUPABASE_KEY);
-}
 
 // ---------------------------------------------------------------------------
 // 1. Fetch matches
@@ -457,21 +438,82 @@ function poisson(k, lambda) {
   return Math.exp(logP);
 }
 
-// Calibration: temperature sharpening of the raw Dixon-Coles output. The raw
-// model systematically UNDER-rates favourites vs the market (compressed rating
-// spread). Sharpening with s>1 pushes probability mass toward the favourite so
-// the model is centred on the market — disagreements then occur in BOTH
-// directions, which is what lets a genuine high-prob favourite become a Ruby.
-// Fitted against Betfair-implied probabilities by calibrate.js.
-// Fitted by calibrate.js: s=1.7 minimises MAE vs Betfair (7.31pp) while keeping
-// Ruby genuinely scarce. Override via MODEL_SHARPNESS env var to tune ruby volume.
-const MODEL_SHARPNESS = parseFloat(process.env.MODEL_SHARPNESS ?? '1.7');
+// ---------------------------------------------------------------------------
+// P2-3: Concurrency pool size for computeMatch batching
+// ---------------------------------------------------------------------------
+
+/**
+ * Maximum number of matches processed concurrently in the main run() loop.
+ * Each computeMatch call fires 6 parallel DB queries (buildFeatureVector) so
+ * at COMPUTE_CONCURRENCY=5 the steady-state DB load is ~30 concurrent queries —
+ * well within Supabase's PgBouncer connection pool limits.
+ */
+const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY ?? '5', 10);
+
+/**
+ * Executes `fn` over `items` with at most `concurrency` items in-flight at once.
+ * Uses chunk-based batching: awaits each full chunk before starting the next.
+ * This provides a strict upper bound on concurrent DB connections.
+ *
+ * Each item's `fn` is expected to handle its own errors and return null on
+ * failure. An unhandled throw from `fn` propagates to the chunk's Promise.all
+ * and surfaces as a fatal error for the entire run (fail-fast semantics).
+ *
+ * @template T
+ * @template R
+ * @param {T[]}                    items
+ * @param {function(T): Promise<R>} fn
+ * @param {number}                 concurrency
+ * @returns {Promise<Array<R>>}
+ */
+async function withPool(items, fn, concurrency) {
+  if (concurrency < 1) throw new RangeError(`COMPUTE_CONCURRENCY must be >= 1, got ${concurrency}`);
+  const results = [];
+  for (let start = 0; start < items.length; start += concurrency) {
+    const chunk = items.slice(start, start + concurrency);
+    const chunkResults = await Promise.all(chunk.map(fn));
+    results.push(...chunkResults);
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// P2-8: Multi-tiered temperature sharpening
+// ---------------------------------------------------------------------------
+
+/**
+ * Sharpness calibration: the raw Dixon-Coles output systematically UNDER-rates
+ * favourites vs the market. Temperature sharpening (s > 1) pushes probability
+ * mass toward the favourite so the model is centred on the exchange — genuine
+ * disagreements then occur in BOTH directions, enabling Ruby signals.
+ *
+ * Two tiers are necessary because single-book markets have noisier fair-price
+ * estimates (one soft-book price carries its margin unchallenged) so the same
+ * sharpening factor over-corrects relative to a multi-book consensus.
+ *
+ * Calibrated by calibrate.js against Betfair-implied probabilities:
+ *   SHARPNESS_MULTI_BOOK  (softCount >= MULTI_BOOK_THRESHOLD) — fitted on the
+ *     market segment with the most reliable edge estimates (3+ independent
+ *     soft prices anchoring the best-odds composite).
+ *   SHARPNESS_SINGLE_BOOK (softCount < MULTI_BOOK_THRESHOLD)  — fitted on the
+ *     thinner market segment; a lower value is expected because a single-book
+ *     price carries more margin noise and a tighter sharpening over-penalises
+ *     the favourite.
+ *
+ * Override both via env vars after running calibrate.js to get the latest sweep.
+ * MODEL_SHARPNESS is kept as a backward-compatibility alias for the multi-book tier.
+ */
+const SHARPNESS_MULTI_BOOK  = parseFloat(
+  process.env.SHARPNESS_MULTI_BOOK ?? process.env.MODEL_SHARPNESS ?? '1.7',
+);
+const SHARPNESS_SINGLE_BOOK = parseFloat(process.env.SHARPNESS_SINGLE_BOOK ?? '1.0');
+const MULTI_BOOK_THRESHOLD  = parseInt(process.env.MULTI_BOOK_THRESHOLD ?? '3', 10);
 
 /**
  * Dixon-Coles inspired 1X2 probabilities from team attack/defence ratings,
  * with optional temperature sharpening. Returns { home, draw, away } summing to 1.
  */
-function matchProbabilities(homeTeam, awayTeam, sharpness = MODEL_SHARPNESS, homeAdv = DC_HOME_ADV) {
+function matchProbabilities(homeTeam, awayTeam, sharpness = SHARPNESS_MULTI_BOOK, homeAdv = DC_HOME_ADV) {
   const home = ratingFor(homeTeam);
   const away = ratingFor(awayTeam);
   const BASE = 1.35, MAX_GOALS = 7;
@@ -539,6 +581,26 @@ async function computeMatch(match, supabase = null) {
   const isWorldCup = match.league?.name?.includes('World Cup');
   console.log(`    [home-adv] ${homeStr} vs ${awayStr}: ${homeAdvMultiplier > 1 ? `APPLIED x${homeAdvMultiplier}` : 'NEUTRAL (x1.0)'}${isWorldCup ? ' [World Cup]' : ''}`);
 
+  // P2-8: Soft book coverage count must be known BEFORE the model so that the
+  // correct sharpness tier can be injected into the Dixon-Coles fallback. A
+  // single-book market has a noisier fair-price estimate (the soft margin is
+  // unchallenged) — applying the multi-book sharpness over-corrects it.
+  const softBookCount = new Set(
+    h2hPool.filter(r => SOFT_BOOKS.has(r.bookmaker)).map(r => r.bookmaker)
+  ).size;
+
+  if (softBookCount < 1) {
+    console.warn(`  [skip] ${homeStr} vs ${awayStr}: no soft book coverage`);
+    return null;
+  }
+
+  // Select sharpness tier based on how many independent soft prices anchor the
+  // best-odds composite. With 3+ books the margin noise averages out; below
+  // MULTI_BOOK_THRESHOLD a single book's spread may dominate the composite.
+  const effectiveSharpness = softBookCount >= MULTI_BOOK_THRESHOLD
+    ? SHARPNESS_MULTI_BOOK
+    : SHARPNESS_SINGLE_BOOK;
+
   // Model probability — try ML Ensemble first, fall back to Dixon-Coles Poisson.
   let model;
   let modelArchitecture = 'DIXON_COLES';
@@ -568,18 +630,9 @@ async function computeMatch(match, supabase = null) {
   }
 
   if (!model) {
-    model = matchProbabilities(homeStr, awayStr, MODEL_SHARPNESS, homeAdvMultiplier);
-    console.log(`    [dixon-coles] ${homeStr} vs ${awayStr}: H=${(model.home*100).toFixed(0)}% D=${(model.draw*100).toFixed(0)}% A=${(model.away*100).toFixed(0)}%`);
-  }
-
-  // Minimum soft book coverage — need at least 3 distinct soft books for the
-  // market side of the edge (the price we're judging value against).
-  const softBookCount = new Set(
-    h2hPool.filter(r => SOFT_BOOKS.has(r.bookmaker)).map(r => r.bookmaker)
-  ).size;
-  if (softBookCount < 1) {
-    console.warn(`  [skip] ${homeStr} vs ${awayStr}: insufficient soft book coverage (${softBookCount} books, need 1+)`);
-    return null;
+    const sharpnessTier = softBookCount >= MULTI_BOOK_THRESHOLD ? 'multi' : 'single';
+    model = matchProbabilities(homeStr, awayStr, effectiveSharpness, homeAdvMultiplier);
+    console.log(`    [dixon-coles] ${homeStr} vs ${awayStr}: H=${(model.home*100).toFixed(0)}% D=${(model.draw*100).toFixed(0)}% A=${(model.away*100).toFixed(0)}% (s=${effectiveSharpness.toFixed(1)} tier=${sharpnessTier} books=${softBookCount})`);
   }
 
   // Best soft odds (h2h)
@@ -935,19 +988,40 @@ async function computeMatch(match, supabase = null) {
 // 8. Database writes
 // ---------------------------------------------------------------------------
 
+/**
+ * Upserts computed values and returns the current signals_written state for
+ * every row so the caller can apply the P2-5 checkpoint without a second query.
+ *
+ * `signals_written` is intentionally excluded from the payload — PostgREST only
+ * includes columns present in the object in its ON CONFLICT DO UPDATE SET clause,
+ * so the existing `true` value is preserved on conflict (not reset to false).
+ * New inserts receive the column DEFAULT (false) automatically.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {object[]} rows
+ * @returns {Promise<Map<string, boolean>>} match_id → signals_written
+ */
 async function upsertComputedValues(supabase, rows) {
-  if (!rows.length) return;
+  if (!rows.length) return new Map();
+
   const dbRows = rows.map(row => {
     const clean = {};
     for (const [k, v] of Object.entries(row)) {
-      if (!k.startsWith('_')) clean[k] = v;
+      // Strip internal-only properties (prefixed _) and the checkpoint column
+      // so that signals_written is preserved on conflict rather than overwritten.
+      if (!k.startsWith('_') && k !== 'signals_written') clean[k] = v;
     }
     return clean;
   });
-  const { error } = await supabase
+
+  const { data, error } = await supabase
     .from('computed_values')
-    .upsert(dbRows, { onConflict: 'match_id' });
+    .upsert(dbRows, { onConflict: 'match_id' })
+    .select('match_id, signals_written');
+
   if (error) throw new Error(`upsertComputedValues: ${error.message}`);
+
+  return new Map((data ?? []).map(r => [r.match_id, r.signals_written === true]));
 }
 
 // ---------------------------------------------------------------------------
@@ -1052,37 +1126,81 @@ async function run() {
     return { processed: 0, skipped: 0, botd: null };
   }
 
-  const rows = [];
-  let skipped = 0;
+  // P2-3: Concurrency-limited pool — processes up to COMPUTE_CONCURRENCY matches
+  // simultaneously instead of serially. Each computeMatch fires 6 parallel
+  // buildFeatureVector queries, so the steady-state DB load at concurrency=5 is
+  // ~30 concurrent queries — within Supabase's PgBouncer limits.
+  console.log(`[engine] processing ${matches.length} match(es) (pool=${COMPUTE_CONCURRENCY})`);
 
-  for (const match of matches) {
-    try {
-      const result = await computeMatch(match, supabase);
-      if (result) rows.push(result);
-      else skipped++;
-    } catch (err) {
-      console.error(`[engine] error match=${match.id}:`, err.message);
-      skipped++;
-    }
-  }
+  const allResults = await withPool(
+    matches,
+    async (match) => {
+      try {
+        return await computeMatch(match, supabase);
+      } catch (err) {
+        console.error(`[engine] error match=${match.id}: ${err.message}`);
+        return null;
+      }
+    },
+    COMPUTE_CONCURRENCY,
+  );
+
+  const rows    = allResults.filter(Boolean);
+  const skipped = matches.length - rows.length;
 
   const valueCount = rows.filter(r => r.home_value || r.draw_value || r.away_value).length;
   console.log(`\n[engine] computed=${rows.length} skipped=${skipped} value=${valueCount}`);
 
+  // P2-5: upsertComputedValues returns the current signals_written state for
+  // every row in a single round-trip. The SELECT is part of the upsert call
+  // (PostgREST RETURNING clause) — no extra query needed.
+  let signalsWrittenMap;
   try {
-    await upsertComputedValues(supabase, rows);
+    signalsWrittenMap = await upsertComputedValues(supabase, rows);
     console.log(`[engine] upserted ${rows.length} rows`);
   } catch (err) {
     console.error('[engine] fatal upsert:', err.message);
     process.exit(1);
   }
 
-  // Record new value signals for CLV tracking (non-fatal — never break the run).
+  // Skip signal insertion for matches whose signals were already committed
+  // on a prior run (signals_written = true). This prevents re-emission when
+  // the same match is processed again with identical computed data.
+  const rowsNeedingSignals = rows.filter(r => !signalsWrittenMap.get(r.match_id));
+  const alreadySignaled    = rows.length - rowsNeedingSignals.length;
+  if (alreadySignaled > 0) {
+    console.log(`[engine] signals_written checkpoint: ${alreadySignaled} match(es) already signaled, ${rowsNeedingSignals.length} pending`);
+  }
+
   let recordedSignals = 0;
-  try {
-    recordedSignals = await insertValueSignals(supabase, rows);
-  } catch (err) {
-    console.error('[engine] value_signals failed:', err.message);
+  if (rowsNeedingSignals.length > 0) {
+    try {
+      recordedSignals = await insertValueSignals(supabase, rowsNeedingSignals);
+
+      // Commit checkpoint: mark value matches as signaled so they are skipped
+      // on the next run. Non-value matches stay false so that if value emerges
+      // later (odds shift) their signals can still be emitted.
+      const valueMatchIds = rowsNeedingSignals
+        .filter(r => r.home_value || r.draw_value || r.away_value)
+        .map(r => r.match_id);
+
+      if (valueMatchIds.length > 0) {
+        const { error: cpErr } = await supabase
+          .from('computed_values')
+          .update({ signals_written: true })
+          .in('match_id', valueMatchIds);
+
+        if (cpErr) {
+          // Non-fatal: signals were emitted. The 2h dedup in insertValueSignals
+          // prevents duplicate emission on the next run if the checkpoint is missed.
+          console.error(`[engine] signals_written checkpoint failed: ${cpErr.message}`);
+        } else {
+          console.log(`[engine] signals_written committed for ${valueMatchIds.length} match(es)`);
+        }
+      }
+    } catch (err) {
+      console.error('[engine] value_signals failed:', err.message);
+    }
   }
 
   let botd = null;
@@ -1108,6 +1226,6 @@ module.exports = {
   run, computeMatch, getSharpBaseline, getBestSoftOdds, getBestSoftTotalsBaseline: getSharpTotalsBaseline,
   deVig, computeEdge, computeEV,
   matchProbabilities, ratingFor, isRated, poisson, fetchMatchesForComputation, getClient,
-  insertValueSignals,
-  SOFT_BOOKS,
+  insertValueSignals, withPool,
+  SOFT_BOOKS, SHARPNESS_MULTI_BOOK, SHARPNESS_SINGLE_BOOK, MULTI_BOOK_THRESHOLD, COMPUTE_CONCURRENCY,
 };

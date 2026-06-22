@@ -62,9 +62,19 @@ async function fetchScores() {
   return index;
 }
 
-function outcomeFromScore(hs, as) {
-  if (hs > as) return 'home';
-  if (hs < as) return 'away';
+/**
+ * P0-4 fix: guard against NaN scores before comparison.
+ * Previously, NaN > NaN = false and NaN < NaN = false, so any parse failure
+ * silently returned 'draw' regardless of actual result.
+ *
+ * @param {number} hs - home score
+ * @param {number} as_ - away score
+ * @returns {'home'|'draw'|'away'|null}
+ */
+function outcomeFromScore(hs, as_) {
+  if (!Number.isFinite(hs) || !Number.isFinite(as_)) return null;
+  if (hs > as_) return 'home';
+  if (hs < as_) return 'away';
   return 'draw';
 }
 
@@ -95,6 +105,9 @@ async function run() {
   });
 
   console.log(`[grade] ${recs?.length ?? 0} unsettled, ${due.length} past full-time`);
+  // P1-4 fix: fetchScores() moved to AFTER the due.length guard.
+  // Previously it fired unconditionally, burning one Odds API credit on every
+  // engine run even when there was nothing to grade.
   if (!due.length) return;
 
   const scores = await fetchScores();
@@ -107,6 +120,11 @@ async function run() {
     if (!score) { unmatched++; continue; }
 
     const result = outcomeFromScore(score.home, score.away);
+    if (result === null) {
+      console.warn(`  [grade] skip ${home} vs ${away} — unparseable scores: ${JSON.stringify(score)}`);
+      unmatched++;
+      continue;
+    }
     const won = r.selection === result;
 
     const { error: uErr } = await supabase.from('recommendations')

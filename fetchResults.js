@@ -63,24 +63,18 @@ function namesMatch(a, b) {
 async function fetchFixturesForDate(date, cache) {
   if (cache.has(date)) return cache.get(date);
   const url = `https://${API_FOOTBALL_HOST}/fixtures?date=${date}`;
-  try {
-    const res = await fetch(url, {
-      headers: { 'x-apisports-key': API_FOOTBALL_KEY },
-    });
-    if (!res.ok) {
-      console.warn(`  [results] API-Football ${date}: HTTP ${res.status}`);
-      cache.set(date, []);
-      return [];
-    }
-    const json = await res.json();
-    const fixtures = json?.response ?? [];
-    cache.set(date, fixtures);
-    return fixtures;
-  } catch (err) {
-    console.warn(`  [results] API-Football ${date} fetch failed: ${err.message}`);
-    cache.set(date, []);
-    return [];
+  // P0-3 upstream: do NOT cache on error — a transient 5xx would permanently
+  // mark every signal that day as unmatched. Let the caller retry on the next run.
+  const res = await fetch(url, {
+    headers: { 'x-apisports-key': API_FOOTBALL_KEY },
+  });
+  if (!res.ok) {
+    throw new Error(`API-Football ${date}: HTTP ${res.status}`);
   }
+  const json = await res.json();
+  const fixtures = json?.response ?? [];
+  cache.set(date, fixtures);
+  return fixtures;
 }
 
 // Maps a finished fixture to the winning outcome: 'home' | 'draw' | 'away' | null.
@@ -168,7 +162,15 @@ async function settlePendingSignals(supabase) {
     if (!home || !away || !kickoff) { unmatched++; continue; }
 
     const date = new Date(kickoff).toISOString().slice(0, 10); // UTC YYYY-MM-DD
-    const fixtures = await fetchFixturesForDate(date, cache);
+    let fixtures;
+    try {
+      fixtures = await fetchFixturesForDate(date, cache);
+    } catch (err) {
+      // Transient API error — leave this signal pending for the next run.
+      console.warn(`  [results] skip ${home} vs ${away}: ${err.message}`);
+      unmatched++;
+      continue;
+    }
 
     const fx = fixtures.find(f =>
       namesMatch(home, f?.teams?.home?.name) && namesMatch(away, f?.teams?.away?.name)
@@ -179,7 +181,12 @@ async function settlePendingSignals(supabase) {
     const result = actual === sig.outcome ? 'win' : 'loss';
     const closing = await closingOddsFor(supabase, sig.match_id, sig.outcome);
     const detected = parseFloat(sig.detected_odds);
-    const clv = (closing && closing > 1 && detected > 1)
+    // P0-3 fix: guard against NaN/Infinity before logarithm.
+    // Invalid prices (null, ≤1, NaN) → clv = null, never a garbage number.
+    const clv = (
+      Number.isFinite(closing) && closing > 1 &&
+      Number.isFinite(detected) && detected > 1
+    )
       ? +(Math.log(detected) - Math.log(closing)).toFixed(4)
       : null;
 
@@ -242,8 +249,13 @@ async function calculatePerformance(supabase) {
     avg_mes:  messes.length ? +avg(messes).toFixed(1) : null,
   };
 
-  const { error: insErr } = await supabase.from('performance_summary').insert(summary);
-  if (insErr) throw new Error(`calculatePerformance(insert): ${insErr.message}`);
+  // P0-2 fix: upsert on singleton_key instead of blind insert.
+  // Previously, every run appended a new row — performance_summary grew without
+  // bound. Migration 016 added singleton_key='current' with a unique constraint.
+  const { error: insErr } = await supabase
+    .from('performance_summary')
+    .upsert({ ...summary, singleton_key: 'current' }, { onConflict: 'singleton_key' });
+  if (insErr) throw new Error(`calculatePerformance(upsert): ${insErr.message}`);
 
   console.log('[performance]', JSON.stringify(summary));
   return summary;

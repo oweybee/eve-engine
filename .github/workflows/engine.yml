@@ -1,0 +1,276 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge EVE Engine  —  15-minute value detection pipeline
+#
+# Pipeline per tick:
+#   1. ingestOdds.js       — pull latest odds from RapidAPI; plan-gated, so most
+#                            ticks cost zero API requests outside the active window
+#   2. captureSnapshot.js  — record best odds per outcome + CLV open/closing snaps
+#   3. computeValues.js    — Dixon-Coles / ML ensemble edge detection; upserts
+#                            computed_values, writes value_signals
+#   4. postToX.js          — fire Telegram alerts for new value signals
+#   5. fetchResults.js     — settle completed fixtures (scores → value_signals)
+#
+# Companion workflow: plan-day.yml fires at 05:00 UTC and writes the daily
+# engine_plan to Supabase; ingestOdds.js reads this plan to self-gate.
+#
+# REPLACING: run-engine.yml (no concurrency, no alert, dead .x_state.json cache)
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge EVE Engine
+
+on:
+  schedule:
+    # Pulse every 15 minutes, 24 / 7. ingestOdds.js self-gates against
+    # engine_plan.next_run_at, so off-hours ticks are < 1 s no-ops.
+    - cron: '*/15 * * * *'
+
+  workflow_dispatch:
+    inputs:
+      skip_ingest:
+        description: 'Skip ingestOdds.js (reuse existing odds — useful for backtest reruns)'
+        type: boolean
+        default: false
+      skip_post:
+        description: 'Skip postToX.js (suppress Telegram alerts — useful for dry-run compute)'
+        type: boolean
+        default: false
+      skip_results:
+        description: 'Skip fetchResults.js (skip result settlement this tick)'
+        type: boolean
+        default: false
+
+# ── Concurrency ───────────────────────────────────────────────────────────────
+# Prevents overlapping runs that would cause duplicate DB writes or connection
+# pool exhaustion. With cancel-in-progress: false the behaviour is:
+#   • In-progress run is NEVER interrupted (safe mid-write guarantee).
+#   • Each new cron tick queues as "pending"; if another pending run is already
+#     waiting, the new tick REPLACES it (last-in wins — always run fresh data).
+# Net effect: at most 1 running + 1 queued run at any moment.
+# If a run takes >15 min the next tick queues and starts immediately on completion.
+concurrency:
+  group: engine-${{ github.ref_name }}
+  cancel-in-progress: false
+
+# Minimal permissions — read-only repo access, no id-token or write-packages.
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    name: EVE Engine Tick
+    runs-on: ubuntu-latest
+
+    # Hard time-box: must complete before the next 15-min cron tick to avoid
+    # run pile-up. 13 min leaves 2 min slack. If a step hangs (API stall,
+    # OOM), the job is killed and the alert step fires.
+    timeout-minutes: 13
+
+    # ── Environment variables ─────────────────────────────────────────────────
+    # Secrets (sensitive — rotate quarterly, never log):
+    #   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RAPIDAPI_KEY,
+    #   BETFAIR_APP_KEY, BETFAIR_USERNAME, BETFAIR_PASSWORD,
+    #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+    # Variables (non-sensitive tuning params — set in Repo > Settings > Variables):
+    #   SHARPNESS_MULTI_BOOK, SHARPNESS_SINGLE_BOOK, MULTI_BOOK_THRESHOLD,
+    #   COMPUTE_CONCURRENCY, EV_THRESHOLD, MIN_PROB, MAX_ODDS, SIGNAL_EDGE,
+    #   DAILY_REQUEST_BUDGET, ACTIVE_START_HOUR, ACTIVE_END_HOUR
+    env:
+      # ── Supabase ─────────────────────────────────────────────────────────────
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      # ── Odds API ─────────────────────────────────────────────────────────────
+      RAPIDAPI_KEY:              ${{ secrets.RAPIDAPI_KEY }}
+
+      # ── Betfair Exchange ─────────────────────────────────────────────────────
+      BETFAIR_APP_KEY:           ${{ secrets.BETFAIR_APP_KEY }}
+      BETFAIR_USERNAME:          ${{ secrets.BETFAIR_USERNAME }}
+      BETFAIR_PASSWORD:          ${{ secrets.BETFAIR_PASSWORD }}
+
+      # ── Telegram / signal delivery ───────────────────────────────────────────
+      TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      # ── Active window (must match plan-day.yml) ───────────────────────────────
+      ACTIVE_START_HOUR:         ${{ vars.ACTIVE_START_HOUR  || '8'  }}
+      ACTIVE_END_HOUR:           ${{ vars.ACTIVE_END_HOUR    || '24' }}
+
+      # ── Model tuning (override after running calibrate.js) ───────────────────
+      # These are repository variables, not secrets — safe to log.
+      SHARPNESS_MULTI_BOOK:      ${{ vars.SHARPNESS_MULTI_BOOK  }}
+      SHARPNESS_SINGLE_BOOK:     ${{ vars.SHARPNESS_SINGLE_BOOK }}
+      MULTI_BOOK_THRESHOLD:      ${{ vars.MULTI_BOOK_THRESHOLD  }}
+      COMPUTE_CONCURRENCY:       ${{ vars.COMPUTE_CONCURRENCY   }}
+      EV_THRESHOLD:              ${{ vars.EV_THRESHOLD          }}
+      MIN_PROB:                  ${{ vars.MIN_PROB              }}
+      MAX_ODDS:                  ${{ vars.MAX_ODDS              }}
+      SIGNAL_EDGE:               ${{ vars.SIGNAL_EDGE           }}
+      DAILY_REQUEST_BUDGET:      ${{ vars.DAILY_REQUEST_BUDGET  }}
+
+      # ── GitHub run context ───────────────────────────────────────────────────
+      # postToX.js stores this in posted_signals.run_id for idempotency tracking.
+      # GITHUB_RUN_ID is auto-set by GitHub Actions — re-export so Node can read it.
+      GITHUB_RUN_ID:             ${{ github.run_id }}
+
+    steps:
+      # ── Checkout ─────────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      # ── Node.js setup with dependency cache ──────────────────────────────────
+      # setup-node's `cache: 'npm'` hashes package-lock.json and restores
+      # ~/.npm from a previous run. On cache hit, npm ci runs in < 3 s.
+      # Requires package-lock.json to be committed to the repository.
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies (cached)
+        # --prefer-offline: use cache before network on partial hits
+        # --no-audit:       skip vulnerability scan (runs separately in CI)
+        # --no-fund:        suppress funding messages from build output
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      # ── Pipeline ─────────────────────────────────────────────────────────────
+      # Each step has a unique `id` so the failure alert can report exactly
+      # which step caused the abort. Steps are independent at the shell level
+      # but ordered by data dependency:
+      #   ingest → snapshot → compute → post → results
+
+      - name: Ingest odds
+        id: ingest
+        # On schedule: always run. On workflow_dispatch: skip if skip_ingest=true.
+        # inputs.skip_ingest is '' on schedule triggers (falsy), so the OR below
+        # always evaluates true for cron — the step is never accidentally skipped.
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_ingest != 'true' }}
+        run: node ingestOdds.js
+
+      - name: Capture snapshot
+        id: snapshot
+        run: node captureSnapshot.js
+
+      - name: Compute values
+        id: compute
+        run: node computeValues.js
+
+      - name: Post signals
+        id: post
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_post != 'true' }}
+        run: node postToX.js
+
+      - name: Settle results
+        id: results
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_results != 'true' }}
+        run: node fetchResults.js
+
+      # ── Failure telemetry ─────────────────────────────────────────────────────
+      # Fires IF AND ONLY IF any previous step failed (or the job timed out).
+      # Uses `jq` (pre-installed on ubuntu-latest) to construct the JSON payload
+      # safely — avoids shell escaping issues with arbitrary strings in field values.
+      # The alert step itself is written to never fail: webhook errors are downgraded
+      # to warnings so they don't mask the original failure in the job summary.
+      #
+      # Payload format: Discord Webhook (rich embed with colour, fields, deep link).
+      # If your team uses Slack, replace the payload with Slack's Block Kit format;
+      # ENGINE_ALERT_WEBHOOK just needs to be the correct incoming-webhook URL.
+      - name: 🔴 Alert on pipeline failure
+        if: failure()
+        shell: bash
+        env:
+          WEBHOOK_URL: ${{ secrets.ENGINE_ALERT_WEBHOOK }}
+        run: |
+          # Build the canonical run URL before constructing JSON.
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          # ── Identify which named steps failed ───────────────────────────────
+          # step.outcome is one of: success | failure | skipped | cancelled
+          # Only steps with an `id:` are introspectable here.
+          FAILED_STEPS=""
+          [ "${{ steps.ingest.outcome }}"   = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`ingest-odds\` (ingestOdds.js)"
+          [ "${{ steps.snapshot.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`capture-snapshot\` (captureSnapshot.js)"
+          [ "${{ steps.compute.outcome }}"  = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`compute-values\` (computeValues.js)"
+          [ "${{ steps.post.outcome }}"     = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`post-signals\` (postToX.js)"
+          [ "${{ steps.results.outcome }}"  = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`settle-results\` (fetchResults.js)"
+
+          # If no named step failed, the failure is in checkout / setup / install.
+          [ -z "$FAILED_STEPS" ] && FAILED_STEPS="\n• \`setup\` (checkout / node / npm ci)"
+
+          # ── Build Discord embed payload via jq (safe string handling) ────────
+          PAYLOAD=$(jq -n \
+            --arg failed   "$FAILED_STEPS" \
+            --arg run_url  "$RUN_URL" \
+            --arg run_id   "${{ github.run_id }}" \
+            --arg run_num  "${{ github.run_number }}" \
+            --arg branch   "${{ github.ref_name }}" \
+            --arg trigger  "${{ github.event_name }}" \
+            --arg actor    "${{ github.actor }}" \
+            --arg repo     "${{ github.repository }}" \
+            --arg sha      "${GITHUB_SHA::7}" \
+            --arg ts       "$TIMESTAMP" \
+            '{
+              embeds: [{
+                title: "🔴  EVE Engine — Pipeline Failure",
+                description: (
+                  "A step exited non-zero on run [#" + $run_num + "](" + $run_url + ").\n"
+                  + "Odds ingestion or signal delivery **may be stalled**. Investigate immediately."
+                ),
+                color: 15548997,
+                url:   $run_url,
+                fields: [
+                  {
+                    name:   "❌  Failed Step(s)",
+                    value:  $failed,
+                    inline: false
+                  },
+                  {
+                    name:   "🌿  Branch",
+                    value:  ("`" + $branch + "`"),
+                    inline: true
+                  },
+                  {
+                    name:   "🔖  Commit",
+                    value:  ("`" + $sha + "`"),
+                    inline: true
+                  },
+                  {
+                    name:   "⚡  Trigger",
+                    value:  $trigger,
+                    inline: true
+                  },
+                  {
+                    name:   "👤  Actor",
+                    value:  $actor,
+                    inline: true
+                  },
+                  {
+                    name:   "📋  Run logs",
+                    value:  ("[View run #" + $run_num + "](" + $run_url + ")"),
+                    inline: false
+                  }
+                ],
+                timestamp: $ts,
+                footer: {
+                  text: ("MaxEdge EVE Engine  ·  " + $repo)
+                }
+              }]
+            }')
+
+          # ── Fire the webhook ─────────────────────────────────────────────────
+          HTTP_STATUS=$(curl -s -o /tmp/webhook_response.txt -w "%{http_code}" \
+            -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "Alert delivered (HTTP $HTTP_STATUS)"
+          else
+            # Downgrade to a workflow warning — never let the alert step obscure
+            # the original pipeline error in the job summary.
+            echo "::warning::ENGINE_ALERT_WEBHOOK returned HTTP $HTTP_STATUS — check the secret and webhook URL"
+            echo "::warning::Webhook response: $(cat /tmp/webhook_response.txt)"
+          fi

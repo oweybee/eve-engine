@@ -1,0 +1,33 @@
+{
+  "features": [
+    "home_elo",
+    "away_elo",
+    "elo_differential",
+    "home_win_rate_10",
+    "home_draw_rate_10",
+    "home_goals_scored_10",
+    "home_goals_conceded_10",
+    "home_sot_rate_10",
+    "home_clean_sheet_rate_10",
+    "home_red_card_rate_10",
+    "away_win_rate_10",
+    "away_draw_rate_10",
+    "away_goals_scored_10",
+    "away_goals_conceded_10",
+    "away_sot_rate_10",
+    "away_clean_sheet_rate_10",
+    "away_red_card_rate_10",
+    "h2h_home_win_rate_5",
+    "league_epl",
+    "league_laliga",
+    "league_bundesliga",
+    "league_seriea",
+    "league_ligue1"
+  ],
+  "n": 23,
+  "label_order": [
+    "away",
+    "draw",
+    "home"
+  ]
+}

@@ -115,8 +115,11 @@ async function fetchFixturesForDate(date) {
   console.log(`[plan] GET ${path}`);
   const json = await httpGet(path);
   const matches = json.response?.matches ?? json.matches ?? [];
+  // P0-7 fix: API returns leagueId as a string ("894796"), but WC_LEAGUE_IDS
+  // is Number[]. String !== Number so .includes() always returned false,
+  // producing a silently empty plan. Coerce both sides to Number before compare.
   const wcMatches = matches.filter(m =>
-    WC_LEAGUE_IDS.includes(m.leagueId) && !m.status?.finished
+    WC_LEAGUE_IDS.includes(Number(m.leagueId)) && !m.status?.finished
   );
   console.log(`[plan]   ${date}: ${matches.length} total, ${wcMatches.length} WC upcoming`);
   return wcMatches;
@@ -263,6 +266,22 @@ async function savePlan(supabase, plan) {
 async function main() {
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
   console.log(`\n[planDay] ${DRY_RUN ? '(DRY RUN) ' : ''}${today} — budget ${DAILY_BUDGET} req, window ${ACTIVE_START_HOUR}:00–${ACTIVE_END_HOUR}:00 UTC\n`);
+
+  // P1-3 fix: early-exit if a plan for today already exists.
+  // Without this, every accidental re-run (or workflow retry) burns DAYS_AHEAD
+  // API credits re-fetching the same fixtures and overwrites runs_completed → 0.
+  if (!DRY_RUN) {
+    const supabaseEarly = getSupabase();
+    const { data: existing } = await supabaseEarly
+      .from('engine_plan')
+      .select('date, fixture_ids, runs_planned, runs_completed')
+      .eq('date', today)
+      .single();
+    if (existing) {
+      console.log(`[planDay] plan for ${today} already exists (${existing.fixture_ids?.length ?? 0} fixtures, ${existing.runs_completed}/${existing.runs_planned} runs) — skipping`);
+      return;
+    }
+  }
 
   let fixtures;
   try {

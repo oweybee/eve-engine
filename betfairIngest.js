@@ -514,14 +514,20 @@ async function findOrCreateMatch(supabase, { homeTeam, awayTeam, leagueId, kicko
   }
 
   // No match found — upsert teams and create new match record
-  const { data: homeTeamRow } = await supabase
+  const { data: homeTeamRow, error: homeErr } = await supabase
     .from('teams')
     .upsert({ name: homeTeam, short_name: homeTeam.length > 12 ? homeTeam.split(' ').slice(0, 2).join(' ') : homeTeam }, { onConflict: 'name' })
     .select('id').single();
-  const { data: awayTeamRow } = await supabase
+  // P0-6 fix: team upsert can return null data on RLS or constraint violations.
+  // Dereference .id without this guard causes an unrecoverable TypeError that
+  // crashes the entire ingest run for all subsequent matches.
+  if (!homeTeamRow) throw new Error(`findOrCreateMatch: home team upsert returned no row for "${homeTeam}"${homeErr ? ` — ${homeErr.message}` : ''}`);
+
+  const { data: awayTeamRow, error: awayErr } = await supabase
     .from('teams')
     .upsert({ name: awayTeam, short_name: awayTeam.length > 12 ? awayTeam.split(' ').slice(0, 2).join(' ') : awayTeam }, { onConflict: 'name' })
     .select('id').single();
+  if (!awayTeamRow) throw new Error(`findOrCreateMatch: away team upsert returned no row for "${awayTeam}"${awayErr ? ` — ${awayErr.message}` : ''}`);
 
   const { data, error } = await supabase
     .from('matches')
