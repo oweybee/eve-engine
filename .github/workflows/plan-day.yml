@@ -15,7 +15,7 @@ jobs:
     env:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      RAPIDAPI_KEY:              ${{ secrets.RAPIDAPI_KEY }}
+      API_FOOTBALL_KEY:              ${{ secrets.API_FOOTBALL_KEY }}
       # World Cup league ID on API-Football. Default: 1 (FIFA World Cup).
       # Override here or via the WORLD_CUP_LEAGUE_ID secret if needed.
       WORLD_CUP_LEAGUE_ID:       '1'

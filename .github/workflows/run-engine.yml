@@ -15,7 +15,7 @@ jobs:
     env:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      RAPIDAPI_KEY:              ${{ secrets.RAPIDAPI_KEY }}
+      API_FOOTBALL_KEY:              ${{ secrets.API_FOOTBALL_KEY }}
       # Active window must match plan-day.yml.
       ACTIVE_START_HOUR:         '8'
       ACTIVE_END_HOUR:           '24'

@@ -18,7 +18,7 @@
  * Sleep window (00:00–08:00) is excluded — no requests, no runs.
  *
  * Required env vars:
- *   RAPIDAPI_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+ *   API_FOOTBALL_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  *
  * Optional env vars:
  *   WORLD_CUP_LEAGUE_ID   — API-Football league ID (default: 1)
@@ -52,7 +52,7 @@ const { createClient } = require('@supabase/supabase-js');
 // Config
 // ---------------------------------------------------------------------------
 
-const RAPIDAPI_KEY        = process.env.RAPIDAPI_KEY;
+const API_FOOTBALL_KEY        = process.env.API_FOOTBALL_KEY;
 const RAPIDAPI_HOST       = 'api-football-v1.p.rapidapi.com';
 const SUPABASE_URL        = process.env.SUPABASE_URL;
 const SUPABASE_KEY        = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -81,14 +81,14 @@ function getSupabase() {
 // ---------------------------------------------------------------------------
 
 function httpGet(path) {
-  if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY not set');
+  if (!API_FOOTBALL_KEY) throw new Error('API_FOOTBALL_KEY not set');
   return new Promise((resolve, reject) => {
     const options = {
       method:   'GET',
       hostname: RAPIDAPI_HOST,
       path:     `/v3${path}`,
       headers: {
-        'x-rapidapi-key':  RAPIDAPI_KEY,
+        'x-rapidapi-key':  API_FOOTBALL_KEY,
         'x-rapidapi-host': RAPIDAPI_HOST,
       },
     };

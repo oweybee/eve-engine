@@ -13,7 +13,7 @@
  * exactly, spread evenly across the active window.
  *
  * Required env vars:
- *   RAPIDAPI_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+ *   API_FOOTBALL_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  *
  * Optional env vars:
  *   ACTIVE_START_HOUR  — UTC hour to start polling (default: 8)
@@ -33,7 +33,7 @@ const { createClient } = require('@supabase/supabase-js');
 // Config
 // ---------------------------------------------------------------------------
 
-const RAPIDAPI_KEY      = process.env.RAPIDAPI_KEY;
+const API_FOOTBALL_KEY      = process.env.API_FOOTBALL_KEY;
 const RAPIDAPI_HOST     = 'api-football-v1.p.rapidapi.com';
 const SUPABASE_URL      = process.env.SUPABASE_URL;
 const SUPABASE_KEY      = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -61,14 +61,14 @@ function getSupabase() {
 // ---------------------------------------------------------------------------
 
 function httpGet(path) {
-  if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY not set');
+  if (!API_FOOTBALL_KEY) throw new Error('API_FOOTBALL_KEY not set');
   return new Promise((resolve, reject) => {
     const options = {
       method:   'GET',
       hostname: RAPIDAPI_HOST,
       path:     `/v3${path}`,
       headers: {
-        'x-rapidapi-key':  RAPIDAPI_KEY,
+        'x-rapidapi-key':  API_FOOTBALL_KEY,
         'x-rapidapi-host': RAPIDAPI_HOST,
       },
     };
