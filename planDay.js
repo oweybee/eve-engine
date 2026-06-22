@@ -52,19 +52,17 @@ const { createClient } = require('@supabase/supabase-js');
 // Config
 // ---------------------------------------------------------------------------
 
-const API_FOOTBALL_KEY        = process.env.API_FOOTBALL_KEY;
-const API_HOST = 'v3.football.api-sports.io';
+const FOOTBALL_DATA_KEY   = process.env.FOOTBALL_DATA_KEY;
+const API_HOST            = 'api.football-data.org';
+const COMPETITION         = process.env.COMPETITION ?? 'WC'; // WC = FIFA World Cup
 const SUPABASE_URL        = process.env.SUPABASE_URL;
 const SUPABASE_KEY        = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const LEAGUE_ID           = parseInt(process.env.WORLD_CUP_LEAGUE_ID  ?? '1',   10);
-const SEASON              = parseInt(process.env.FOOTBALL_SEASON       ?? new Date().getFullYear(), 10);
 const DAILY_BUDGET        = parseInt(process.env.DAILY_REQUEST_BUDGET  ?? '100', 10);
-const ACTIVE_START_HOUR   = parseInt(process.env.ACTIVE_START_HOUR     ?? '8',   10); // UTC
-const ACTIVE_END_HOUR     = parseInt(process.env.ACTIVE_END_HOUR       ?? '24',  10); // UTC (24 = midnight)
+const ACTIVE_START_HOUR   = parseInt(process.env.ACTIVE_START_HOUR     ?? '8',   10);
+const ACTIVE_END_HOUR     = parseInt(process.env.ACTIVE_END_HOUR       ?? '24',  10);
 const DRY_RUN             = process.argv.includes('--dry-run');
 
-// This script itself costs 1 request (the /fixtures call).
 const PLANNER_COST        = 1;
 
 // ---------------------------------------------------------------------------
@@ -77,18 +75,18 @@ function getSupabase() {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP — RapidAPI
+// HTTP — football-data.org
 // ---------------------------------------------------------------------------
 
 function httpGet(path) {
-  if (!API_FOOTBALL_KEY) throw new Error('API_FOOTBALL_KEY not set');
+  if (!FOOTBALL_DATA_KEY) throw new Error('FOOTBALL_DATA_KEY not set');
   return new Promise((resolve, reject) => {
     const options = {
       method:   'GET',
       hostname: API_HOST,
-      path:     path,
+      path,
       headers: {
-        'x-apisports-key': API_FOOTBALL_KEY,
+        'X-Auth-Token': FOOTBALL_DATA_KEY,
       },
     };
     https.request(options, res => {
@@ -97,14 +95,8 @@ function httpGet(path) {
       res.on('end', () => {
         if (res.statusCode === 429) { reject(new Error('Rate limit hit')); return; }
         if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`)); return; }
-        try {
-          const parsed = JSON.parse(body);
-          if (parsed.errors && Object.keys(parsed.errors).length > 0) {
-            reject(new Error(`API error: ${JSON.stringify(parsed.errors)}`));
-            return;
-          }
-          resolve(parsed);
-        } catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
+        try { resolve(JSON.parse(body)); }
+        catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
       });
     }).on('error', reject).end();
   });
@@ -115,10 +107,10 @@ function httpGet(path) {
 // ---------------------------------------------------------------------------
 
 async function fetchTodayFixtures(date) {
-  const path = `/fixtures?league=${LEAGUE_ID}&season=${SEASON}&date=${date}`;
+  const path = `/v4/competitions/${COMPETITION}/matches?dateFrom=${date}&dateTo=${date}&status=SCHEDULED,LIVE,IN_PLAY,PAUSED`;
   console.log(`[plan] GET ${path}`);
   const json = await httpGet(path);
-  return json.response ?? [];
+  return json.matches ?? [];
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +118,7 @@ async function fetchTodayFixtures(date) {
 // ---------------------------------------------------------------------------
 
 function calcPlan(fixtures, today) {
-  const fixtureIds = fixtures.map(f => f.fixture.id);
+  const fixtureIds = fixtures.map(f => f.id);
 
   if (fixtureIds.length === 0) {
     console.log(`[plan] rest day — no fixtures on ${today}`);

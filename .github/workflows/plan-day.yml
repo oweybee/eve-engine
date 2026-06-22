@@ -15,14 +15,9 @@ jobs:
     env:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      API_FOOTBALL_KEY:              ${{ secrets.API_FOOTBALL_KEY }}
-      # World Cup league ID on API-Football. Default: 1 (FIFA World Cup).
-      # Override here or via the WORLD_CUP_LEAGUE_ID secret if needed.
-      WORLD_CUP_LEAGUE_ID:       '1'
-      FOOTBALL_SEASON:           '2026'
-      # Total API requests available per day (free tier = 100).
+      FOOTBALL_DATA_KEY:         ${{ secrets.FOOTBALL_DATA_KEY }}
+      COMPETITION:               'WC'
       DAILY_REQUEST_BUDGET:      '100'
-      # Active polling window — UTC hours. 8 = 08:00, 24 = midnight.
       ACTIVE_START_HOUR:         '8'
       ACTIVE_END_HOUR:           '24'
 
