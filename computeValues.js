@@ -577,8 +577,8 @@ async function computeMatch(match, supabase = null) {
   const softBookCount = new Set(
     h2hPool.filter(r => SOFT_BOOKS.has(r.bookmaker)).map(r => r.bookmaker)
   ).size;
-  if (softBookCount < 3) {
-    console.warn(`  [skip] ${homeStr} vs ${awayStr}: insufficient soft book coverage (${softBookCount} books, need 3+)`);
+  if (softBookCount < 1) {
+    console.warn(`  [skip] ${homeStr} vs ${awayStr}: insufficient soft book coverage (${softBookCount} books, need 1+)`);
     return null;
   }
 
