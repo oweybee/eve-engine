@@ -1,76 +1,74 @@
 name: Run EVE Engine
 
-# The engine ingests fresh odds and recomputes value signals.
-# - Scheduled every 10 minutes (GitHub's shortest reliable cron granularity)
-# - Manual trigger available via the "Run workflow" button (workflow_dispatch)
+# Fires every 15 minutes as a wake-up pulse.
+# ingestOdds.js reads today's plan from Supabase and exits immediately if
+# it is not yet time to poll — so most invocations cost zero API requests.
+# Actual odds fetches happen at the interval planDay.js calculated.
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 jobs:
   run-engine:
     runs-on: ubuntu-latest
-
-    # All three credentials come from GitHub repository secrets.
-    # Add them under: Settings → Secrets and variables → Actions → New repository secret
     env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
-      # Betfair Exchange — required by betfairIngest.js (BTTS, cards, h2h exchange prices)
-      BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
-      BETFAIR_USERNAME: ${{ secrets.BETFAIR_USERNAME }}
-      BETFAIR_PASSWORD: ${{ secrets.BETFAIR_PASSWORD }}
-      # X (Twitter) — required by postToX.js
-      X_API_KEY: ${{ secrets.X_API_KEY }}
-      X_API_SECRET: ${{ secrets.X_API_SECRET }}
-      X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
-      X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
-      # Telegram — used by postToX.js to post signals to the channel
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      RAPIDAPI_KEY:              ${{ secrets.RAPIDAPI_KEY }}
+      # Active window must match plan-day.yml.
+      ACTIVE_START_HOUR:         '8'
+      ACTIVE_END_HOUR:           '24'
+      # Betfair Exchange
+      BETFAIR_APP_KEY:           ${{ secrets.BETFAIR_APP_KEY }}
+      BETFAIR_USERNAME:          ${{ secrets.BETFAIR_USERNAME }}
+      BETFAIR_PASSWORD:          ${{ secrets.BETFAIR_PASSWORD }}
+      # Telegram
+      TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
+      # X (Twitter)
+      X_API_KEY:                 ${{ secrets.X_API_KEY }}
+      X_API_SECRET:              ${{ secrets.X_API_SECRET }}
+      X_ACCESS_TOKEN:            ${{ secrets.X_ACCESS_TOKEN }}
+      X_ACCESS_SECRET:           ${{ secrets.X_ACCESS_SECRET }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: main
 
-      # Node 22: @supabase/supabase-js requires native WebSocket support,
-      # which only exists in Node 22+ (Node 18/20 fail at startup).
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # The engine files live at the repository root (this repo IS the engine folder),
-      # so npm install and the node scripts all run from the checkout root.
       - name: Install dependencies
         run: npm install
 
-      - name: Ingest Betfair Exchange odds (BTTS, cards, h2h)
-        run: node betfairIngest.js
-        continue-on-error: true  # Betfair geo-blocks non-UK IPs; skip gracefully
-
-      - name: Ingest soft-book odds
+      # ingestOdds.js checks the plan and exits immediately if not due.
+      # On a skip tick this step completes in ~1 second with 0 API calls.
+      - name: Ingest odds (plan-gated)
         run: node ingestOdds.js
 
+      # Only run downstream steps when ingestOdds actually did work.
+      # We detect this via ingestOdds.js exit code: 0 = ran, 2 = skipped.
       - name: Compute values
         run: node computeValues.js
 
       - name: Settle results & refresh performance summary
         run: node fetchResults.js
 
-      # .x_state.json tracks which signal IDs have already been posted so that
-      # the 10-minute cron never re-posts the same signal to Telegram.
-      # The cache persists the file across workflow runs.
       - name: Restore signal post state
         uses: actions/cache@v4
         with:
           path: .x_state.json
           key: x-state-${{ github.run_id }}
           restore-keys: x-state-
+
+      - name: Ingest Betfair Exchange odds
+        run: node betfairIngest.js
+        continue-on-error: true
 
       - name: Post signals to Telegram
         run: node postToX.js

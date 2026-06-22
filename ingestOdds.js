@@ -1,22 +1,27 @@
 /**
- * EVE — Odds Ingestion Script
+ * EVE — Odds Ingestion (plan-driven)
  *
- * Fetches live 1X2 odds from API-Football (RapidAPI) and writes them into Supabase.
- * Also upserts match and team records so the DB stays in sync with the feed.
+ * Reads today's plan from Supabase (written by planDay.js) and decides
+ * whether it is time to run. If not due yet, exits immediately using 0
+ * API requests. If due, fetches /odds per fixture ID (not per league),
+ * advances next_run_at by the calculated interval, and upserts to DB.
  *
- * Execution flow:
- *   1. For each league, fetch upcoming fixtures from API-Football /fixtures
- *   2. Fetch odds for the league from /odds, paginating as needed
- *   3. Join odds to fixtures by fixture ID
- *   4. Upsert leagues → teams → matches (in dependency order)
- *   5. Insert new odds rows (append-only — never overwrites history)
+ * This script is triggered every 15 minutes by GitHub Actions, but most
+ * invocations exit after a single Supabase read (no API calls made).
+ * Actual odds fetches happen at the interval planDay.js calculated, which
+ * equals active_minutes / available_runs — so the budget is consumed
+ * exactly, spread evenly across the active window.
  *
- * Idempotent: safe to run multiple times. Duplicate odds rows are prevented
- * by only inserting when odds have changed from the last snapshot.
+ * Required env vars:
+ *   RAPIDAPI_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+ *
+ * Optional env vars:
+ *   ACTIVE_START_HOUR  — UTC hour to start polling (default: 8)
+ *   ACTIVE_END_HOUR    — UTC hour to stop polling  (default: 24)
  *
  * Usage:
- *   node ingestOdds.js              — run once
- *   node ingestOdds.js --dry-run    — fetch and log without writing to DB
+ *   node ingestOdds.js
+ *   node ingestOdds.js --dry-run
  */
 
 'use strict';
@@ -28,234 +33,167 @@ const { createClient } = require('@supabase/supabase-js');
 // Config
 // ---------------------------------------------------------------------------
 
-const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
-const RAPIDAPI_HOST = 'api-football-v1.p.rapidapi.com';
+const RAPIDAPI_KEY      = process.env.RAPIDAPI_KEY;
+const RAPIDAPI_HOST     = 'api-football-v1.p.rapidapi.com';
+const SUPABASE_URL      = process.env.SUPABASE_URL;
+const SUPABASE_KEY      = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const ACTIVE_START_HOUR = parseInt(process.env.ACTIVE_START_HOUR ?? '8',  10);
+const ACTIVE_END_HOUR   = parseInt(process.env.ACTIVE_END_HOUR   ?? '24', 10);
+const DRY_RUN           = process.argv.includes('--dry-run');
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const DRY_RUN      = process.argv.includes('--dry-run');
-
-// Season year (the year the season starts — e.g. 2025 for 2025-26).
-// Override with FOOTBALL_SEASON env var if needed.
-const SEASON = parseInt(process.env.FOOTBALL_SEASON ?? new Date().getFullYear(), 10);
-
-// Leagues: API-Football league IDs.
-// Full list: https://www.api-football.com/documentation-v3#tag/Leagues
-const LEAGUES = [
-  { id: 39, name: 'Premier League',   country: 'England' },
-  { id: 40, name: 'EFL Championship', country: 'England' },
-];
+// Only insert a new odds row when price moves by more than this.
+const MIN_PRICE_MOVEMENT = 0.01;
 
 // API-Football bet type IDs.
-const BET_MATCH_WINNER = 1;   // 1X2
-const BET_OVER_UNDER   = 5;   // Goals Over/Under
-const BET_BTTS         = 8;   // Both Teams To Score
-
-// Only insert a new odds row if price has moved by more than this amount.
-const MIN_PRICE_MOVEMENT = 0.01;
+const BET_MATCH_WINNER = 1;
 
 // ---------------------------------------------------------------------------
 // Supabase
 // ---------------------------------------------------------------------------
 
 function getSupabase() {
-  if (!SUPABASE_URL || !SUPABASE_KEY) {
-    throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
-  }
+  if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error('Missing Supabase credentials');
   return createClient(SUPABASE_URL, SUPABASE_KEY);
 }
 
 // ---------------------------------------------------------------------------
-// HTTP helper — RapidAPI requires headers, not a query param
+// HTTP — RapidAPI
 // ---------------------------------------------------------------------------
 
 function httpGet(path) {
-  if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY environment variable is not set');
-
-  const url = `https://${RAPIDAPI_HOST}/v3${path}`;
-
+  if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY not set');
   return new Promise((resolve, reject) => {
     const options = {
-      method: 'GET',
+      method:   'GET',
       hostname: RAPIDAPI_HOST,
-      path: `/v3${path}`,
+      path:     `/v3${path}`,
       headers: {
         'x-rapidapi-key':  RAPIDAPI_KEY,
         'x-rapidapi-host': RAPIDAPI_HOST,
       },
     };
-
-    https.request(options, (res) => {
+    https.request(options, res => {
       let body = '';
-      res.on('data', chunk => { body += chunk; });
+      res.on('data', c => { body += c; });
       res.on('end', () => {
-        if (res.statusCode === 429) {
-          reject(new Error('API-Football rate limit hit — too many requests'));
-          return;
-        }
-        if (res.statusCode === 401 || res.statusCode === 403) {
-          reject(new Error('RAPIDAPI_KEY is invalid or missing subscription'));
-          return;
-        }
-        if (res.statusCode !== 200) {
-          reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`));
-          return;
-        }
+        if (res.statusCode === 429) { reject(new Error('Rate limit hit')); return; }
+        if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`)); return; }
         try {
           const parsed = JSON.parse(body);
-          // API-Football surfaces errors in the response body
           if (parsed.errors && Object.keys(parsed.errors).length > 0) {
             reject(new Error(`API error: ${JSON.stringify(parsed.errors)}`));
             return;
           }
           resolve(parsed);
-        } catch (e) {
-          reject(new Error(`JSON parse error: ${e.message}`));
-        }
+        } catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
       });
     }).on('error', reject).end();
   });
 }
 
 // ---------------------------------------------------------------------------
-// 1. Fetch fixtures (team names + kickoff times)
+// Load today's plan from Supabase
 // ---------------------------------------------------------------------------
 
-/**
- * Fetches upcoming fixtures for a league.
- * Returns a Map of fixtureId → { homeTeam, awayTeam, kickoffAt }.
- */
-async function fetchFixturesForLeague(leagueId) {
-  // next=100 returns the next 100 upcoming fixtures; also grab in-progress
-  const path = `/fixtures?league=${leagueId}&season=${SEASON}&next=100`;
-  console.log(`  [fixtures] GET ${path}`);
+async function loadPlan(supabase) {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from('engine_plan')
+    .select('*')
+    .eq('date', today)
+    .maybeSingle();
+  if (error) throw new Error(`loadPlan: ${error.message}`);
+  return data; // null if planner hasn't run yet today
+}
+
+// ---------------------------------------------------------------------------
+// Advance next_run_at in Supabase (called before fetching, prevents double-run)
+// ---------------------------------------------------------------------------
+
+async function advancePlan(supabase, plan) {
+  const nextRunAt = new Date(Date.now() + plan.interval_minutes * 60 * 1000);
+
+  // If the next run would fall outside the active window, null it out so
+  // ingestOdds skips the rest of the day gracefully.
+  const nextHour = nextRunAt.getUTCHours();
+  const effectiveEnd = ACTIVE_END_HOUR === 24 ? 0 : ACTIVE_END_HOUR;
+  const outsideWindow = ACTIVE_END_HOUR === 24
+    ? nextRunAt.getUTCDate() > new Date().getUTCDate()  // past midnight
+    : nextHour >= effectiveEnd;
+
+  const { error } = await supabase
+    .from('engine_plan')
+    .update({
+      next_run_at:    outsideWindow ? null : nextRunAt.toISOString(),
+      runs_completed: plan.runs_completed + 1,
+    })
+    .eq('date', plan.date);
+
+  if (error) throw new Error(`advancePlan: ${error.message}`);
+  console.log(`[ingest] next run: ${outsideWindow ? 'none (window closed)' : nextRunAt.toISOString()}`);
+}
+
+// ---------------------------------------------------------------------------
+// Fetch odds for a single fixture
+// ---------------------------------------------------------------------------
+
+async function fetchFixtureOdds(fixtureId) {
+  const path = `/odds?fixture=${fixtureId}&bet=${BET_MATCH_WINNER}`;
+  console.log(`  [odds] GET ${path}`);
   const json = await httpGet(path);
-
-  const map = new Map();
-  for (const item of (json.response ?? [])) {
-    map.set(item.fixture.id, {
-      homeTeam:  item.teams.home.name,
-      awayTeam:  item.teams.away.name,
-      kickoffAt: item.fixture.date,
-    });
-  }
-  console.log(`  → ${map.size} upcoming fixtures`);
-  return map;
+  return json.response?.[0] ?? null;
 }
 
 // ---------------------------------------------------------------------------
-// 2. Fetch odds (paginated)
+// Normalise bookmaker name to a slug
 // ---------------------------------------------------------------------------
 
-/**
- * Fetches all odds pages for a league + bet type.
- * Returns array of raw API response items.
- */
-async function fetchOddsPages(leagueId, betId) {
-  const all = [];
-  let page = 1;
-
-  while (true) {
-    const path = `/odds?league=${leagueId}&season=${SEASON}&bet=${betId}&page=${page}`;
-    console.log(`  [odds] GET ${path}`);
-    const json = await httpGet(path);
-    const items = json.response ?? [];
-    all.push(...items);
-
-    const { current, total } = json.paging ?? { current: 1, total: 1 };
-    if (current >= total) break;
-    page++;
-    await sleep(300); // respect rate limit between pages
-  }
-
-  console.log(`  → ${all.length} odds records`);
-  return all;
-}
-
-// ---------------------------------------------------------------------------
-// 3. Normalise API-Football response → our DB shape
-// ---------------------------------------------------------------------------
-
-/**
- * API-Football odds item shape:
- * {
- *   fixture: { id: 868077 },
- *   bookmakers: [
- *     {
- *       id: 8,
- *       name: "Bet365",
- *       bets: [
- *         {
- *           id: 1,
- *           name: "Match Winner",
- *           values: [
- *             { value: "Home", odd: "1.83" },
- *             { value: "Draw", odd: "3.75" },
- *             { value: "Away", odd: "4.20" }
- *           ]
- *         }
- *       ]
- *     }
- *   ]
- * }
- */
-
-/**
- * Normalise bookmaker name to a consistent slug.
- * e.g. "Bet365" → "bet365", "William Hill" → "williamhill"
- */
 function slugifyBookmaker(name) {
-  const overrides = {
-    'Bet365':          'bet365',
-    'William Hill':    'williamhill',
-    'Ladbrokes':       'ladbrokes_uk',
-    'Coral':           'coral',
-    'Paddy Power':     'paddypower',
-    'Betfair':         'betfair_sb_uk',
-    'Betfair Exchange':'betfair_ex_uk',
-    'Betway':          'betway',
-    'Unibet':          'unibet_uk',
-    'SkyBet':          'skybet',
-    'Sky Bet':         'skybet',
-    'Betfred':         'betfred_uk',
-    'BetVictor':       'betvictor',
-    'Boylesports':     'boylesports',
-    'BoyleSports':     'boylesports',
-    'Virgin Bet':      'virginbet',
-    '888sport':        'sport888',
-    'Smarkets':        'smarkets',
-    'Matchbook':       'matchbook',
+  const map = {
+    'Bet365':           'bet365',
+    'William Hill':     'williamhill',
+    'Ladbrokes':        'ladbrokes_uk',
+    'Coral':            'coral',
+    'Paddy Power':      'paddypower',
+    'Betfair':          'betfair_sb_uk',
+    'Betfair Exchange': 'betfair_ex_uk',
+    'Betway':           'betway',
+    'Unibet':           'unibet_uk',
+    'SkyBet':           'skybet',
+    'Sky Bet':          'skybet',
+    'Betfred':          'betfred_uk',
+    'BetVictor':        'betvictor',
+    'Boylesports':      'boylesports',
+    'BoyleSports':      'boylesports',
+    'Virgin Bet':       'virginbet',
+    '888sport':         'sport888',
+    'Smarkets':         'smarkets',
+    'Matchbook':        'matchbook',
   };
-  return overrides[name] ?? name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+  return map[name] ?? name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
 }
 
-/**
- * Extract 1X2 odds rows from a single API-Football odds item.
- */
-function normaliseH2hItem(item, fixtureMap) {
-  const fixtureId = item.fixture?.id;
-  const fixture   = fixtureMap.get(fixtureId);
-  if (!fixture) return null; // fixture not in our upcoming window
+// ---------------------------------------------------------------------------
+// Extract 1X2 odds rows from an API-Football odds response item
+// ---------------------------------------------------------------------------
 
-  const oddsRows = [];
-
-  for (const bm of (item.bookmakers ?? [])) {
+function extractH2hRows(oddsItem) {
+  const rows = [];
+  for (const bm of (oddsItem?.bookmakers ?? [])) {
     const h2hBet = bm.bets?.find(b => b.id === BET_MATCH_WINNER);
     if (!h2hBet) continue;
 
     const homeVal = h2hBet.values?.find(v => v.value === 'Home');
     const drawVal = h2hBet.values?.find(v => v.value === 'Draw');
     const awayVal = h2hBet.values?.find(v => v.value === 'Away');
-
     if (!homeVal || !drawVal || !awayVal) continue;
 
     const h = parseFloat(homeVal.odd);
     const d = parseFloat(drawVal.odd);
     const a = parseFloat(awayVal.odd);
-
     if (h <= 1 || d <= 1 || a <= 1 || h > 999 || d > 999 || a > 999) continue;
 
-    oddsRows.push({
+    rows.push({
       bookmaker:  slugifyBookmaker(bm.name),
       market:     'h2h',
       home_odds:  h,
@@ -264,103 +202,19 @@ function normaliseH2hItem(item, fixtureMap) {
       fetched_at: new Date().toISOString(),
     });
   }
-
-  return {
-    externalId: String(fixtureId),
-    ...fixture,
-    oddsRows,
-  };
-}
-
-/**
- * Extract Over/Under odds rows from a single API-Football odds item.
- */
-function normaliseTotalsItem(item) {
-  const fixtureId = item.fixture?.id;
-  const oddsRows  = [];
-
-  for (const bm of (item.bookmakers ?? [])) {
-    const totalsBet = bm.bets?.find(b => b.id === BET_OVER_UNDER);
-    if (!totalsBet) continue;
-
-    // API-Football returns multiple lines (e.g. Over 2.5, Over 3.5)
-    // Group by line — pick the 2.5 line if available, else first
-    const lines = new Map();
-    for (const v of (totalsBet.values ?? [])) {
-      // value format: "Over 2.5" or "Under 2.5"
-      const match = v.value.match(/^(Over|Under)\s+([\d.]+)$/);
-      if (!match) continue;
-      const [, side, lineStr] = match;
-      const line = parseFloat(lineStr);
-      if (!lines.has(line)) lines.set(line, {});
-      lines.get(line)[side] = parseFloat(v.odd);
-    }
-
-    // Prefer 2.5 line; fall back to first available
-    const targetLine = lines.has(2.5) ? 2.5 : [...lines.keys()][0];
-    if (targetLine == null) continue;
-
-    const { Over: overPrice, Under: underPrice } = lines.get(targetLine);
-    if (!overPrice || !underPrice || overPrice <= 1 || underPrice <= 1) continue;
-
-    oddsRows.push({
-      bookmaker:   slugifyBookmaker(bm.name),
-      market:      'totals',
-      home_odds:   overPrice,
-      draw_odds:   null,
-      away_odds:   underPrice,
-      market_line: targetLine,
-      fetched_at:  new Date().toISOString(),
-    });
-  }
-
-  return { externalId: String(fixtureId), oddsRows };
-}
-
-/**
- * Extract BTTS odds rows from a single API-Football odds item.
- */
-function normaliseBttsItem(item) {
-  const fixtureId = item.fixture?.id;
-  const oddsRows  = [];
-
-  for (const bm of (item.bookmakers ?? [])) {
-    const bttsBet = bm.bets?.find(b => b.id === BET_BTTS);
-    if (!bttsBet) continue;
-
-    const yesVal = bttsBet.values?.find(v => v.value === 'Yes');
-    const noVal  = bttsBet.values?.find(v => v.value === 'No');
-    if (!yesVal || !noVal) continue;
-
-    const yesPrice = parseFloat(yesVal.odd);
-    const noPrice  = parseFloat(noVal.odd);
-    if (yesPrice <= 1 || noPrice <= 1) continue;
-
-    oddsRows.push({
-      bookmaker:   slugifyBookmaker(bm.name),
-      market:      'btts',
-      home_odds:   yesPrice,
-      draw_odds:   null,
-      away_odds:   noPrice,
-      market_line: null,
-      fetched_at:  new Date().toISOString(),
-    });
-  }
-
-  return { externalId: String(fixtureId), oddsRows };
+  return rows;
 }
 
 // ---------------------------------------------------------------------------
-// 4. Upsert reference data (leagues, teams, matches) — unchanged from before
+// Upsert league / team / match (unchanged from previous version)
 // ---------------------------------------------------------------------------
 
-async function upsertLeague(supabase, { name, country }) {
+async function upsertLeague(supabase, name, country) {
   const { data, error } = await supabase
     .from('leagues')
     .upsert({ name, country }, { onConflict: 'name' })
-    .select('id')
-    .single();
-  if (error) throw new Error(`upsertLeague(${name}): ${error.message}`);
+    .select('id').single();
+  if (error) throw new Error(`upsertLeague: ${error.message}`);
   return data.id;
 }
 
@@ -368,9 +222,8 @@ async function upsertTeam(supabase, name) {
   const { data, error } = await supabase
     .from('teams')
     .upsert({ name, short_name: makeShortName(name) }, { onConflict: 'name' })
-    .select('id')
-    .single();
-  if (error) throw new Error(`upsertTeam(${name}): ${error.message}`);
+    .select('id').single();
+  if (error) throw new Error(`upsertTeam: ${error.message}`);
   return data.id;
 }
 
@@ -378,24 +231,17 @@ async function upsertMatch(supabase, { externalId, homeTeamId, awayTeamId, leagu
   const { data, error } = await supabase
     .from('matches')
     .upsert(
-      {
-        external_id:  externalId,
-        home_team_id: homeTeamId,
-        away_team_id: awayTeamId,
-        league_id:    leagueId,
-        kickoff_at:   kickoffAt,
-        status:       'scheduled',
-      },
+      { external_id: externalId, home_team_id: homeTeamId, away_team_id: awayTeamId,
+        league_id: leagueId, kickoff_at: kickoffAt, status: 'scheduled' },
       { onConflict: 'external_id' }
     )
-    .select('id')
-    .single();
-  if (error) throw new Error(`upsertMatch(${externalId}): ${error.message}`);
+    .select('id').single();
+  if (error) throw new Error(`upsertMatch: ${error.message}`);
   return data.id;
 }
 
 // ---------------------------------------------------------------------------
-// 5. Insert odds (append-only, deduped by price movement) — unchanged
+// Insert odds (append-only, deduped by price movement)
 // ---------------------------------------------------------------------------
 
 async function getLastOdds(supabase, matchId, bookmaker, market = 'h2h') {
@@ -412,186 +258,150 @@ async function getLastOdds(supabase, matchId, bookmaker, market = 'h2h') {
   return data;
 }
 
-function oddsHaveMoved(lastOdds, newRow) {
-  if (!lastOdds) return true;
-  const homeMove = Math.abs((newRow.home_odds ?? 0) - (lastOdds.home_odds ?? 0));
-  const awayMove = Math.abs((newRow.away_odds ?? 0) - (lastOdds.away_odds ?? 0));
-  const drawMove = (newRow.draw_odds != null && lastOdds.draw_odds != null)
-    ? Math.abs(newRow.draw_odds - lastOdds.draw_odds)
-    : 0;
-  return homeMove > MIN_PRICE_MOVEMENT || awayMove > MIN_PRICE_MOVEMENT || drawMove > MIN_PRICE_MOVEMENT;
+function oddsHaveMoved(last, newRow) {
+  if (!last) return true;
+  return (
+    Math.abs((newRow.home_odds ?? 0) - (last.home_odds ?? 0)) > MIN_PRICE_MOVEMENT ||
+    Math.abs((newRow.away_odds ?? 0) - (last.away_odds ?? 0)) > MIN_PRICE_MOVEMENT ||
+    (newRow.draw_odds != null && last.draw_odds != null &&
+      Math.abs(newRow.draw_odds - last.draw_odds) > MIN_PRICE_MOVEMENT)
+  );
 }
 
-async function insertOddsForMatch(supabase, matchId, oddsRows) {
+async function insertOddsRows(supabase, matchId, rows) {
   let inserted = 0;
-  for (const row of oddsRows) {
-    const market = row.market ?? 'h2h';
-    const last   = await getLastOdds(supabase, matchId, row.bookmaker, market);
+  for (const row of rows) {
+    const last = await getLastOdds(supabase, matchId, row.bookmaker, row.market ?? 'h2h');
     if (!oddsHaveMoved(last, row)) continue;
-
     if (DRY_RUN) {
-      console.log(`    [dry-run] ${market}: ${row.bookmaker} H=${row.home_odds} D=${row.draw_odds ?? '—'} A=${row.away_odds}`);
+      console.log(`    [dry-run] ${row.bookmaker} H=${row.home_odds} D=${row.draw_odds} A=${row.away_odds}`);
       inserted++;
       continue;
     }
-
     const { error } = await supabase.from('odds').insert({ match_id: matchId, ...row });
-    if (error) {
-      console.warn(`    [warn] odds insert failed (${row.bookmaker} ${market}): ${error.message}`);
-    } else {
-      inserted++;
-    }
+    if (error) console.warn(`    [warn] insert failed (${row.bookmaker}): ${error.message}`);
+    else inserted++;
   }
   return inserted;
 }
 
 // ---------------------------------------------------------------------------
-// 6. Main ingestion loop
+// Process a single fixture: fetch odds, upsert match + odds rows
+// ---------------------------------------------------------------------------
+
+async function processFixture(supabase, fixtureId, leagueId) {
+  const oddsItem = await fetchFixtureOdds(fixtureId);
+  if (!oddsItem) {
+    console.log(`  [skip] fixture ${fixtureId} — no odds returned`);
+    return 0;
+  }
+
+  const { fixture, league, teams } = oddsItem;
+  const homeTeam    = teams?.home?.name ?? `home_${fixtureId}`;
+  const awayTeam    = teams?.away?.name ?? `away_${fixtureId}`;
+  const kickoffAt   = fixture?.date;
+  const leagueName  = league?.name  ?? 'World Cup';
+  const leagueCountry = league?.country ?? 'International';
+
+  const rows = extractH2hRows(oddsItem);
+  if (!rows.length) {
+    console.log(`  [skip] ${homeTeam} vs ${awayTeam} — no valid bookmaker odds`);
+    return 0;
+  }
+
+  console.log(`  ${homeTeam} vs ${awayTeam} (${rows.length} books)`);
+
+  if (DRY_RUN) {
+    for (const r of rows) console.log(`    [dry-run] ${r.bookmaker} H=${r.home_odds} D=${r.draw_odds} A=${r.away_odds}`);
+    return rows.length;
+  }
+
+  const dbLeagueId  = leagueId ?? await upsertLeague(supabase, leagueName, leagueCountry);
+  const homeTeamId  = await upsertTeam(supabase, homeTeam);
+  const awayTeamId  = await upsertTeam(supabase, awayTeam);
+  const matchId     = await upsertMatch(supabase, {
+    externalId:  String(fixtureId),
+    homeTeamId,
+    awayTeamId,
+    leagueId:    dbLeagueId,
+    kickoffAt,
+  });
+
+  return insertOddsRows(supabase, matchId, rows);
+}
+
+// ---------------------------------------------------------------------------
+// Main
 // ---------------------------------------------------------------------------
 
 async function ingest() {
-  console.log(`\n[ingest] starting ${DRY_RUN ? '(DRY RUN) ' : ''}at ${new Date().toISOString()} — season ${SEASON}`);
+  const now = new Date();
+  const hour = now.getUTCHours();
 
-  const supabase = getSupabase();
-  const summary  = { leagues: 0, events: 0, oddsInserted: 0, errors: 0 };
-
-  for (const league of LEAGUES) {
-    console.log(`\n[league] ${league.name} (id=${league.id})`);
-
-    // ── Step 1: fixtures ────────────────────────────────────────────────────
-    let fixtureMap;
-    try {
-      fixtureMap = await fetchFixturesForLeague(league.id);
-    } catch (err) {
-      console.error(`  [error] fixtures fetch failed: ${err.message}`);
-      summary.errors++;
-      continue;
-    }
-
-    if (fixtureMap.size === 0) {
-      console.log('  no upcoming fixtures — skipping');
-      continue;
-    }
-
-    // ── Step 2: 1X2 odds ───────────────────────────────────────────────────
-    let h2hItems = [];
-    try {
-      h2hItems = await fetchOddsPages(league.id, BET_MATCH_WINNER);
-    } catch (err) {
-      console.error(`  [error] h2h odds fetch failed: ${err.message}`);
-      summary.errors++;
-    }
-
-    // Upsert league
-    let leagueId;
-    try {
-      leagueId = DRY_RUN ? 'dry-run-league-id' : await upsertLeague(supabase, league);
-    } catch (err) {
-      console.error(`  [error] league upsert failed: ${err.message}`);
-      summary.errors++;
-      continue;
-    }
-
-    // Process h2h items
-    for (const item of h2hItems) {
-      const norm = normaliseH2hItem(item, fixtureMap);
-      if (!norm || !norm.oddsRows.length) continue;
-
-      console.log(`  ${norm.homeTeam} vs ${norm.awayTeam} (${norm.oddsRows.length} books)`);
-
-      try {
-        const homeTeamId = DRY_RUN ? 'dry-id' : await upsertTeam(supabase, norm.homeTeam);
-        const awayTeamId = DRY_RUN ? 'dry-id' : await upsertTeam(supabase, norm.awayTeam);
-        const matchId    = DRY_RUN ? 'dry-match-id' : await upsertMatch(supabase, {
-          externalId:  norm.externalId,
-          homeTeamId,
-          awayTeamId,
-          leagueId,
-          kickoffAt:   norm.kickoffAt,
-        });
-
-        const inserted = await insertOddsForMatch(supabase, matchId, norm.oddsRows);
-        summary.oddsInserted += inserted;
-        summary.events++;
-      } catch (err) {
-        console.error(`    [error] ${norm.homeTeam} vs ${norm.awayTeam}: ${err.message}`);
-        summary.errors++;
-      }
-    }
-
-    await sleep(500); // pause between h2h and over/under fetches
-
-    // ── Step 3: Over/Under odds ────────────────────────────────────────────
-    console.log(`\n[totals] ${league.name}`);
-    let totalsItems = [];
-    try {
-      totalsItems = await fetchOddsPages(league.id, BET_OVER_UNDER);
-    } catch (err) {
-      console.warn(`  [warn] totals fetch failed: ${err.message}`);
-    }
-
-    for (const item of totalsItems) {
-      const norm = normaliseTotalsItem(item);
-      if (!norm.oddsRows.length) continue;
-
-      try {
-        if (!DRY_RUN) {
-          const { data: matchRow, error } = await supabase
-            .from('matches')
-            .select('id')
-            .eq('external_id', norm.externalId)
-            .maybeSingle();
-          if (error || !matchRow) continue;
-          const inserted = await insertOddsForMatch(supabase, matchRow.id, norm.oddsRows);
-          summary.oddsInserted += inserted;
-        } else {
-          console.log(`  [dry-run] totals for fixture ${norm.externalId}: ${norm.oddsRows.length} rows`);
-        }
-      } catch (err) {
-        console.error(`    [error] totals ${norm.externalId}: ${err.message}`);
-        summary.errors++;
-      }
-    }
-
-    await sleep(500);
-
-    // ── Step 4: BTTS odds ──────────────────────────────────────────────────
-    console.log(`\n[btts] ${league.name}`);
-    let bttsItems = [];
-    try {
-      bttsItems = await fetchOddsPages(league.id, BET_BTTS);
-    } catch (err) {
-      console.warn(`  [warn] btts fetch failed: ${err.message}`);
-    }
-
-    for (const item of bttsItems) {
-      const norm = normaliseBttsItem(item);
-      if (!norm.oddsRows.length) continue;
-
-      try {
-        if (!DRY_RUN) {
-          const { data: matchRow, error } = await supabase
-            .from('matches')
-            .select('id')
-            .eq('external_id', norm.externalId)
-            .maybeSingle();
-          if (error || !matchRow) continue;
-          const inserted = await insertOddsForMatch(supabase, matchRow.id, norm.oddsRows);
-          summary.oddsInserted += inserted;
-        } else {
-          console.log(`  [dry-run] btts for fixture ${norm.externalId}: ${norm.oddsRows.length} rows`);
-        }
-      } catch (err) {
-        console.error(`    [error] btts ${norm.externalId}: ${err.message}`);
-        summary.errors++;
-      }
-    }
-
-    summary.leagues++;
-    await sleep(500);
+  // Sleep window guard — exit immediately, zero API calls.
+  const effectiveEnd = ACTIVE_END_HOUR === 24 ? 24 : ACTIVE_END_HOUR;
+  if (hour < ACTIVE_START_HOUR || (ACTIVE_END_HOUR !== 24 && hour >= effectiveEnd)) {
+    console.log(`[ingest] outside active window (${ACTIVE_START_HOUR}:00–${ACTIVE_END_HOUR}:00 UTC) — sleeping`);
+    return;
   }
 
-  console.log('\n[ingest] complete:', summary);
+  const supabase = getSupabase();
+
+  // Load today's plan — one Supabase read, zero API calls.
+  let plan;
+  try {
+    plan = await loadPlan(supabase);
+  } catch (err) {
+    console.error(`[ingest] could not load plan: ${err.message}`);
+    return;
+  }
+
+  if (!plan) {
+    console.log('[ingest] no plan for today — has planDay.js run yet?');
+    return;
+  }
+
+  if (!plan.fixture_ids?.length) {
+    console.log('[ingest] rest day — no fixtures scheduled');
+    return;
+  }
+
+  if (!plan.next_run_at) {
+    console.log('[ingest] active window exhausted for today — done');
+    return;
+  }
+
+  const nextRun = new Date(plan.next_run_at);
+  if (now < nextRun) {
+    const waitMins = Math.round((nextRun - now) / 60000);
+    console.log(`[ingest] not due yet — ${waitMins} min until next run (${plan.next_run_at})`);
+    return;
+  }
+
+  // ── It's time to run ────────────────────────────────────────────────────
+  console.log(`\n[ingest] run ${plan.runs_completed + 1}/${plan.runs_planned} — ${now.toISOString()}`);
+  console.log(`[ingest] ${plan.fixture_ids.length} fixture(s): ${plan.fixture_ids.join(', ')}`);
+
+  // Advance the schedule first (prevents double-runs if this job overlaps).
+  if (!DRY_RUN) await advancePlan(supabase, plan);
+
+  const summary = { fixtures: plan.fixture_ids.length, oddsInserted: 0, errors: 0 };
+
+  // Cache the league DB id so we only upsert it once per run.
+  let cachedLeagueId = null;
+
+  for (const fixtureId of plan.fixture_ids) {
+    try {
+      const inserted = await processFixture(supabase, fixtureId, cachedLeagueId);
+      summary.oddsInserted += inserted;
+      await sleep(200); // small pause between fixture requests
+    } catch (err) {
+      console.error(`  [error] fixture ${fixtureId}: ${err.message}`);
+      summary.errors++;
+    }
+  }
+
+  console.log('[ingest] done:', summary);
   return summary;
 }
 
@@ -599,33 +409,24 @@ async function ingest() {
 // Utilities
 // ---------------------------------------------------------------------------
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function makeShortName(name) {
   const overrides = {
-    'Manchester City':          'Man City',
-    'Manchester United':        'Man Utd',
-    'Tottenham Hotspur':        'Spurs',
-    'Newcastle United':         'Newcastle',
-    'Nottingham Forest':        'Nottm Forest',
-    'West Ham United':          'West Ham',
-    'Wolverhampton Wanderers':  'Wolves',
-    'Brighton & Hove Albion':   'Brighton',
-    'Sheffield United':         'Sheffield Utd',
-    'Sheffield Wednesday':      'Sheff Wed',
-    'Queens Park Rangers':      'QPR',
-    'Stoke City':               'Stoke',
-    'Blackburn Rovers':         'Blackburn',
-    'Swansea City':             'Swansea',
-    'Cardiff City':             'Cardiff',
-    'Preston North End':        'Preston',
-    'Coventry City':            'Coventry',
-    'Bristol City':             'Bristol C',
-    'Bayer 04 Leverkusen':      'Leverkusen',
-    'Borussia Dortmund':        'Dortmund',
-    'Paris Saint-Germain':      'PSG',
+    'Manchester City':         'Man City',
+    'Manchester United':       'Man Utd',
+    'Tottenham Hotspur':       'Spurs',
+    'Newcastle United':        'Newcastle',
+    'Nottingham Forest':       'Nottm Forest',
+    'West Ham United':         'West Ham',
+    'Wolverhampton Wanderers': 'Wolves',
+    'Brighton & Hove Albion':  'Brighton',
+    'United States':           'USA',
+    'United Arab Emirates':    'UAE',
+    'Saudi Arabia':            'Saudi Arabia',
+    'South Korea':             'S. Korea',
+    'Costa Rica':              'Costa Rica',
+    'New Zealand':             'New Zealand',
   };
   return overrides[name] ?? (name.length > 14 ? name.split(' ').slice(0, 2).join(' ') : name);
 }
@@ -641,4 +442,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { ingest, normaliseH2hItem, oddsHaveMoved };
+module.exports = { ingest, extractH2hRows, oddsHaveMoved };
