@@ -53,7 +53,7 @@ const { createClient } = require('@supabase/supabase-js');
 // ---------------------------------------------------------------------------
 
 const API_FOOTBALL_KEY        = process.env.API_FOOTBALL_KEY;
-const RAPIDAPI_HOST       = 'api-football-v1.p.rapidapi.com';
+const API_HOST = 'v3.football.api-sports.io';
 const SUPABASE_URL        = process.env.SUPABASE_URL;
 const SUPABASE_KEY        = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -85,11 +85,10 @@ function httpGet(path) {
   return new Promise((resolve, reject) => {
     const options = {
       method:   'GET',
-      hostname: RAPIDAPI_HOST,
+      hostname: API_HOST,
       path:     `/v3${path}`,
       headers: {
-        'x-rapidapi-key':  API_FOOTBALL_KEY,
-        'x-rapidapi-host': RAPIDAPI_HOST,
+        'x-apisports-key': API_FOOTBALL_KEY,
       },
     };
     https.request(options, res => {
