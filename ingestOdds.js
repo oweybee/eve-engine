@@ -628,6 +628,13 @@ async function ingest() {
   }
 
   console.log('\n[ingest] complete:', summary);
+
+  if (summary.errors > 0 && summary.leagues === 0) {
+    throw new Error(
+      `all ${summary.errors} league fetches failed — ODDS_API_KEY may be invalid or quota exhausted`
+    );
+  }
+
   return summary;
 }
 
