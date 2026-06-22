@@ -61,8 +61,10 @@ const SUPABASE_KEY        = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const DAILY_BUDGET        = parseInt(process.env.DAILY_REQUEST_BUDGET ?? '200', 10);
 const ACTIVE_START_HOUR   = parseInt(process.env.ACTIVE_START_HOUR    ?? '8',   10);
 const ACTIVE_END_HOUR     = parseInt(process.env.ACTIVE_END_HOUR      ?? '24',  10);
-const DAYS_AHEAD          = parseInt(process.env.DAYS_AHEAD           ?? '3',   10);
-const WC_LEAGUE_ID        = parseInt(process.env.WORLD_CUP_LEAGUE_ID  ?? '894796', 10);
+const DAYS_AHEAD          = parseInt(process.env.DAYS_AHEAD ?? '3', 10);
+// All leagueIds used by this API for the FIFA World Cup (groups, knockouts etc.)
+const WC_LEAGUE_IDS       = (process.env.WORLD_CUP_LEAGUE_IDS ?? '894796,894797,894798,894799,894800')
+  .split(',').map(Number);
 const DRY_RUN             = process.argv.includes('--dry-run');
 
 // ---------------------------------------------------------------------------
@@ -113,8 +115,10 @@ async function fetchFixturesForDate(date) {
   console.log(`[plan] GET ${path}`);
   const json = await httpGet(path);
   const matches = json.response?.matches ?? json.matches ?? [];
-  const wcMatches = matches.filter(m => m.leagueId === WC_LEAGUE_ID);
-  console.log(`[plan]   ${date}: ${matches.length} total, ${wcMatches.length} WC`);
+  const leagueIds = [...new Set(matches.map(m => m.leagueId))];
+  console.log(`[plan]   ${date}: ${matches.length} total — league IDs: ${leagueIds.join(', ')}`);
+  const wcMatches = matches.filter(m => WC_LEAGUE_IDS.includes(m.leagueId));
+  console.log(`[plan]   ${date}: ${wcMatches.length} WC matches`);
   return wcMatches;
 }
 
