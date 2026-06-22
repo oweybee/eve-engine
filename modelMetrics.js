@@ -200,9 +200,64 @@ function evForStakes(modelProb, odds, stakes = [10, 50, 100]) {
 // intersection of value and model confidence, and is deliberately scarce.
 // ---------------------------------------------------------------------------
 
-const RUBY = { edge: 0.08, prob: 0.60, valueScore: 8.0 };
-const STRONG = { edge: 0.05, prob: 0.55 };
+const RUBY     = { edge: 0.08, prob: 0.60, valueScore: 8.0 };
+const STRONG   = { edge: 0.05, prob: 0.55 };
 const STANDARD = { edge: 0.03 };
+
+// ---------------------------------------------------------------------------
+// Signal categorization — sweet-spot detection + outlier downgrade
+//
+// Parallel to the RUBY/STRONG/STANDARD tier system. Operates on edge magnitude
+// and model probability to label each outcome for front-end display:
+//   Prime         — edge in sweet spot AND model prob ≥ 15% → high priority, green
+//   Longshot Edge — edge in sweet spot AND model prob <  15% → deprioritised, orange
+//   Standard      — edge outside sweet spot (too thin or anomalously wide)
+//
+// Sweet spot is 5–25pp. Below 5pp the signal is routine and carries no badge.
+// Above 25pp the market is likely stale, illiquid, or a data error — not
+// actionable. The 15% model-probability floor filters genuine outsiders: even a
+// large edge on a 10%-chance outcome is a statistically volatile bet whose EV
+// is noise in a small sample.
+// ---------------------------------------------------------------------------
+
+/** Model probability floor below which a sweet-spot signal is demoted to Longshot Edge. */
+const OUTSIDER_PROB_THRESHOLD = 0.15; // ≈ 6.50 / +550 decimal/American implied
+
+const SWEET_SPOT_MIN = 0.05; // 5pp — minimum edge to leave Standard
+const SWEET_SPOT_MAX = 0.25; // 25pp — ceiling above which the market is suspect
+
+/**
+ * @typedef {Object} SignalCategory
+ * @property {'Prime'|'Longshot Edge'|'Standard'} tier
+ * @property {'green'|'orange'|null}              badgeColor
+ * @property {'high'|'low'|'none'}                displayPriority
+ */
+
+/**
+ * Categorises a single outcome signal into Prime, Longshot Edge, or Standard.
+ *
+ * The `marketOdds` parameter is accepted for API symmetry and future use
+ * (e.g. market-implied vs model-implied probability comparison) but the
+ * current implementation keys solely on `modelProbability` for the outsider
+ * check — we apply our own model's view of the outcome, not the market's.
+ *
+ * @param {number} modelProbability - Model win probability for this outcome (0–1)
+ * @param {number} marketOdds       - Best available soft-book decimal odds (> 1)
+ * @param {number} calculatedEdge   - Edge over soft-implied probability (decimal)
+ * @returns {SignalCategory}
+ */
+function categorizeSignal(modelProbability, marketOdds, calculatedEdge) {
+  const isSweetSpot = calculatedEdge >= SWEET_SPOT_MIN && calculatedEdge <= SWEET_SPOT_MAX;
+
+  if (isSweetSpot) {
+    if (modelProbability < OUTSIDER_PROB_THRESHOLD) {
+      return { tier: 'Longshot Edge', badgeColor: 'orange', displayPriority: 'low' };
+    }
+    return { tier: 'Prime', badgeColor: 'green', displayPriority: 'high' };
+  }
+
+  return { tier: 'Standard', badgeColor: null, displayPriority: 'none' };
+}
 
 /**
  * Value Score on a 0–10 scale = edge(pp) × modelProb / 0.6, capped at 10.
@@ -250,6 +305,10 @@ module.exports = {
   isRuby,
   signalTier,
   bestTier,
+  categorizeSignal,
   clamp,
-  RUBY_CRITERIA: RUBY,
+  RUBY_CRITERIA:         RUBY,
+  OUTSIDER_PROB_THRESHOLD,
+  SWEET_SPOT_MIN,
+  SWEET_SPOT_MAX,
 };

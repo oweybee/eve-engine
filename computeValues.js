@@ -23,7 +23,7 @@ const { getClient } = require('./lib/supabaseClient');
 
 const {
   consensusStats, dispersion, confidenceScore, confidenceTier, maxEdgeScore, evForStakes, clamp,
-  valueScore, signalTier, bestTier,
+  valueScore, signalTier, bestTier, categorizeSignal,
 } = require('./modelMetrics');
 
 const { computeBookingsModel } = require('./bookingsModel');
@@ -920,6 +920,12 @@ async function computeMatch(match, supabase = null) {
   const awayRuby = tierAway === 'RUBY';
   const signal_tier = bestTier([tierHome, tierDraw, tierAway]);
 
+  // Sweet-spot categorisation (Prime / Longshot Edge / Standard).
+  // Stored with _ prefix — in-memory only until a migration adds the columns.
+  const _homeCat = categorizeSignal(model.home, soft.home, homeEdge ?? 0);
+  const _drawCat = categorizeSignal(model.draw, soft.draw, drawEdge ?? 0);
+  const _awayCat = categorizeSignal(model.away, soft.away, awayEdge ?? 0);
+
   if (signal_tier === 'RUBY') {
     const which = [homeRuby && 'HOME', drawRuby && 'DRAW', awayRuby && 'AWAY'].filter(Boolean).join('/');
     console.log(`    ◆ RUBY signal: ${which}`);
@@ -975,6 +981,9 @@ async function computeMatch(match, supabase = null) {
     ...metrics,
     model_architecture:   modelArchitecture,
     feature_completeness: featureCompleteness,
+    _homeCat:        _homeCat,
+    _drawCat:        _drawCat,
+    _awayCat:        _awayCat,
     _maxEdge:        maxEdge,
     _homeEV:         homeEV,
     _drawEV:         drawEV,
