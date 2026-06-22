@@ -196,6 +196,57 @@ function calcPlan(fixtures, today) {
 }
 
 // ---------------------------------------------------------------------------
+// Upsert match records so ingestOdds.js can link odds to real team names
+// ---------------------------------------------------------------------------
+
+async function upsertMatches(supabase, fixtures) {
+  // Upsert the FIFA World Cup league row
+  const { data: leagueRow, error: le } = await supabase
+    .from('leagues')
+    .upsert({ name: 'FIFA World Cup', country: 'International' }, { onConflict: 'name' })
+    .select('id').single();
+  if (le) { console.warn(`[plan] upsertLeague: ${le.message}`); return; }
+  const leagueId = leagueRow.id;
+
+  let upserted = 0;
+  for (const f of fixtures) {
+    const homeName = f.home?.name ?? f.home?.longName ?? `home_${f.id}`;
+    const awayName = f.away?.name ?? f.away?.longName ?? `away_${f.id}`;
+
+    // Parse kickoff time — format is "DD.MM.YYYY HH:MM" in the API response
+    let kickoffAt = null;
+    if (f.time) {
+      const [datePart, timePart] = f.time.split(' ');
+      const [d, m, y] = datePart.split('.');
+      kickoffAt = `${y}-${m}-${d}T${timePart}:00Z`;
+    }
+
+    const shortName = n => n.length > 12 ? n.split(' ').slice(0, 2).join(' ') : n;
+
+    const { data: homeRow } = await supabase.from('teams')
+      .upsert({ name: homeName, short_name: shortName(homeName) }, { onConflict: 'name' })
+      .select('id').single();
+    const { data: awayRow } = await supabase.from('teams')
+      .upsert({ name: awayName, short_name: shortName(awayName) }, { onConflict: 'name' })
+      .select('id').single();
+    if (!homeRow || !awayRow) continue;
+
+    const { error: me } = await supabase.from('matches').upsert({
+      external_id:   String(f.id),
+      home_team_id:  homeRow.id,
+      away_team_id:  awayRow.id,
+      league_id:     leagueId,
+      kickoff_at:    kickoffAt,
+      status:        'scheduled',
+    }, { onConflict: 'external_id' });
+
+    if (me) console.warn(`[plan] upsertMatch(${f.id}): ${me.message}`);
+    else upserted++;
+  }
+  console.log(`[plan] upserted ${upserted}/${fixtures.length} match records`);
+}
+
+// ---------------------------------------------------------------------------
 // Save plan to Supabase
 // ---------------------------------------------------------------------------
 
@@ -232,6 +283,13 @@ async function main() {
   }
 
   const supabase = getSupabase();
+
+  // Upsert match records with real team names so ingestOdds can link odds correctly
+  try {
+    await upsertMatches(supabase, fixtures);
+  } catch (err) {
+    console.warn(`[plan] upsertMatches failed: ${err.message}`);
+  }
   try {
     await savePlan(supabase, plan);
   } catch (err) {
