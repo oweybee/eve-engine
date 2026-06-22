@@ -115,12 +115,10 @@ async function fetchFixturesForDate(date) {
   console.log(`[plan] GET ${path}`);
   const json = await httpGet(path);
   const matches = json.response?.matches ?? json.matches ?? [];
-  const leagueIds = [...new Set(matches.map(m => m.leagueId))];
-  console.log(`[plan]   ${date}: ${matches.length} total — league IDs: ${leagueIds.join(', ')}`);
-  const wcMatches = matches.filter(m => WC_LEAGUE_IDS.includes(m.leagueId));
-  const unmatched = matches.filter(m => !WC_LEAGUE_IDS.includes(m.leagueId) && m.leagueId > 890000);
-  if (unmatched.length) { const info = [...new Set(unmatched.map(m => m.leagueId + '(' + (m.home?.name ?? '?') + ' v ' + (m.away?.name ?? '?') + ')'))].join(', '); console.log('[plan]   ' + date + ': possible missed WC leagues: ' + info); };
-  console.log(`[plan]   ${date}: ${wcMatches.length} WC matches`);
+  const wcMatches = matches.filter(m =>
+    WC_LEAGUE_IDS.includes(m.leagueId) && !m.status?.finished
+  );
+  console.log(`[plan]   ${date}: ${matches.length} total, ${wcMatches.length} WC upcoming`);
   return wcMatches;
 }
 
