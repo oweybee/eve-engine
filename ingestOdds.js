@@ -173,10 +173,18 @@ function extractH2hRows(oddsItem) {
   const fetchedAt = new Date().toISOString();
 
   // Normalise to an array of bookmaker entries — handle multiple response shapes.
-  const bookmakers =
+  // The API may return bookmakers as an array, a keyed object, or nest them under
+  // different keys. Object.values() handles the keyed-object case gracefully.
+  const rawBookmakers =
     oddsItem?.bookmakers ??
     oddsItem?.odds ??
-    (Array.isArray(oddsItem) ? oddsItem : []);
+    (Array.isArray(oddsItem) ? oddsItem : null);
+
+  const bookmakers = Array.isArray(rawBookmakers)
+    ? rawBookmakers
+    : rawBookmakers && typeof rawBookmakers === 'object'
+      ? Object.values(rawBookmakers)
+      : [];
 
   for (const bm of bookmakers) {
     const name = bm.bookmaker_name ?? bm.name ?? bm.bookmaker ?? '';
