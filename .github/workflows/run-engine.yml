@@ -46,13 +46,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # ingestOdds.js checks the plan and exits immediately if not due.
-      # On a skip tick this step completes in ~1 second with 0 API calls.
-      - name: Ingest odds (plan-gated)
-        run: node ingestOdds.js
+      - name: Ingest Betfair Exchange odds
+        run: node betfairIngest.js
 
-      # Only run downstream steps when ingestOdds actually did work.
-      # We detect this via ingestOdds.js exit code: 0 = ran, 2 = skipped.
       - name: Compute values
         run: node computeValues.js
 
@@ -65,10 +61,6 @@ jobs:
           path: .x_state.json
           key: x-state-${{ github.run_id }}
           restore-keys: x-state-
-
-      - name: Ingest Betfair Exchange odds
-        run: node betfairIngest.js
-        continue-on-error: true
 
       - name: Post signals to Telegram
         run: node postToX.js
