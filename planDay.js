@@ -61,9 +61,9 @@ const SUPABASE_KEY        = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const DAILY_BUDGET        = parseInt(process.env.DAILY_REQUEST_BUDGET ?? '200', 10);
 const ACTIVE_START_HOUR   = parseInt(process.env.ACTIVE_START_HOUR    ?? '8',   10);
 const ACTIVE_END_HOUR     = parseInt(process.env.ACTIVE_END_HOUR      ?? '24',  10);
+const DAYS_AHEAD          = parseInt(process.env.DAYS_AHEAD           ?? '3',   10);
+const WC_LEAGUE_ID        = parseInt(process.env.WORLD_CUP_LEAGUE_ID  ?? '894796', 10);
 const DRY_RUN             = process.argv.includes('--dry-run');
-
-const PLANNER_COST        = 1;
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -104,25 +104,38 @@ function httpGet(path) {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch today's World Cup fixtures
+// Fetch World Cup fixtures for a single date
 // ---------------------------------------------------------------------------
 
-async function fetchTodayFixtures(date) {
-  // Date format for this API: YYYYMMDD
+async function fetchFixturesForDate(date) {
   const apiDate = date.replace(/-/g, '');
   const path = `/football-get-matches-by-date?date=${apiDate}`;
   console.log(`[plan] GET ${path}`);
   const json = await httpGet(path);
   const matches = json.response?.matches ?? json.matches ?? [];
-  // Log unique league IDs to identify the World Cup
-  const leagueIds = [...new Set(matches.map(m => m.leagueId))];
-  console.log(`[plan] league IDs today: ${leagueIds.join(', ')}`);
-
-  const WC_LEAGUE_ID = parseInt(process.env.WORLD_CUP_LEAGUE_ID ?? '894796', 10);
   const wcMatches = matches.filter(m => m.leagueId === WC_LEAGUE_ID);
-  console.log(`[plan] ${matches.length} total matches, ${wcMatches.length} with leagueId ${WC_LEAGUE_ID}`);
+  console.log(`[plan]   ${date}: ${matches.length} total, ${wcMatches.length} WC`);
   return wcMatches;
 }
+
+// ---------------------------------------------------------------------------
+// Fetch World Cup fixtures for today + DAYS_AHEAD days
+// ---------------------------------------------------------------------------
+
+async function fetchUpcomingFixtures(today) {
+  const all = [];
+  for (let i = 0; i < DAYS_AHEAD; i++) {
+    const d = new Date(today);
+    d.setUTCDate(d.getUTCDate() + i);
+    const dateStr = d.toISOString().slice(0, 10);
+    const matches = await fetchFixturesForDate(dateStr);
+    all.push(...matches);
+    if (i < DAYS_AHEAD - 1) await sleep(300); // gentle pause between requests
+  }
+  return all;
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ---------------------------------------------------------------------------
 // Calculate plan
@@ -132,7 +145,7 @@ function calcPlan(fixtures, today) {
   const fixtureIds = fixtures.map(f => f.id);
 
   if (fixtureIds.length === 0) {
-    console.log(`[plan] rest day — no World Cup fixtures on ${today}`);
+    console.log(`[plan] no World Cup fixtures in the next ${DAYS_AHEAD} days`);
     return {
       date:             today,
       fixture_ids:      [],
@@ -143,9 +156,11 @@ function calcPlan(fixtures, today) {
     };
   }
 
+  // Planner cost = 1 request per day fetched
+  const plannerCost   = DAYS_AHEAD;
   // Each run fetches odds for all fixtures in one pass (1 req per fixture).
   const costPerRun    = fixtureIds.length;
-  const runBudget     = DAILY_BUDGET - PLANNER_COST;
+  const runBudget     = DAILY_BUDGET - plannerCost;
   const availableRuns = Math.floor(runBudget / costPerRun);
   const activeMinutes = (ACTIVE_END_HOUR - ACTIVE_START_HOUR) * 60;
   const intervalMins  = Math.ceil(activeMinutes / availableRuns);
@@ -155,9 +170,9 @@ function calcPlan(fixtures, today) {
   const now = new Date();
   const nextRunAt = firstRun < now ? now : firstRun;
 
-  console.log(`[plan] ${today}`);
-  console.log(`  fixtures:       ${fixtureIds.length} (ids: ${fixtureIds.join(', ')})`);
-  console.log(`  budget:         ${DAILY_BUDGET} req/day − ${PLANNER_COST} planner = ${runBudget} for runs`);
+  console.log(`[plan] ${today} (+${DAYS_AHEAD - 1} days ahead)`);
+  console.log(`  fixtures:       ${fixtureIds.length} across ${DAYS_AHEAD} days (ids: ${fixtureIds.join(', ')})`);
+  console.log(`  budget:         ${DAILY_BUDGET} req/day − ${plannerCost} planner = ${runBudget} for runs`);
   console.log(`  cost/run:       ${costPerRun} req (1 per fixture)`);
   console.log(`  available runs: ${availableRuns}`);
   console.log(`  active window:  ${ACTIVE_START_HOUR}:00–${ACTIVE_END_HOUR === 24 ? '00:00+1' : ACTIVE_END_HOUR + ':00'} UTC (${activeMinutes} min)`);
@@ -196,8 +211,8 @@ async function main() {
 
   let fixtures;
   try {
-    fixtures = await fetchTodayFixtures(today);
-    console.log(`[plan] ${fixtures.length} fixture(s) returned from API`);
+    fixtures = await fetchUpcomingFixtures(today);
+    console.log(`[plan] ${fixtures.length} total fixture(s) across next ${DAYS_AHEAD} days`);
   } catch (err) {
     console.error(`[plan] failed to fetch fixtures: ${err.message}`);
     process.exit(1);
