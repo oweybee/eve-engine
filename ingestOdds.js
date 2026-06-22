@@ -132,8 +132,7 @@ async function fetchFixtureOdds(fixtureId) {
   const path = `/football-event-odds?eventid=${fixtureId}&countrycode=${ODDS_COUNTRY}`;
   console.log(`  [odds] GET ${path}`);
   const json = await httpGet(path);
-  console.log(`  [odds] raw: ${JSON.stringify(json).slice(0, 800)}`);
-  return json.response ?? json ?? null;
+  return json.response?.odds ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,44 +169,26 @@ function slugifyBookmaker(name) {
 // ---------------------------------------------------------------------------
 
 function extractH2hRows(oddsItem) {
-  const rows = [];
-  const fetchedAt = new Date().toISOString();
+  // Response shape: { persistentKey, odds: { resolvedOddsMarket: { selections: [{name, oddsDecimal}] } } }
+  const selections = oddsItem?.odds?.resolvedOddsMarket?.selections ?? [];
+  if (!selections.length) return [];
 
-  // Normalise to an array of bookmaker entries — handle multiple response shapes.
-  const bookmakers =
-    oddsItem?.bookmakers ??
-    oddsItem?.odds ??
-    (Array.isArray(oddsItem) ? oddsItem : []);
+  const find = (...keys) => selections.find(s => keys.includes((s.name ?? '').toUpperCase()));
+  const homeS = find('1');
+  const drawS = find('X', 'N');
+  const awayS = find('2');
+  if (!homeS || !drawS || !awayS) return [];
 
-  for (const bm of bookmakers) {
-    const name = bm.bookmaker_name ?? bm.name ?? bm.bookmaker ?? '';
+  const h = parseFloat(homeS.oddsDecimal);
+  const d = parseFloat(drawS.oddsDecimal);
+  const a = parseFloat(awayS.oddsDecimal);
+  if (h <= 1 || d <= 1 || a <= 1 || h > 999) return [];
 
-    // Find the 1X2 / Match Winner market — different APIs label it differently.
-    const markets = bm.markets ?? bm.bets ?? bm.odds ?? [];
-    const h2hMarket = markets.find(m =>
-      /match winner|1x2|match odds|full time result|home\/draw\/away/i.test(m.name ?? m.market ?? m.type ?? '')
-    ) ?? markets[0]; // fallback: first market if only one offered
+  // Bookmaker name from persistentKey e.g. "Bet365_UK CPM" → "bet365"
+  const rawName = (oddsItem.persistentKey ?? '').split('_')[0];
+  const bookmaker = slugifyBookmaker(rawName);
 
-    if (!h2hMarket) continue;
-
-    const outcomes = h2hMarket.outcomes ?? h2hMarket.values ?? h2hMarket.prices ?? [];
-    const find = (...keys) => outcomes.find(o =>
-      keys.some(k => new RegExp(k, 'i').test(o.name ?? o.value ?? o.label ?? ''))
-    );
-
-    const homeO = find('home', '1');
-    const drawO = find('draw', 'x', 'tie');
-    const awayO = find('away', '2');
-    if (!homeO || !drawO || !awayO) continue;
-
-    const h = parseFloat(homeO.odds ?? homeO.odd ?? homeO.price ?? homeO.value ?? 0);
-    const d = parseFloat(drawO.odds ?? drawO.odd ?? drawO.price ?? drawO.value ?? 0);
-    const a = parseFloat(awayO.odds ?? awayO.odd ?? awayO.price ?? awayO.value ?? 0);
-    if (h <= 1 || d <= 1 || a <= 1 || h > 999 || d > 999 || a > 999) continue;
-
-    rows.push({ bookmaker: slugifyBookmaker(name), market: 'h2h', home_odds: h, draw_odds: d, away_odds: a, fetched_at: fetchedAt });
-  }
-  return rows;
+  return [{ bookmaker, market: 'h2h', home_odds: h, draw_odds: d, away_odds: a, fetched_at: new Date().toISOString() }];
 }
 
 // ---------------------------------------------------------------------------
@@ -301,36 +282,30 @@ async function processFixture(supabase, fixtureId, leagueId) {
     return 0;
   }
 
-  // Normalise team/match fields across response shapes
-  const homeTeam      = oddsItem.home_team ?? oddsItem.teams?.home?.name ?? oddsItem.homeTeam ?? `home_${fixtureId}`;
-  const awayTeam      = oddsItem.away_team ?? oddsItem.teams?.away?.name ?? oddsItem.awayTeam ?? `away_${fixtureId}`;
-  const kickoffAt     = oddsItem.date ?? oddsItem.kickoff ?? oddsItem.fixture?.date ?? null;
-  const leagueName    = oddsItem.league?.name ?? oddsItem.tournament?.name ?? 'FIFA World Cup';
-  const leagueCountry = oddsItem.league?.country ?? 'International';
-
   const rows = extractH2hRows(oddsItem);
   if (!rows.length) {
-    console.log(`  [skip] ${homeTeam} vs ${awayTeam} — no valid bookmaker odds`);
+    console.log(`  [skip] fixture ${fixtureId} — no parseable 1X2 odds`);
     return 0;
   }
 
-  console.log(`  ${homeTeam} vs ${awayTeam} (${rows.length} books)`);
+  console.log(`  fixture ${fixtureId} — ${rows[0].bookmaker} H=${rows[0].home_odds} D=${rows[0].draw_odds} A=${rows[0].away_odds}`);
 
   if (DRY_RUN) {
     for (const r of rows) console.log(`    [dry-run] ${r.bookmaker} H=${r.home_odds} D=${r.draw_odds} A=${r.away_odds}`);
     return rows.length;
   }
 
-  const dbLeagueId  = leagueId ?? await upsertLeague(supabase, leagueName, leagueCountry);
-  const homeTeamId  = await upsertTeam(supabase, homeTeam);
-  const awayTeamId  = await upsertTeam(supabase, awayTeam);
-  const matchId     = await upsertMatch(supabase, {
-    externalId:  String(fixtureId),
-    homeTeamId,
-    awayTeamId,
-    leagueId:    dbLeagueId,
-    kickoffAt,
-  });
+  // Find or create the match record
+  let matchId;
+  const { data: existing } = await supabase.from('matches').select('id').eq('external_id', String(fixtureId)).maybeSingle();
+  if (existing) {
+    matchId = existing.id;
+  } else {
+    const dbLeagueId = leagueId ?? await upsertLeague(supabase, 'FIFA World Cup', 'International');
+    const homeTeamId = await upsertTeam(supabase, `team_home_${fixtureId}`);
+    const awayTeamId = await upsertTeam(supabase, `team_away_${fixtureId}`);
+    matchId = await upsertMatch(supabase, { externalId: String(fixtureId), homeTeamId, awayTeamId, leagueId: dbLeagueId, kickoffAt: null });
+  }
 
   return insertOddsRows(supabase, matchId, rows);
 }
