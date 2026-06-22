@@ -47,8 +47,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Ingest Betfair Exchange odds
-        run: node betfairIngest.js
+      - name: Ingest odds (plan-gated, multi-bookmaker)
+        run: node ingestOdds.js
 
       - name: Compute values
         run: node computeValues.js
