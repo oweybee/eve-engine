@@ -66,7 +66,7 @@ function httpGet(path) {
     const options = {
       method:   'GET',
       hostname: API_HOST,
-      path:     `/v3${path}`,
+      path:     path,
       headers: {
         'x-apisports-key': API_FOOTBALL_KEY,
       },
