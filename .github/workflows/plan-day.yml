@@ -15,9 +15,8 @@ jobs:
     env:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      FOOTBALL_DATA_KEY:         ${{ secrets.FOOTBALL_DATA_KEY }}
-      COMPETITION:               'WC'
-      DAILY_REQUEST_BUDGET:      '100'
+      RAPIDAPI_KEY:              ${{ secrets.RAPIDAPI_KEY }}
+      DAILY_REQUEST_BUDGET:      '500'
       ACTIVE_START_HOUR:         '8'
       ACTIVE_END_HOUR:           '24'
 

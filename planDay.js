@@ -52,15 +52,15 @@ const { createClient } = require('@supabase/supabase-js');
 // Config
 // ---------------------------------------------------------------------------
 
-const FOOTBALL_DATA_KEY   = process.env.FOOTBALL_DATA_KEY;
-const API_HOST            = 'api.football-data.org';
-const COMPETITION         = process.env.COMPETITION ?? 'WC'; // WC = FIFA World Cup
+const RAPIDAPI_KEY        = process.env.RAPIDAPI_KEY;
+const API_HOST            = 'free-api-live-football-data.p.rapidapi.com';
+const WORLD_CUP_KEYWORD   = process.env.WORLD_CUP_KEYWORD ?? 'FIFA World Cup';
 const SUPABASE_URL        = process.env.SUPABASE_URL;
 const SUPABASE_KEY        = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const DAILY_BUDGET        = parseInt(process.env.DAILY_REQUEST_BUDGET  ?? '100', 10);
-const ACTIVE_START_HOUR   = parseInt(process.env.ACTIVE_START_HOUR     ?? '8',   10);
-const ACTIVE_END_HOUR     = parseInt(process.env.ACTIVE_END_HOUR       ?? '24',  10);
+const DAILY_BUDGET        = parseInt(process.env.DAILY_REQUEST_BUDGET ?? '200', 10);
+const ACTIVE_START_HOUR   = parseInt(process.env.ACTIVE_START_HOUR    ?? '8',   10);
+const ACTIVE_END_HOUR     = parseInt(process.env.ACTIVE_END_HOUR      ?? '24',  10);
 const DRY_RUN             = process.argv.includes('--dry-run');
 
 const PLANNER_COST        = 1;
@@ -75,18 +75,19 @@ function getSupabase() {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP — football-data.org
+// HTTP — RapidAPI
 // ---------------------------------------------------------------------------
 
 function httpGet(path) {
-  if (!FOOTBALL_DATA_KEY) throw new Error('FOOTBALL_DATA_KEY not set');
+  if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY not set');
   return new Promise((resolve, reject) => {
     const options = {
       method:   'GET',
       hostname: API_HOST,
       path,
       headers: {
-        'X-Auth-Token': FOOTBALL_DATA_KEY,
+        'x-rapidapi-key':  RAPIDAPI_KEY,
+        'x-rapidapi-host': API_HOST,
       },
     };
     https.request(options, res => {
@@ -103,14 +104,23 @@ function httpGet(path) {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch today's fixtures
+// Fetch today's World Cup fixtures
 // ---------------------------------------------------------------------------
 
 async function fetchTodayFixtures(date) {
-  const path = `/v4/competitions/${COMPETITION}/matches?dateFrom=${date}&dateTo=${date}&status=SCHEDULED,LIVE,IN_PLAY,PAUSED`;
+  // Date format for this API: YYYYMMDD
+  const apiDate = date.replace(/-/g, '');
+  const path = `/football-get-matches-by-date?date=${apiDate}`;
   console.log(`[plan] GET ${path}`);
   const json = await httpGet(path);
-  return json.matches ?? [];
+  const matches = json.response?.matches ?? json.matches ?? [];
+  // Filter to World Cup matches only
+  const wcMatches = matches.filter(m => {
+    const league = (m.league?.name ?? m.tournament?.name ?? m.competition?.name ?? '').toLowerCase();
+    return league.includes('world cup');
+  });
+  console.log(`[plan] ${matches.length} total matches, ${wcMatches.length} World Cup`);
+  return wcMatches;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,10 +128,10 @@ async function fetchTodayFixtures(date) {
 // ---------------------------------------------------------------------------
 
 function calcPlan(fixtures, today) {
-  const fixtureIds = fixtures.map(f => f.id);
+  const fixtureIds = fixtures.map(f => f.id ?? f.match_id ?? f.event_id);
 
   if (fixtureIds.length === 0) {
-    console.log(`[plan] rest day — no fixtures on ${today}`);
+    console.log(`[plan] rest day — no World Cup fixtures on ${today}`);
     return {
       date:             today,
       fixture_ids:      [],
@@ -132,7 +142,7 @@ function calcPlan(fixtures, today) {
     };
   }
 
-  // Each run fetches /odds once per fixture.
+  // Each run fetches odds for all fixtures in one pass (1 req per fixture).
   const costPerRun    = fixtureIds.length;
   const runBudget     = DAILY_BUDGET - PLANNER_COST;
   const availableRuns = Math.floor(runBudget / costPerRun);

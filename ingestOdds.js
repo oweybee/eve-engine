@@ -33,19 +33,16 @@ const { createClient } = require('@supabase/supabase-js');
 // Config
 // ---------------------------------------------------------------------------
 
-const API_FOOTBALL_KEY      = process.env.API_FOOTBALL_KEY;
-const API_HOST = 'v3.football.api-sports.io';
+const RAPIDAPI_KEY      = process.env.RAPIDAPI_KEY;
+const API_HOST          = 'free-api-live-football-data.p.rapidapi.com';
+const ODDS_COUNTRY      = process.env.ODDS_COUNTRY ?? 'GB'; // bookmaker country filter
 const SUPABASE_URL      = process.env.SUPABASE_URL;
 const SUPABASE_KEY      = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const ACTIVE_START_HOUR = parseInt(process.env.ACTIVE_START_HOUR ?? '8',  10);
 const ACTIVE_END_HOUR   = parseInt(process.env.ACTIVE_END_HOUR   ?? '24', 10);
 const DRY_RUN           = process.argv.includes('--dry-run');
 
-// Only insert a new odds row when price moves by more than this.
 const MIN_PRICE_MOVEMENT = 0.01;
-
-// API-Football bet type IDs.
-const BET_MATCH_WINNER = 1;
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -61,14 +58,15 @@ function getSupabase() {
 // ---------------------------------------------------------------------------
 
 function httpGet(path) {
-  if (!API_FOOTBALL_KEY) throw new Error('API_FOOTBALL_KEY not set');
+  if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY not set');
   return new Promise((resolve, reject) => {
     const options = {
       method:   'GET',
       hostname: API_HOST,
-      path:     path,
+      path,
       headers: {
-        'x-apisports-key': API_FOOTBALL_KEY,
+        'x-rapidapi-key':  RAPIDAPI_KEY,
+        'x-rapidapi-host': API_HOST,
       },
     };
     https.request(options, res => {
@@ -77,14 +75,8 @@ function httpGet(path) {
       res.on('end', () => {
         if (res.statusCode === 429) { reject(new Error('Rate limit hit')); return; }
         if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`)); return; }
-        try {
-          const parsed = JSON.parse(body);
-          if (parsed.errors && Object.keys(parsed.errors).length > 0) {
-            reject(new Error(`API error: ${JSON.stringify(parsed.errors)}`));
-            return;
-          }
-          resolve(parsed);
-        } catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
+        try { resolve(JSON.parse(body)); }
+        catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
       });
     }).on('error', reject).end();
   });
@@ -137,10 +129,10 @@ async function advancePlan(supabase, plan) {
 // ---------------------------------------------------------------------------
 
 async function fetchFixtureOdds(fixtureId) {
-  const path = `/odds?fixture=${fixtureId}&bet=${BET_MATCH_WINNER}`;
+  const path = `/football-event-odds?eventid=${fixtureId}&countrycode=${ODDS_COUNTRY}`;
   console.log(`  [odds] GET ${path}`);
   const json = await httpGet(path);
-  return json.response?.[0] ?? null;
+  return json.response ?? json ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,28 +170,41 @@ function slugifyBookmaker(name) {
 
 function extractH2hRows(oddsItem) {
   const rows = [];
-  for (const bm of (oddsItem?.bookmakers ?? [])) {
-    const h2hBet = bm.bets?.find(b => b.id === BET_MATCH_WINNER);
-    if (!h2hBet) continue;
+  const fetchedAt = new Date().toISOString();
 
-    const homeVal = h2hBet.values?.find(v => v.value === 'Home');
-    const drawVal = h2hBet.values?.find(v => v.value === 'Draw');
-    const awayVal = h2hBet.values?.find(v => v.value === 'Away');
-    if (!homeVal || !drawVal || !awayVal) continue;
+  // Normalise to an array of bookmaker entries — handle multiple response shapes.
+  const bookmakers =
+    oddsItem?.bookmakers ??
+    oddsItem?.odds ??
+    (Array.isArray(oddsItem) ? oddsItem : []);
 
-    const h = parseFloat(homeVal.odd);
-    const d = parseFloat(drawVal.odd);
-    const a = parseFloat(awayVal.odd);
+  for (const bm of bookmakers) {
+    const name = bm.bookmaker_name ?? bm.name ?? bm.bookmaker ?? '';
+
+    // Find the 1X2 / Match Winner market — different APIs label it differently.
+    const markets = bm.markets ?? bm.bets ?? bm.odds ?? [];
+    const h2hMarket = markets.find(m =>
+      /match winner|1x2|match odds|full time result|home\/draw\/away/i.test(m.name ?? m.market ?? m.type ?? '')
+    ) ?? markets[0]; // fallback: first market if only one offered
+
+    if (!h2hMarket) continue;
+
+    const outcomes = h2hMarket.outcomes ?? h2hMarket.values ?? h2hMarket.prices ?? [];
+    const find = (...keys) => outcomes.find(o =>
+      keys.some(k => new RegExp(k, 'i').test(o.name ?? o.value ?? o.label ?? ''))
+    );
+
+    const homeO = find('home', '1');
+    const drawO = find('draw', 'x', 'tie');
+    const awayO = find('away', '2');
+    if (!homeO || !drawO || !awayO) continue;
+
+    const h = parseFloat(homeO.odds ?? homeO.odd ?? homeO.price ?? homeO.value ?? 0);
+    const d = parseFloat(drawO.odds ?? drawO.odd ?? drawO.price ?? drawO.value ?? 0);
+    const a = parseFloat(awayO.odds ?? awayO.odd ?? awayO.price ?? awayO.value ?? 0);
     if (h <= 1 || d <= 1 || a <= 1 || h > 999 || d > 999 || a > 999) continue;
 
-    rows.push({
-      bookmaker:  slugifyBookmaker(bm.name),
-      market:     'h2h',
-      home_odds:  h,
-      draw_odds:  d,
-      away_odds:  a,
-      fetched_at: new Date().toISOString(),
-    });
+    rows.push({ bookmaker: slugifyBookmaker(name), market: 'h2h', home_odds: h, draw_odds: d, away_odds: a, fetched_at: fetchedAt });
   }
   return rows;
 }
@@ -295,12 +300,12 @@ async function processFixture(supabase, fixtureId, leagueId) {
     return 0;
   }
 
-  const { fixture, league, teams } = oddsItem;
-  const homeTeam    = teams?.home?.name ?? `home_${fixtureId}`;
-  const awayTeam    = teams?.away?.name ?? `away_${fixtureId}`;
-  const kickoffAt   = fixture?.date;
-  const leagueName  = league?.name  ?? 'World Cup';
-  const leagueCountry = league?.country ?? 'International';
+  // Normalise team/match fields across response shapes
+  const homeTeam      = oddsItem.home_team ?? oddsItem.teams?.home?.name ?? oddsItem.homeTeam ?? `home_${fixtureId}`;
+  const awayTeam      = oddsItem.away_team ?? oddsItem.teams?.away?.name ?? oddsItem.awayTeam ?? `away_${fixtureId}`;
+  const kickoffAt     = oddsItem.date ?? oddsItem.kickoff ?? oddsItem.fixture?.date ?? null;
+  const leagueName    = oddsItem.league?.name ?? oddsItem.tournament?.name ?? 'FIFA World Cup';
+  const leagueCountry = oddsItem.league?.country ?? 'International';
 
   const rows = extractH2hRows(oddsItem);
   if (!rows.length) {
