@@ -91,20 +91,38 @@ const SOFT_BOOKS = new Set([
 // ---------------------------------------------------------------------------
 
 async function fetchMatchesForComputation(supabase) {
-  const { data, error } = await supabase
+  const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
       id, kickoff_at, status,
       home_team:teams!matches_home_team_id_fkey ( id, name ),
       away_team:teams!matches_away_team_id_fkey ( id, name ),
-      league:leagues ( id, name ),
-      odds ( bookmaker, market, home_odds, draw_odds, away_odds, market_line, fetched_at )
+      league:leagues ( id, name )
     `)
     .in('status', ['scheduled', 'live'])
     .order('kickoff_at', { ascending: true });
 
-  if (error) throw new Error(`fetchMatchesForComputation: ${error.message}`);
-  return (data ?? []).filter(m => m.odds && m.odds.length > 0);
+  if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
+  if (!matchData?.length) return [];
+
+  const matchIds = matchData.map(m => m.id);
+
+  const { data: oddsData, error: oddsError } = await supabase
+    .from('odds')
+    .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, market_line, fetched_at')
+    .in('match_id', matchIds);
+
+  if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
+
+  const oddsByMatch = {};
+  for (const o of (oddsData ?? [])) {
+    if (!oddsByMatch[o.match_id]) oddsByMatch[o.match_id] = [];
+    oddsByMatch[o.match_id].push(o);
+  }
+
+  return matchData
+    .map(m => ({ ...m, odds: oddsByMatch[m.id] ?? [] }))
+    .filter(m => m.odds.length > 0);
 }
 
 // ---------------------------------------------------------------------------
