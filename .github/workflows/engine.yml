@@ -133,7 +133,7 @@ jobs:
         # --prefer-offline: use cache before network on partial hits
         # --no-audit:       skip vulnerability scan (runs separately in CI)
         # --no-fund:        suppress funding messages from build output
-        run: npm ci --prefer-offline --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
       # ── Pipeline ─────────────────────────────────────────────────────────────
       # Each step has a unique `id` so the failure alert can report exactly
