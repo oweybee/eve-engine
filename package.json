@@ -13,7 +13,7 @@
     "@supabase/supabase-js": "^2.0.0"
   },
   "optionalDependencies": {
-    "onnxruntime-node": "^1.17.3"
+    "onnxruntime-node": "^1.27.0"
   },
   "engines": {
     "node": ">=18"
