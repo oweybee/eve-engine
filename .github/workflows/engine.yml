@@ -151,6 +151,7 @@ jobs:
 
       - name: Capture snapshot
         id: snapshot
+        continue-on-error: true
         run: node captureSnapshot.js
 
       - name: Compute values
