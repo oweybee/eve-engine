@@ -29,7 +29,13 @@ const {
 const { computeBookingsModel } = require('./bookingsModel');
 const { computeCornersModel }  = require('./cornersModel');
 const { buildFeatureVector, MIN_COMPLETENESS } = require('./features');
-const { ensembleInference, ensembleAvailable } = require('./ensemble/inference');
+const {
+  initSessions,
+  xgboostPrematchInference,
+  supermodelPrematchInference,
+  ensembleInference,
+  ensembleAvailable,
+} = require('./ensemble/inference');
 
 // Dixon-Coles structural constants (kept in sync with matchProbabilities)
 const DC_BASE = 1.35;
@@ -601,7 +607,25 @@ async function computeMatch(match, supabase = null) {
     ? SHARPNESS_MULTI_BOOK
     : SHARPNESS_SINGLE_BOOK;
 
-  // Model probability — try ML Ensemble first, fall back to Dixon-Coles Poisson.
+  // ── Model dispatch (priority order) ─────────────────────────────────────────
+  //
+  //   Tier 1 — XGBOOST_PREMATCH  (match_predictor.onnx)     ← PRIMARY
+  //            22-feature XGBoost trained on our settled match history.
+  //            Features: identical to features.js output — no extra work.
+  //
+  //   Tier 2 — SUPERMODEL_PREMATCH v2  (supermodel_prematch_v2.onnx)
+  //            23-feature XGBoost (ELO + form + H2H + league OHE). Falls
+  //            back to v1 (18-dim) when v2 absent.
+  //
+  //   Tier 3 — ML_ENSEMBLE  (match_odds.onnx)
+  //            Legacy 22-feature rolling-stats ensemble. Retained as fallback;
+  //            also provides btts + over/under probabilities.
+  //
+  //   Tier 4 — DIXON_COLES  [DEPRECATED]
+  //            Used only when NO ONNX models are available. Every invocation
+  //            emits a [DEPRECATED] log line. Remove once training data is
+  //            sufficient to guarantee the XGBoost model is always present.
+  //
   let model;
   let modelArchitecture = 'DIXON_COLES';
   let featureCompleteness = null;
@@ -611,28 +635,89 @@ async function computeMatch(match, supabase = null) {
       const fv = await buildFeatureVector(supabase, match);
       if (fv) {
         featureCompleteness = fv.completeness;
-        const ensembleResult = await ensembleInference(fv.features, fv.completeness, MIN_COMPLETENESS);
-        if (ensembleResult) {
-          model = {
-            home:    ensembleResult.home,
-            draw:    ensembleResult.draw,
-            away:    ensembleResult.away,
-            bttsYes: ensembleResult.btts ?? null,
-            overProb: ensembleResult.over ?? null,
-          };
-          modelArchitecture = 'ML_ENSEMBLE';
-          console.log(`    [ensemble] ${homeStr} vs ${awayStr}: H=${(model.home*100).toFixed(0)}% D=${(model.draw*100).toFixed(0)}% A=${(model.away*100).toFixed(0)}% (completeness ${(featureCompleteness*100).toFixed(0)}%)`);
+
+        // ── Tier 1: XGBoost pre-match (PRIMARY) ─────────────────────────────
+        if (featureCompleteness >= MIN_COMPLETENESS) {
+          const xgbResult = await xgboostPrematchInference(fv.features);
+          if (xgbResult) {
+            model = {
+              home:     xgbResult.home,
+              draw:     xgbResult.draw,
+              away:     xgbResult.away,
+              bttsYes:  null,
+              overProb: null,
+            };
+            modelArchitecture = 'XGBOOST_PREMATCH';
+            console.log(
+              `    [xgboost] ${homeStr} vs ${awayStr}: ` +
+              `H=${(model.home*100).toFixed(0)}% D=${(model.draw*100).toFixed(0)}% A=${(model.away*100).toFixed(0)}% ` +
+              `(completeness ${(featureCompleteness*100).toFixed(0)}%)`,
+            );
+          }
+        }
+
+        // ── Tier 2: Supermodel prematch v2 ──────────────────────────────────
+        // Requires ELO + form features supplied externally (not from features.js).
+        // computeValues.js does not currently build the supermodel prematch
+        // feature vector, so this tier is wired but will return null until
+        // the caller supplies prematch ELO features.  Keeping the call here
+        // means it activates automatically once that integration lands.
+        if (!model) {
+          const prematchResult = await supermodelPrematchInference(fv.features);
+          if (prematchResult) {
+            model = {
+              home:     prematchResult.home,
+              draw:     prematchResult.draw,
+              away:     prematchResult.away,
+              bttsYes:  null,
+              overProb: null,
+            };
+            modelArchitecture = 'SUPERMODEL_PREMATCH';
+            console.log(
+              `    [supermodel-prematch] ${homeStr} vs ${awayStr}: ` +
+              `H=${(model.home*100).toFixed(0)}% D=${(model.draw*100).toFixed(0)}% A=${(model.away*100).toFixed(0)}%`,
+            );
+          }
+        }
+
+        // ── Tier 3: Legacy ML_ENSEMBLE ───────────────────────────────────────
+        if (!model) {
+          const ensembleResult = await ensembleInference(fv.features, fv.completeness, MIN_COMPLETENESS);
+          if (ensembleResult) {
+            model = {
+              home:     ensembleResult.home,
+              draw:     ensembleResult.draw,
+              away:     ensembleResult.away,
+              bttsYes:  ensembleResult.btts ?? null,
+              overProb: ensembleResult.over ?? null,
+            };
+            modelArchitecture = 'ML_ENSEMBLE';
+            console.log(
+              `    [ensemble] ${homeStr} vs ${awayStr}: ` +
+              `H=${(model.home*100).toFixed(0)}% D=${(model.draw*100).toFixed(0)}% A=${(model.away*100).toFixed(0)}% ` +
+              `(completeness ${(featureCompleteness*100).toFixed(0)}%)`,
+            );
+          }
         }
       }
     }
   } catch (err) {
-    console.warn(`    [ensemble] error, falling back to Dixon-Coles: ${err.message}`);
+    console.warn(`    [ensemble] error in model dispatch, falling back to Dixon-Coles: ${err.message}`);
   }
 
+  // ── Tier 4: Dixon-Coles [DEPRECATED] ─────────────────────────────────────
+  // Reached only when onnxruntime is absent or all ONNX models failed.
+  // To permanently retire this path: train match_predictor.onnx and ensure
+  // onnxruntime-node is installed (already listed as optionalDependency).
   if (!model) {
     const sharpnessTier = softBookCount >= MULTI_BOOK_THRESHOLD ? 'multi' : 'single';
     model = matchProbabilities(homeStr, awayStr, effectiveSharpness, homeAdvMultiplier);
-    console.log(`    [dixon-coles] ${homeStr} vs ${awayStr}: H=${(model.home*100).toFixed(0)}% D=${(model.draw*100).toFixed(0)}% A=${(model.away*100).toFixed(0)}% (s=${effectiveSharpness.toFixed(1)} tier=${sharpnessTier} books=${softBookCount})`);
+    console.log(
+      `    [DEPRECATED:dixon-coles] ${homeStr} vs ${awayStr}: ` +
+      `H=${(model.home*100).toFixed(0)}% D=${(model.draw*100).toFixed(0)}% A=${(model.away*100).toFixed(0)}% ` +
+      `(s=${effectiveSharpness.toFixed(1)} tier=${sharpnessTier} books=${softBookCount}) ` +
+      `— install onnxruntime-node + train match_predictor.onnx to retire this fallback`,
+    );
   }
 
   // Best soft odds (h2h)
@@ -1154,6 +1239,14 @@ async function run() {
     console.log('[engine] nothing to process');
     return { processed: 0, skipped: 0, botd: null };
   }
+
+  // Pre-warm ALL ONNX sessions before the concurrency pool starts.
+  // This ensures the first match in the pool hits an already-initialised
+  // InferenceSession rather than paying the one-time ONNX graph compilation
+  // cost (typically 200–800 ms) mid-pool, which would skew that slot's latency.
+  // initSessions() is idempotent: subsequent calls are no-ops (cache hit).
+  console.log('[engine] initialising ONNX inference sessions…');
+  await initSessions();
 
   // P2-3: Concurrency-limited pool — processes up to COMPUTE_CONCURRENCY matches
   // simultaneously instead of serially. Each computeMatch fires 6 parallel
