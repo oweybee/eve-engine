@@ -1,0 +1,50 @@
+name: Train ML Models
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 1'   # Every Monday at 03:00 UTC (off-peak)
+
+jobs:
+  train:
+    name: Retrain ONNX Models
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install ML dependencies
+        run: |
+          pip install --upgrade pip
+          pip install xgboost lightgbm scikit-learn supabase onnx onnxmltools numpy pandas
+
+      - name: Train models
+        run: python3 ensemble/train.py --output-dir ensemble/models --min-samples 300
+
+      - name: Commit updated ONNX files
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ensemble/models/match_odds.onnx ensemble/models/btts.onnx \
+                  ensemble/models/over_under.onnx  ensemble/models/metadata.json
+          git diff --cached --quiet || git commit -m "chore: retrain ML ensemble models [skip ci]"
+          git push origin main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
