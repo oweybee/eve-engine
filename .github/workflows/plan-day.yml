@@ -16,7 +16,7 @@ jobs:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
-      DAILY_REQUEST_BUDGET:      '500'
+      DAILY_REQUEST_BUDGET:      '75000'
       DAYS_AHEAD:                '1'
       ACTIVE_START_HOUR:         '8'
       ACTIVE_END_HOUR:           '24'

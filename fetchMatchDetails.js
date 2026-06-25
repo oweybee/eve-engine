@@ -286,7 +286,21 @@ async function main() {
     }
   }
 
-  console.log(`[details] predictions: ${counts.predictions}, lineups: ${counts.lineups}, stats: ${counts.stats}`);
+  // Each prediction fetch = 1 call; each lineup fetch = 1 call; each stats fetch = 1 call
+  const totalCalls = counts.predictions + counts.lineups + counts.stats;
+  console.log(`[details] predictions: ${counts.predictions}, lineups: ${counts.lineups}, stats: ${counts.stats}, api_calls: ${totalCalls}`);
+
+  // Increment details_calls_used in today's engine_plan for quota reporting
+  if (totalCalls > 0) {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: plan } = await supabase
+      .from('engine_plan').select('details_calls_used').eq('date', today).maybeSingle();
+    if (plan != null) {
+      await supabase.from('engine_plan')
+        .update({ details_calls_used: (plan.details_calls_used ?? 0) + totalCalls })
+        .eq('date', today);
+    }
+  }
 }
 
 main().catch(err => {
