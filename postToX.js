@@ -21,7 +21,7 @@ const https = require('https');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 
-const MAX_SIGNAL_AGE_HOURS = parseInt(process.env.X_MAX_AGE_HOURS ?? '4', 10);
+const MAX_SIGNAL_AGE_HOURS = parseInt(process.env.X_MAX_AGE_HOURS ?? '48', 10);
 const DRY_RUN              = process.env.DRY_RUN === '1';
 const CHANNEL              = 'telegram';
 const RUN_ID               = process.env.GITHUB_RUN_ID ?? 'local';
@@ -52,7 +52,11 @@ function getTelegramConfig() {
  * @returns {Promise<Set<string>>}
  */
 async function loadPostedIds(supabase) {
-  const since = new Date(Date.now() - MAX_SIGNAL_AGE_HOURS * 60 * 60 * 1000).toISOString();
+  // Load ALL previously posted signal IDs for this channel — the unique constraint
+  // on (signal_id, channel) already prevents duplicate posts; the time filter here
+  // is purely a DB scan optimisation. Use a wide window (30 days) to cover any
+  // signal that might still have a pending kickoff.
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const { data, error } = await supabase
     .from('posted_signals')
     .select('signal_id')
@@ -94,7 +98,9 @@ async function markPosted(supabase, signalId, messageHash, externalMsgId) {
 // ── Data fetching ─────────────────────────────────────────────────────────────
 
 async function fetchRecentSignals(supabase) {
-  const since        = new Date(Date.now() - MAX_SIGNAL_AGE_HOURS * 60 * 60 * 1000).toISOString();
+  // Post any pending signal whose kickoff is still in the future (or up to 2h past).
+  // We filter on kickoff_at rather than detected_at so signals detected days ago
+  // for upcoming matches still get posted.
   const kickoffFloor = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 
   const { data, error } = await supabase
@@ -107,9 +113,9 @@ async function fetchRecentSignals(supabase) {
         league:leagues ( name )
       )
     `)
-    .gte('detected_at', since)
+    .eq('result', 'pending')
     .gte('kickoff_at', kickoffFloor)
-    .order('detected_at', { ascending: true });
+    .order('kickoff_at', { ascending: true });
 
   if (error) throw new Error(`fetchRecentSignals: ${error.message}`);
   return data ?? [];

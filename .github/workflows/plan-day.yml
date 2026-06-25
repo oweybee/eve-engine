@@ -17,7 +17,7 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       RAPIDAPI_KEY:              ${{ secrets.RAPIDAPI_KEY }}
       DAILY_REQUEST_BUDGET:      '500'
-      DAYS_AHEAD:                '3'
+      DAYS_AHEAD:                '1'
       ACTIVE_START_HOUR:         '8'
       ACTIVE_END_HOUR:           '24'
 

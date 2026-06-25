@@ -61,7 +61,7 @@ const SUPABASE_KEY        = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const DAILY_BUDGET        = parseInt(process.env.DAILY_REQUEST_BUDGET ?? '200', 10);
 const ACTIVE_START_HOUR   = parseInt(process.env.ACTIVE_START_HOUR    ?? '8',   10);
 const ACTIVE_END_HOUR     = parseInt(process.env.ACTIVE_END_HOUR      ?? '24',  10);
-const DAYS_AHEAD          = parseInt(process.env.DAYS_AHEAD ?? '3', 10);
+const DAYS_AHEAD          = parseInt(process.env.DAYS_AHEAD ?? '1', 10);
 // All leagueIds used by this API for the FIFA World Cup (groups, knockouts etc.)
 const WC_LEAGUE_IDS       = (process.env.WORLD_CUP_LEAGUE_IDS ?? '894796,894797,894798,894799,894800,894801,894802,894803,894804,894805')
   .split(',').map(Number);
@@ -80,29 +80,44 @@ function getSupabase() {
 // HTTP — RapidAPI
 // ---------------------------------------------------------------------------
 
-function httpGet(path) {
+function httpGetOnce(path) {
   if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY not set');
   return new Promise((resolve, reject) => {
-    const options = {
-      method:   'GET',
-      hostname: API_HOST,
-      path,
-      headers: {
-        'x-rapidapi-key':  RAPIDAPI_KEY,
-        'x-rapidapi-host': API_HOST,
+    https.request(
+      {
+        method:   'GET',
+        hostname: API_HOST,
+        path,
+        headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': API_HOST },
       },
-    };
-    https.request(options, res => {
-      let body = '';
-      res.on('data', c => { body += c; });
-      res.on('end', () => {
-        if (res.statusCode === 429) { reject(new Error('Rate limit hit')); return; }
-        if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`)); return; }
-        try { resolve(JSON.parse(body)); }
-        catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
-      });
-    }).on('error', reject).end();
+      res => {
+        let body = '';
+        res.on('data', c => { body += c; });
+        res.on('end', () => {
+          if (res.statusCode === 429) { reject(Object.assign(new Error('Rate limit hit'), { is429: true })); return; }
+          if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`)); return; }
+          try { resolve(JSON.parse(body)); }
+          catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
+        });
+      },
+    ).on('error', reject).end();
   });
+}
+
+async function httpGet(path, retries = 3, baseDelayMs = 60_000) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await httpGetOnce(path);
+    } catch (err) {
+      if (err.is429 && attempt < retries) {
+        const delay = baseDelayMs * attempt;
+        console.warn(`[plan] 429 on attempt ${attempt}/${retries} — waiting ${delay / 1000}s before retry`);
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
