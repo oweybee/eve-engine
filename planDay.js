@@ -19,6 +19,7 @@
  *
  * Required env vars:
  *   API_FOOTBALL_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+
  *
  * Optional env vars:
  *   WORLD_CUP_LEAGUE_ID   — API-Football league ID (default: 1)
@@ -52,9 +53,8 @@ const { createClient } = require('@supabase/supabase-js');
 // Config
 // ---------------------------------------------------------------------------
 
-const RAPIDAPI_KEY        = process.env.RAPIDAPI_KEY;
-const API_HOST            = 'free-api-live-football-data.p.rapidapi.com';
-const WORLD_CUP_KEYWORD   = process.env.WORLD_CUP_KEYWORD ?? 'FIFA World Cup';
+const API_FOOTBALL_KEY    = process.env.API_FOOTBALL_KEY;
+const API_FOOTBALL_HOST   = 'v3.football.api-sports.io';
 const SUPABASE_URL        = process.env.SUPABASE_URL;
 const SUPABASE_KEY        = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -62,9 +62,8 @@ const DAILY_BUDGET        = parseInt(process.env.DAILY_REQUEST_BUDGET ?? '200', 
 const ACTIVE_START_HOUR   = parseInt(process.env.ACTIVE_START_HOUR    ?? '8',   10);
 const ACTIVE_END_HOUR     = parseInt(process.env.ACTIVE_END_HOUR      ?? '24',  10);
 const DAYS_AHEAD          = parseInt(process.env.DAYS_AHEAD ?? '1', 10);
-// All leagueIds used by this API for the FIFA World Cup (groups, knockouts etc.)
-const WC_LEAGUE_IDS       = (process.env.WORLD_CUP_LEAGUE_IDS ?? '894796,894797,894798,894799,894800,894801,894802,894803,894804,894805')
-  .split(',').map(Number);
+const WORLD_CUP_LEAGUE_ID = parseInt(process.env.WORLD_CUP_LEAGUE_ID ?? '1', 10);
+const FOOTBALL_SEASON     = parseInt(process.env.FOOTBALL_SEASON ?? String(new Date().getUTCFullYear()), 10);
 const DRY_RUN             = process.argv.includes('--dry-run');
 
 // ---------------------------------------------------------------------------
@@ -77,18 +76,18 @@ function getSupabase() {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP — RapidAPI
+// HTTP — API-Football v3
 // ---------------------------------------------------------------------------
 
 function httpGetOnce(path) {
-  if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY not set');
+  if (!API_FOOTBALL_KEY) throw new Error('API_FOOTBALL_KEY not set');
   return new Promise((resolve, reject) => {
     https.request(
       {
         method:   'GET',
-        hostname: API_HOST,
+        hostname: API_FOOTBALL_HOST,
         path,
-        headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': API_HOST },
+        headers: { 'x-apisports-key': API_FOOTBALL_KEY },
       },
       res => {
         let body = '';
@@ -125,19 +124,15 @@ async function httpGet(path, retries = 3, baseDelayMs = 60_000) {
 // ---------------------------------------------------------------------------
 
 async function fetchFixturesForDate(date) {
-  const apiDate = date.replace(/-/g, '');
-  const path = `/football-get-matches-by-date?date=${apiDate}`;
+  const path = `/fixtures?date=${date}&league=${WORLD_CUP_LEAGUE_ID}&season=${FOOTBALL_SEASON}`;
   console.log(`[plan] GET ${path}`);
   const json = await httpGet(path);
-  const matches = json.response?.matches ?? json.matches ?? [];
-  // P0-7 fix: API returns leagueId as a string ("894796"), but WC_LEAGUE_IDS
-  // is Number[]. String !== Number so .includes() always returned false,
-  // producing a silently empty plan. Coerce both sides to Number before compare.
-  const wcMatches = matches.filter(m =>
-    WC_LEAGUE_IDS.includes(Number(m.leagueId)) && !m.status?.finished
-  );
-  console.log(`[plan]   ${date}: ${matches.length} total, ${wcMatches.length} WC upcoming`);
-  return wcMatches;
+  const fixtures = json.response ?? [];
+  // Filter out already-finished fixtures (FT = full time, AET = after extra time, PEN = penalties)
+  const FINISHED_STATUSES = ['FT', 'AET', 'PEN'];
+  const upcoming = fixtures.filter(f => !FINISHED_STATUSES.includes(f.fixture?.status?.short));
+  console.log(`[plan]   ${date}: ${fixtures.length} total, ${upcoming.length} upcoming`);
+  return upcoming;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,10 +159,10 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // ---------------------------------------------------------------------------
 
 function calcPlan(fixtures, today) {
-  const fixtureIds = fixtures.map(f => f.id);
+  const fixtureIds = fixtures.map(f => f.fixture.id);
 
   if (fixtureIds.length === 0) {
-    console.log(`[plan] no World Cup fixtures in the next ${DAYS_AHEAD} days`);
+    console.log(`[plan] no upcoming World Cup fixtures in the next ${DAYS_AHEAD} days`);
     return {
       date:             today,
       fixture_ids:      [],
@@ -226,16 +221,12 @@ async function upsertMatches(supabase, fixtures) {
 
   let upserted = 0;
   for (const f of fixtures) {
-    const homeName = f.home?.name ?? f.home?.longName ?? `home_${f.id}`;
-    const awayName = f.away?.name ?? f.away?.longName ?? `away_${f.id}`;
+    const fixtureId = f.fixture.id;
+    const homeName  = f.teams?.home?.name ?? `home_${fixtureId}`;
+    const awayName  = f.teams?.away?.name ?? `away_${fixtureId}`;
 
-    // Parse kickoff time — format is "DD.MM.YYYY HH:MM" in the API response
-    let kickoffAt = null;
-    if (f.time) {
-      const [datePart, timePart] = f.time.split(' ');
-      const [d, m, y] = datePart.split('.');
-      kickoffAt = `${y}-${m}-${d}T${timePart}:00Z`;
-    }
+    // kickoff is an ISO 8601 string e.g. "2026-06-25T20:00:00+00:00"
+    const kickoffAt = f.fixture?.date ?? null;
 
     const shortName = n => n.length > 12 ? n.split(' ').slice(0, 2).join(' ') : n;
 
@@ -248,7 +239,7 @@ async function upsertMatches(supabase, fixtures) {
     if (!homeRow || !awayRow) continue;
 
     const { error: me } = await supabase.from('matches').upsert({
-      external_id:   String(f.id),
+      external_id:   String(fixtureId),
       home_team_id:  homeRow.id,
       away_team_id:  awayRow.id,
       league_id:     leagueId,
@@ -256,7 +247,7 @@ async function upsertMatches(supabase, fixtures) {
       status:        'scheduled',
     }, { onConflict: 'external_id' });
 
-    if (me) console.warn(`[plan] upsertMatch(${f.id}): ${me.message}`);
+    if (me) console.warn(`[plan] upsertMatch(${fixtureId}): ${me.message}`);
     else upserted++;
   }
   console.log(`[plan] upserted ${upserted}/${fixtures.length} match records`);

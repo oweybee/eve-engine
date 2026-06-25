@@ -2,13 +2,14 @@
 # MaxEdge EVE Engine  —  15-minute value detection pipeline
 #
 # Pipeline per tick:
-#   1. ingestOdds.js       — pull latest odds from RapidAPI; plan-gated, so most
-#                            ticks cost zero API requests outside the active window
-#   2. captureSnapshot.js  — record best odds per outcome + CLV open/closing snaps
-#   3. computeValues.js    — Dixon-Coles / ML ensemble edge detection; upserts
-#                            computed_values, writes value_signals
-#   4. postToX.js          — fire Telegram alerts for new value signals
-#   5. fetchResults.js     — settle completed fixtures (scores → value_signals)
+#   1. ingestOdds.js        — pull latest odds from API-Football; plan-gated, so most
+#                             ticks cost zero API requests outside the active window
+#   2. captureSnapshot.js   — record best odds per outcome + CLV open/closing snaps
+#   3. computeValues.js     — Dixon-Coles / ML ensemble edge detection; upserts
+#                             computed_values, writes value_signals
+#   4. postToX.js           — fire Telegram alerts for new value signals
+#   5. fetchResults.js      — settle completed fixtures (scores → value_signals)
+#   6. fetchMatchDetails.js — lineups, predictions, match stats (continue-on-error)
 #
 # Companion workflow: plan-day.yml fires at 05:00 UTC and writes the daily
 # engine_plan to Supabase; ingestOdds.js reads this plan to self-gate.
@@ -67,9 +68,9 @@ jobs:
 
     # ── Environment variables ─────────────────────────────────────────────────
     # Secrets (sensitive — rotate quarterly, never log):
-    #   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RAPIDAPI_KEY,
+    #   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, API_FOOTBALL_KEY,
     #   BETFAIR_APP_KEY, BETFAIR_USERNAME, BETFAIR_PASSWORD,
-    #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, API_FOOTBALL_KEY
+    #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
     # Variables (non-sensitive tuning params — set in Repo > Settings > Variables):
     #   SHARPNESS_MULTI_BOOK, SHARPNESS_SINGLE_BOOK, MULTI_BOOK_THRESHOLD,
     #   COMPUTE_CONCURRENCY, EV_THRESHOLD, MIN_PROB, MAX_ODDS, SIGNAL_EDGE,
@@ -79,8 +80,8 @@ jobs:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-      # ── Odds API ─────────────────────────────────────────────────────────────
-      RAPIDAPI_KEY:              ${{ secrets.RAPIDAPI_KEY }}
+      # ── Odds API (API-Football v3) ───────────────────────────────────────────
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
 
       # ── Betfair Exchange ─────────────────────────────────────────────────────
       BETFAIR_APP_KEY:           ${{ secrets.BETFAIR_APP_KEY }}
@@ -91,8 +92,7 @@ jobs:
       TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
 
-      # ── Result settlement (API-Football / API-Sports) ─────────────────────────
-      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+      # ── Result settlement / match details (API-Football v3) ─────────────────
 
       # ── Active window (must match plan-day.yml) ───────────────────────────────
       ACTIVE_START_HOUR:         ${{ vars.ACTIVE_START_HOUR  || '8'  }}
@@ -171,6 +171,11 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_results != 'true' }}
         run: node fetchResults.js
 
+      - name: Fetch match details (lineups + stats)
+        id: details
+        continue-on-error: true
+        run: node fetchMatchDetails.js
+
       # ── Failure telemetry ─────────────────────────────────────────────────────
       # Fires IF AND ONLY IF any previous step failed (or the job timed out).
       # Uses `jq` (pre-installed on ubuntu-latest) to construct the JSON payload
@@ -200,6 +205,7 @@ jobs:
           [ "${{ steps.compute.outcome }}"  = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`compute-values\` (computeValues.js)"
           [ "${{ steps.post.outcome }}"     = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`post-signals\` (postToX.js)"
           [ "${{ steps.results.outcome }}"  = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`settle-results\` (fetchResults.js)"
+          [ "${{ steps.details.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`fetch-details\` (fetchMatchDetails.js)"
 
           # If no named step failed, the failure is in checkout / setup / install.
           [ -z "$FAILED_STEPS" ] && FAILED_STEPS="\n• \`setup\` (checkout / node / npm ci)"

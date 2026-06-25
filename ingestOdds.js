@@ -20,10 +20,9 @@
  *   The API may return a single object or an array; both are now handled.
  *
  * Required env vars:
- *   RAPIDAPI_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+ *   API_FOOTBALL_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  *
  * Optional env vars:
- *   ODDS_COUNTRY       — bookmaker country filter (default: GB)
  *   ACTIVE_START_HOUR  — UTC hour to start polling (default: 8)
  *   ACTIVE_END_HOUR    — UTC hour to stop polling  (default: 24)
  *
@@ -41,9 +40,8 @@ const { getClient }    = require('./lib/supabaseClient');
 // Config
 // ---------------------------------------------------------------------------
 
-const RAPIDAPI_KEY      = process.env.RAPIDAPI_KEY;
-const API_HOST          = 'free-api-live-football-data.p.rapidapi.com';
-const ODDS_COUNTRY      = process.env.ODDS_COUNTRY ?? 'GB';
+const API_FOOTBALL_KEY  = process.env.API_FOOTBALL_KEY;
+const API_HOST          = 'v3.football.api-sports.io';
 const ACTIVE_START_HOUR = parseInt(process.env.ACTIVE_START_HOUR ?? '8',  10);
 const ACTIVE_END_HOUR   = parseInt(process.env.ACTIVE_END_HOUR   ?? '24', 10);
 const DRY_RUN           = process.argv.includes('--dry-run');
@@ -51,12 +49,11 @@ const DRY_RUN           = process.argv.includes('--dry-run');
 const MIN_PRICE_MOVEMENT = 0.01;
 
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// HTTP — RapidAPI
+// HTTP — API-Football v3
 // ---------------------------------------------------------------------------
 
 function httpGetOnce(path) {
-  if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY not set');
+  if (!API_FOOTBALL_KEY) throw new Error('API_FOOTBALL_KEY not set');
   return new Promise((resolve, reject) => {
     https.request(
       {
@@ -64,8 +61,7 @@ function httpGetOnce(path) {
         hostname: API_HOST,
         path,
         headers: {
-          'x-rapidapi-key':  RAPIDAPI_KEY,
-          'x-rapidapi-host': API_HOST,
+          'x-apisports-key': API_FOOTBALL_KEY,
         },
       },
       res => {
@@ -200,13 +196,14 @@ async function prefetchLastOdds(supabase, matchIds) {
 // ---------------------------------------------------------------------------
 
 async function fetchFixtureOdds(fixtureId) {
-  const path = `/football-event-odds?eventid=${fixtureId}&countrycode=${ODDS_COUNTRY}`;
+  const path = `/odds?fixture=${fixtureId}&bet=1`;
   console.log(`  [odds] GET ${path}`);
   const json = await httpGet(path);
-  if (!json.response?.odds) {
+  if (!json.response?.length) {
     console.log(`  [debug] raw response: ${JSON.stringify(json).slice(0, 500)}`);
   }
-  return json.response?.odds ?? null;
+  // Return the bookmakers array from the first response item, or empty array
+  return json.response?.[0]?.bookmakers ?? [];
 }
 
 // ---------------------------------------------------------------------------
@@ -243,32 +240,34 @@ function slugifyBookmaker(name) {
 // ---------------------------------------------------------------------------
 
 /**
- * Extracts a 1X2 odds row from a single oddsItem object.
- * Shape: { persistentKey, odds: { resolvedOddsMarket: { selections: [{name, oddsDecimal}] } } }
+ * Extracts a 1X2 odds row from a single API-Football bookmaker object.
+ * Shape: { id, name, bets: [{ id, name, values: [{ value, odd }] }] }
+ * We look for the Match Winner bet (id === 1) with Home / Draw / Away values.
  *
- * @param {object} oddsItem
+ * @param {object} bookmaker
  * @returns {Array<{bookmaker:string, market:string, home_odds:number, draw_odds:number, away_odds:number, fetched_at:string}>}
  */
-function extractH2hRows(oddsItem) {
-  const selections = oddsItem?.odds?.resolvedOddsMarket?.selections ?? [];
-  if (!selections.length) return [];
+function extractH2hRows(bookmaker) {
+  // Find the Match Winner market (bet id 1)
+  const matchWinner = (bookmaker?.bets ?? []).find(b => b.id === 1);
+  if (!matchWinner) return [];
 
-  const find = (...keys) => selections.find(s => keys.includes((s.name ?? '').toUpperCase()));
-  const homeS = find('1');
-  const drawS = find('X', 'N');
-  const awayS = find('2');
-  if (!homeS || !drawS || !awayS) return [];
+  const values = matchWinner.values ?? [];
+  const find   = label => values.find(v => (v.value ?? '').toLowerCase() === label.toLowerCase());
+  const homeV  = find('Home');
+  const drawV  = find('Draw');
+  const awayV  = find('Away');
+  if (!homeV || !drawV || !awayV) return [];
 
-  const h = parseFloat(homeS.oddsDecimal);
-  const d = parseFloat(drawS.oddsDecimal);
-  const a = parseFloat(awayS.oddsDecimal);
+  const h = parseFloat(homeV.odd);
+  const d = parseFloat(drawV.odd);
+  const a = parseFloat(awayV.odd);
   if (h <= 1 || d <= 1 || a <= 1 || h > 999) return [];
 
-  const rawName  = (oddsItem.persistentKey ?? '').split('_')[0];
-  const bookmaker = slugifyBookmaker(rawName);
+  const bookmakerSlug = slugifyBookmaker(bookmaker.name ?? '');
 
   return [{
-    bookmaker,
+    bookmaker:  bookmakerSlug,
     market:     'h2h',
     home_odds:  h,
     draw_odds:  d,
@@ -418,18 +417,16 @@ async function ingest() {
     try {
       const extIdStr = String(fixtureId);
 
-      // Fetch odds from API
-      const oddsRaw = await fetchFixtureOdds(fixtureId);
-      if (!oddsRaw) {
+      // Fetch odds from API — returns array of bookmaker objects (may be empty)
+      const bookmakers = await fetchFixtureOdds(fixtureId);
+      if (!bookmakers.length) {
         console.log(`  [skip] fixture ${fixtureId} — no odds returned`);
         await sleep(200);
         continue;
       }
 
-      // P2-7 fix: API may return a single object or an array of bookmaker objects.
-      // Normalise to array so extractH2hRows always processes one item at a time.
-      const oddsItems = Array.isArray(oddsRaw) ? oddsRaw : [oddsRaw];
-      const rows = oddsItems.flatMap(item => extractH2hRows(item));
+      // Each bookmaker object is passed to extractH2hRows individually.
+      const rows = bookmakers.flatMap(bm => extractH2hRows(bm));
 
       if (!rows.length) {
         console.log(`  [skip] fixture ${fixtureId} — no parseable 1X2 odds`);
