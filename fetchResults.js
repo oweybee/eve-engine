@@ -98,28 +98,56 @@ const OUTCOME_TO_ODDS_COL = { home: 'home_odds', draw: 'draw_odds', away: 'away_
  * Best-effort closing price: a 'closing' odds_snapshot if captured, otherwise the
  * latest Betfair Exchange price we recorded for the match before kickoff.
  */
-async function closingOddsFor(supabase, matchId, outcome) {
-  // 1. Dedicated closing snapshot
-  const snap = await supabase
-    .from('odds_snapshots')
-    .select('odds, captured_at')
-    .eq('match_id', matchId).eq('selection', outcome).eq('snapshot_type', 'closing')
-    .order('captured_at', { ascending: false }).limit(1);
-  if (!snap.error && snap.data?.length) return parseFloat(snap.data[0].odds);
+/**
+ * Bulk-prefetch closing odds for all pending signals in 2 queries instead of
+ * 2×N serial round-trips. Returns Map<`${matchId}:${outcome}`, number|null>.
+ */
+async function prefetchClosingOdds(supabase, signals) {
+  const matchIds = [...new Set(signals.map(s => s.match_id).filter(Boolean))];
+  if (!matchIds.length) return new Map();
 
-  // 2. Latest Betfair Exchange price from the odds table
-  const col = OUTCOME_TO_ODDS_COL[outcome];
-  if (!col) return null;
-  const odds = await supabase
+  // Query 1: closing snapshots for all match+outcome combos
+  const { data: snaps } = await supabase
+    .from('odds_snapshots')
+    .select('match_id, selection, odds, captured_at')
+    .in('match_id', matchIds)
+    .eq('snapshot_type', 'closing')
+    .order('captured_at', { ascending: false });
+
+  // Query 2: latest Betfair Exchange prices for all matches
+  const { data: betfairRows } = await supabase
     .from('odds')
-    .select(`${col}, fetched_at`)
-    .eq('match_id', matchId).eq('bookmaker', 'betfair_ex_uk')
-    .order('fetched_at', { ascending: false }).limit(1);
-  if (!odds.error && odds.data?.length) {
-    const v = parseFloat(odds.data[0][col]);
-    return Number.isFinite(v) && v > 1 ? v : null;
+    .select('match_id, home_odds, draw_odds, away_odds, fetched_at')
+    .in('match_id', matchIds)
+    .eq('bookmaker', 'betfair_ex_uk')
+    .order('fetched_at', { ascending: false });
+
+  // Build maps — first row per match_id is latest (DESC order)
+  const snapMap    = new Map(); // key: `${matchId}:${outcome}`
+  const betfairMap = new Map(); // key: matchId → latest row
+
+  for (const s of snaps ?? []) {
+    const key = `${s.match_id}:${s.selection}`;
+    if (!snapMap.has(key)) snapMap.set(key, parseFloat(s.odds));
   }
-  return null;
+  for (const r of betfairRows ?? []) {
+    if (!betfairMap.has(r.match_id)) betfairMap.set(r.match_id, r);
+  }
+
+  // Resolve each signal to a closing price
+  const result = new Map();
+  for (const sig of signals) {
+    const key = `${sig.match_id}:${sig.outcome}`;
+    if (snapMap.has(key)) {
+      result.set(key, snapMap.get(key));
+      continue;
+    }
+    const col = OUTCOME_TO_ODDS_COL[sig.outcome];
+    const row = col && betfairMap.get(sig.match_id);
+    const v   = row ? parseFloat(row[col]) : NaN;
+    result.set(key, Number.isFinite(v) && v > 1 ? v : null);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +180,9 @@ async function settlePendingSignals(supabase) {
     return { settled: 0, unmatched: pending.length };
   }
 
+  // Bulk-prefetch closing odds (2 queries instead of 2×N serial round-trips)
+  const closingMap = await prefetchClosingOdds(supabase, pending);
+
   const cache = new Map();
   let settled = 0, unmatched = 0;
 
@@ -178,8 +209,8 @@ async function settlePendingSignals(supabase) {
     const actual = fx ? fixtureOutcome(fx) : null;
     if (!actual) { unmatched++; continue; }
 
-    const result = actual === sig.outcome ? 'win' : 'loss';
-    const closing = await closingOddsFor(supabase, sig.match_id, sig.outcome);
+    const result  = actual === sig.outcome ? 'win' : 'loss';
+    const closing = closingMap.get(`${sig.match_id}:${sig.outcome}`) ?? null;
     const detected = parseFloat(sig.detected_odds);
     // P0-3 fix: guard against NaN/Infinity before logarithm.
     // Invalid prices (null, ≤1, NaN) → clv = null, never a garbage number.

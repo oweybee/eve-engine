@@ -51,10 +51,11 @@ const DRY_RUN           = process.argv.includes('--dry-run');
 const MIN_PRICE_MOVEMENT = 0.01;
 
 // ---------------------------------------------------------------------------
-// HTTP — RapidAPI (legacy wrapper — retained until Phase 2 network refactor)
+// ---------------------------------------------------------------------------
+// HTTP — RapidAPI
 // ---------------------------------------------------------------------------
 
-function httpGet(path) {
+function httpGetOnce(path) {
   if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY not set');
   return new Promise((resolve, reject) => {
     https.request(
@@ -71,7 +72,7 @@ function httpGet(path) {
         let body = '';
         res.on('data', c => { body += c; });
         res.on('end', () => {
-          if (res.statusCode === 429) { reject(new Error('Rate limit hit')); return; }
+          if (res.statusCode === 429) { reject(Object.assign(new Error('Rate limit hit'), { is429: true })); return; }
           if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`)); return; }
           try { resolve(JSON.parse(body)); }
           catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
@@ -79,6 +80,22 @@ function httpGet(path) {
       },
     ).on('error', reject).end();
   });
+}
+
+async function httpGet(path, retries = 2, baseDelayMs = 30_000) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await httpGetOnce(path);
+    } catch (err) {
+      if (err.is429 && attempt < retries) {
+        const delay = baseDelayMs * attempt;
+        console.warn(`[ingest] 429 on attempt ${attempt}/${retries} — waiting ${delay / 1000}s before retry`);
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
