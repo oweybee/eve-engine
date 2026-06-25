@@ -3,15 +3,18 @@
  * API-Football v3 and upserts into Supabase.
  *
  * Called after computeValues.js in the engine pipeline.
- * Safe to call every 15 min — it only fetches for matches kicking off within
- * the next 24h (predictions/lineups) or completed within the last 6h (stats).
- * Each endpoint result is cached per match_id via upsert so repeated calls
- * are idempotent.
+ * Safe to call every 15 min — only fetches for matches within 24h (predictions/
+ * lineups) or completed within the last 6h (stats).
  *
  * Endpoints used (all included in Ultra plan):
- *   GET /predictions?fixture={id}     — AI win probability + advice + predicted lineup
- *   GET /fixtures/lineups?fixture={id} — confirmed starting XI (available ~H-1)
+ *   GET /predictions?fixture={id}       — AI win probability + advice
+ *   GET /fixtures/lineups?fixture={id}  — confirmed starting XI (~H-1)
  *   GET /fixtures/statistics?fixture={id} — match stats (post-kickoff)
+ *
+ * Tables written:
+ *   match_predictions  — advice, pct_home/draw/away, winner, goals
+ *   lineups            — team_id, team_name, formation, starting_xi, substitutes
+ *   match_stats        — fixture_id, team_side, stats (jsonb array)
  *
  * Required env vars: API_FOOTBALL_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  */
@@ -94,29 +97,19 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // Query matches to process
 // ---------------------------------------------------------------------------
 
-/**
- * Returns matches that are either:
- *   - upcoming within the next 24h (fetch predictions + lineups), or
- *   - completed within the last 6h (fetch match stats)
- *
- * Only includes matches where external_id looks like a pure integer (API-Football fixture ID).
- */
 async function queryMatches(supabase) {
-  const now       = new Date();
-  const in24h     = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-  const minus6h   = new Date(now.getTime() - 6  * 60 * 60 * 1000).toISOString();
+  const now   = new Date();
+  const in24h = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+  const ago6h = new Date(now.getTime() - 6  * 60 * 60 * 1000).toISOString();
 
   const { data, error } = await supabase
     .from('matches')
     .select('id, external_id, kickoff_at, status')
     .neq('status', 'cancelled')
-    // external_id must be a pure integer (API-Football fixture ID)
-    .filter('external_id', 'ilike', '%')  // ensure external_id is not null
-    .or(`kickoff_at.lte.${in24h},and(status.eq.completed,kickoff_at.gte.${minus6h})`);
+    .not('external_id', 'is', null)
+    .or(`kickoff_at.lte.${in24h},and(status.eq.completed,kickoff_at.gte.${ago6h})`);
 
   if (error) throw new Error(`queryMatches: ${error.message}`);
-
-  // Additional in-JS filter: external_id must be all digits
   return (data ?? []).filter(m => /^\d+$/.test(m.external_id ?? ''));
 }
 
@@ -140,61 +133,58 @@ async function fetchStats(fixtureId) {
 }
 
 // ---------------------------------------------------------------------------
-// Upsert helpers
+// Upsert helpers — aligned with actual Supabase table schemas
 // ---------------------------------------------------------------------------
 
 async function upsertPrediction(supabase, fixtureId, prediction) {
-  const teams = prediction?.teams ?? {};
-  const pct   = prediction?.predictions?.percent ?? {};
-  const advice      = prediction?.predictions?.advice ?? null;
-  const homeFormRaw = teams?.home?.last_5?.form ?? null;
-  const awayFormRaw = teams?.away?.last_5?.form ?? null;
-
-  // pct values look like "45%", "30%", "25%"
-  const parsePct = s => s != null ? parseFloat(String(s).replace('%', '')) : null;
+  const preds = prediction?.predictions ?? {};
+  const pct   = preds?.percent ?? {};
 
   const { error } = await supabase
-    .from('match_predictions_af')
+    .from('match_predictions')
     .upsert({
-      fixture_id:   String(fixtureId),
-      home_win_pct: parsePct(pct.home),
-      draw_pct:     parsePct(pct.draw),
-      away_win_pct: parsePct(pct.away),
-      advice,
-      home_form:    homeFormRaw,
-      away_form:    awayFormRaw,
-      fetched_at:   new Date().toISOString(),
+      fixture_id:              String(fixtureId),
+      api_football_fixture_id: parseInt(fixtureId, 10),
+      winner_team:             preds?.winner?.name  ?? null,
+      winner_comment:          preds?.winner?.comment ?? null,
+      under_over:              preds?.under_over ?? null,
+      goals_home:              String(preds?.goals?.home ?? ''),
+      goals_away:              String(preds?.goals?.away ?? ''),
+      advice:                  preds?.advice ?? null,
+      pct_home:                pct.home ?? null,
+      pct_draw:                pct.draw ?? null,
+      pct_away:                pct.away ?? null,
+      fetched_at:              new Date().toISOString(),
     }, { onConflict: 'fixture_id' });
 
   if (error) throw new Error(`upsertPrediction(${fixtureId}): ${error.message}`);
 }
 
-async function upsertLineup(supabase, fixtureId, teamEntry, side) {
-  const formation  = teamEntry?.formation ?? null;
-  const isConfirmed = teamEntry?.startXI != null; // startXI present means confirmed
-  const players = (teamEntry?.startXI ?? []).map(p => ({
-    name:   p.player?.name   ?? null,
-    number: p.player?.number ?? null,
-    pos:    p.player?.pos    ?? null,
-    grid:   p.player?.grid   ?? null,
-  }));
+async function upsertLineup(supabase, fixtureId, teamEntry) {
+  // teamEntry shape from API-Football:
+  // { team: {id, name}, formation, startXI: [{player:{id,name,number,pos,grid}},...], substitutes: [...] }
+  const teamId   = teamEntry?.team?.id   ?? null;
+  const teamName = teamEntry?.team?.name ?? null;
+  if (!teamId) return;
 
   const { error } = await supabase
-    .from('match_lineups')
+    .from('lineups')
     .upsert({
-      fixture_id:   String(fixtureId),
-      team_side:    side,
-      formation,
-      players,
-      is_confirmed: isConfirmed,
-      fetched_at:   new Date().toISOString(),
-    }, { onConflict: 'fixture_id,team_side' });
+      fixture_id:              String(fixtureId),
+      api_football_fixture_id: parseInt(fixtureId, 10),
+      team_id:                 teamId,
+      team_name:               teamName,
+      formation:               teamEntry?.formation ?? null,
+      starting_xi:             teamEntry?.startXI   ?? [],
+      substitutes:             teamEntry?.substitutes ?? [],
+      confirmed:               (teamEntry?.startXI?.length ?? 0) > 0,
+      fetched_at:              new Date().toISOString(),
+    }, { onConflict: 'fixture_id,team_id' });
 
-  if (error) throw new Error(`upsertLineup(${fixtureId}, ${side}): ${error.message}`);
+  if (error) throw new Error(`upsertLineup(${fixtureId}, team=${teamId}): ${error.message}`);
 }
 
 async function upsertMatchStats(supabase, fixtureId, teamEntry, side) {
-  // Preserve the raw statistics array as-is
   const stats = teamEntry?.statistics ?? [];
 
   const { error } = await supabase
@@ -210,23 +200,18 @@ async function upsertMatchStats(supabase, fixtureId, teamEntry, side) {
 }
 
 // ---------------------------------------------------------------------------
-// Determine match phase
+// Match phase helpers
 // ---------------------------------------------------------------------------
 
 function isUpcoming(match) {
-  if (!match.kickoff_at) return false;
-  const now   = Date.now();
-  const ko    = new Date(match.kickoff_at).getTime();
-  return ko > now;
+  return !!match.kickoff_at && new Date(match.kickoff_at).getTime() > Date.now();
 }
 
 function isRecentlyCompleted(match) {
   if (!match.kickoff_at) return false;
-  const now    = Date.now();
-  const ko     = new Date(match.kickoff_at).getTime();
-  const minus6h = now - 6 * 60 * 60 * 1000;
-  // kickoff was in the last 6h and match is completed (or we assume completed)
-  return ko >= minus6h && ko <= now;
+  const ko  = new Date(match.kickoff_at).getTime();
+  const now = Date.now();
+  return ko >= now - 6 * 60 * 60 * 1000 && ko <= now;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,57 +246,43 @@ async function main() {
   for (const match of matches) {
     const fixtureId = match.external_id;
 
-    try {
-      if (isUpcoming(match)) {
-        // ── Predictions ──────────────────────────────────────────────────────
-        try {
-          const prediction = await fetchPredictions(fixtureId);
-          await sleep(300);
-          if (prediction) {
-            await upsertPrediction(supabase, fixtureId, prediction);
-            counts.predictions++;
-          }
-        } catch (err) {
-          console.warn(`  [warn] predictions(${fixtureId}): ${err.message}`);
+    if (isUpcoming(match)) {
+      // Predictions
+      try {
+        const prediction = await fetchPredictions(fixtureId);
+        await sleep(300);
+        if (prediction) {
+          await upsertPrediction(supabase, fixtureId, prediction);
+          counts.predictions++;
         }
-
-        // ── Lineups ───────────────────────────────────────────────────────────
-        try {
-          const lineupTeams = await fetchLineups(fixtureId);
-          await sleep(300);
-          // lineupTeams is array of two entries: [{team:{name,id}, formation, startXI, ...}, ...]
-          // Determine home vs away by position (API returns home first, then away)
-          if (lineupTeams.length >= 1) {
-            await upsertLineup(supabase, fixtureId, lineupTeams[0], 'home');
-            counts.lineups++;
-          }
-          if (lineupTeams.length >= 2) {
-            await upsertLineup(supabase, fixtureId, lineupTeams[1], 'away');
-            counts.lineups++;
-          }
-        } catch (err) {
-          console.warn(`  [warn] lineups(${fixtureId}): ${err.message}`);
-        }
-      } else if (isRecentlyCompleted(match)) {
-        // ── Match stats ───────────────────────────────────────────────────────
-        try {
-          const statTeams = await fetchStats(fixtureId);
-          await sleep(300);
-          // statTeams is array of two entries: [{team:{name,id}, statistics:[...]}, ...]
-          if (statTeams.length >= 1) {
-            await upsertMatchStats(supabase, fixtureId, statTeams[0], 'home');
-            counts.stats++;
-          }
-          if (statTeams.length >= 2) {
-            await upsertMatchStats(supabase, fixtureId, statTeams[1], 'away');
-            counts.stats++;
-          }
-        } catch (err) {
-          console.warn(`  [warn] stats(${fixtureId}): ${err.message}`);
-        }
+      } catch (err) {
+        console.warn(`  [warn] predictions(${fixtureId}): ${err.message}`);
       }
-    } catch (err) {
-      console.error(`  [error] match ${match.id} (fixture ${fixtureId}): ${err.message}`);
+
+      // Lineups (API returns home team first, then away — both in the same response)
+      try {
+        const lineupTeams = await fetchLineups(fixtureId);
+        await sleep(300);
+        for (const teamEntry of lineupTeams) {
+          await upsertLineup(supabase, fixtureId, teamEntry);
+          counts.lineups++;
+        }
+      } catch (err) {
+        console.warn(`  [warn] lineups(${fixtureId}): ${err.message}`);
+      }
+    } else if (isRecentlyCompleted(match)) {
+      // Match stats (API returns home team first, then away)
+      try {
+        const statTeams = await fetchStats(fixtureId);
+        await sleep(300);
+        const sides = ['home', 'away'];
+        for (let i = 0; i < statTeams.length && i < 2; i++) {
+          await upsertMatchStats(supabase, fixtureId, statTeams[i], sides[i]);
+          counts.stats++;
+        }
+      } catch (err) {
+        console.warn(`  [warn] stats(${fixtureId}): ${err.message}`);
+      }
     }
   }
 
