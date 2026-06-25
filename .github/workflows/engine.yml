@@ -69,7 +69,7 @@ jobs:
     # Secrets (sensitive — rotate quarterly, never log):
     #   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RAPIDAPI_KEY,
     #   BETFAIR_APP_KEY, BETFAIR_USERNAME, BETFAIR_PASSWORD,
-    #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+    #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, API_FOOTBALL_KEY
     # Variables (non-sensitive tuning params — set in Repo > Settings > Variables):
     #   SHARPNESS_MULTI_BOOK, SHARPNESS_SINGLE_BOOK, MULTI_BOOK_THRESHOLD,
     #   COMPUTE_CONCURRENCY, EV_THRESHOLD, MIN_PROB, MAX_ODDS, SIGNAL_EDGE,
@@ -90,6 +90,9 @@ jobs:
       # ── Telegram / signal delivery ───────────────────────────────────────────
       TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      # ── Result settlement (API-Football / API-Sports) ─────────────────────────
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
 
       # ── Active window (must match plan-day.yml) ───────────────────────────────
       ACTIVE_START_HOUR:         ${{ vars.ACTIVE_START_HOUR  || '8'  }}
