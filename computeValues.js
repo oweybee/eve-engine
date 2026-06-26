@@ -65,15 +65,15 @@ function homeAdvFor(match) {
 // ---------------------------------------------------------------------------
 
 // EV threshold — 2% edge over sharp baseline
-const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD ?? '0.02');
+const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD || '0.02');
 
 // Minimum sharp probability — only flag outcomes the market thinks are likely
 // 0.40 = 40%+ chance (2.50 or shorter). Eliminates longshot noise.
-const MIN_PROB_FOR_VALUE = parseFloat(process.env.MIN_PROB ?? '0.40');
+const MIN_PROB_FOR_VALUE = parseFloat(process.env.MIN_PROB || '0.40');
 
 // Maximum soft book odds — no outsiders
 // 2.80 = roughly evens to slight underdog
-const MAX_ODDS_FOR_VALUE = parseFloat(process.env.MAX_ODDS ?? '2.80');
+const MAX_ODDS_FOR_VALUE = parseFloat(process.env.MAX_ODDS || '2.80');
 
 // Sharp books — used as baseline in priority order
 const SHARP_BOOKS = ['betfair_ex_uk', 'smarkets', 'matchbook'];
@@ -472,7 +472,7 @@ function poisson(k, lambda) {
  * at COMPUTE_CONCURRENCY=5 the steady-state DB load is ~30 concurrent queries —
  * well within Supabase's PgBouncer connection pool limits.
  */
-const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY ?? '5', 10);
+const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5', 10);
 
 /**
  * Executes `fn` over `items` with at most `concurrency` items in-flight at once.
@@ -491,7 +491,7 @@ const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY ?? '5', 10)
  * @returns {Promise<Array<R>>}
  */
 async function withPool(items, fn, concurrency) {
-  if (concurrency < 1) throw new RangeError(`COMPUTE_CONCURRENCY must be >= 1, got ${concurrency}`);
+  if (!Number.isFinite(concurrency) || concurrency < 1) throw new RangeError(`COMPUTE_CONCURRENCY must be >= 1, got ${concurrency}`);
   const results = [];
   for (let start = 0; start < items.length; start += concurrency) {
     const chunk = items.slice(start, start + concurrency);
@@ -528,10 +528,10 @@ async function withPool(items, fn, concurrency) {
  * MODEL_SHARPNESS is kept as a backward-compatibility alias for the multi-book tier.
  */
 const SHARPNESS_MULTI_BOOK  = parseFloat(
-  process.env.SHARPNESS_MULTI_BOOK ?? process.env.MODEL_SHARPNESS ?? '1.7',
+  process.env.SHARPNESS_MULTI_BOOK || process.env.MODEL_SHARPNESS || '1.7',
 );
-const SHARPNESS_SINGLE_BOOK = parseFloat(process.env.SHARPNESS_SINGLE_BOOK ?? '1.0');
-const MULTI_BOOK_THRESHOLD  = parseInt(process.env.MULTI_BOOK_THRESHOLD ?? '3', 10);
+const SHARPNESS_SINGLE_BOOK = parseFloat(process.env.SHARPNESS_SINGLE_BOOK || '1.0');
+const MULTI_BOOK_THRESHOLD  = parseInt(process.env.MULTI_BOOK_THRESHOLD || '3', 10);
 
 /**
  * Dixon-Coles inspired 1X2 probabilities from team attack/defence ratings,
