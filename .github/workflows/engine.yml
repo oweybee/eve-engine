@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# MaxEdge EVE Engine  —  15-minute value detection pipeline
+# MaxEdge EVE Engine  —  10-minute value detection pipeline
 #
 # Pipeline per tick:
 #   1. ingestOdds.js        — pull latest odds from API-Football; plan-gated, so most
@@ -21,9 +21,10 @@ name: MaxEdge EVE Engine
 
 on:
   schedule:
-    # Pulse every 15 minutes, 24 / 7. ingestOdds.js self-gates against
+    # Pulse every 10 minutes, 24 / 7. ingestOdds.js self-gates against
     # engine_plan.next_run_at, so off-hours ticks are < 1 s no-ops.
-    - cron: '*/15 * * * *'
+    # Changed from */15: meets the 10-minute odds-freshness SLA.
+    - cron: '*/10 * * * *'
 
   workflow_dispatch:
     inputs:
