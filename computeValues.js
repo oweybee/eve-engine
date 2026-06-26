@@ -122,17 +122,10 @@ function formatBookName(key) {
 // 3. Market consensus engine (Kaunitz et al.)
 // ---------------------------------------------------------------------------
 
-/**
- * Computes consensus probabilities and detects value for a single fixture.
- *
- * @param {Array} oddsRows - All odds rows for one match_id
- * @returns {object|null} Consensus result, or null if guard conditions not met
- */
 function computeConsensus(oddsRows) {
   const h2hRows = oddsRows.filter(r => (r.market ?? 'h2h') === 'h2h');
   if (!h2hRows.length) return null;
 
-  // Deduplicate: one row per bookmaker — keep latest fetched_at.
   const byBook = new Map();
   for (const row of h2hRows) {
     const existing = byBook.get(row.bookmaker);
@@ -141,7 +134,6 @@ function computeConsensus(oddsRows) {
     }
   }
 
-  // Guard: need at least MIN_BOOKMAKERS distinct books.
   if (byBook.size < MIN_BOOKMAKERS) return null;
 
   const deduped = [...byBook.values()];
@@ -227,7 +219,6 @@ function computeMatch(match) {
   const best_draw_book = draw?.max_book  ?? null;
   const best_away_book = away?.max_book  ?? null;
 
-  // Schema stores fair_*_odds as TEXT.
   const fair_home_odds = home?.fair_odds != null ? String(home.fair_odds.toFixed(4)) : null;
   const fair_draw_odds = draw?.fair_odds != null ? String(draw.fair_odds.toFixed(4)) : null;
   const fair_away_odds = away?.fair_odds != null ? String(away.fair_odds.toFixed(4)) : null;
@@ -279,7 +270,6 @@ function computeMatch(match) {
     all_draw_odds: draw?.allOdds ?? null,
     all_away_odds: away?.allOdds ?? null,
 
-    // Ancillary markets not computed in v6 — written as null/false.
     over_edge: null, under_edge: null, over_value: false, under_value: false,
     btts_yes_edge: null, btts_no_edge: null, btts_yes_value: false, btts_no_value: false,
     bookings_over_edge: null, bookings_under_edge: null,
@@ -287,7 +277,6 @@ function computeMatch(match) {
     corners_over_edge: null, corners_under_edge: null,
     corners_over_value: false, corners_under_value: false,
 
-    // Internal fields — stripped before DB write.
     _kickoff_at:     match.kickoff_at,
     _bookmakerCount: bookmakerCount,
   };
@@ -312,7 +301,7 @@ async function upsertComputedValues(supabase, rows) {
 
   const { data, error } = await supabase
     .from('computed_values')
-    .upsert(dbRows, { onConflict: 'match_id' })
+    .upsert(dbRows, { onConflict: 'match_id,model_architecture' })
     .select('match_id, signals_written');
 
   if (error) throw new Error(`upsertComputedValues: ${error.message}`);
@@ -334,14 +323,15 @@ async function insertValueSignals(supabase, rows) {
       const signal_category = edge >= 0.05 ? 'Prime' : 'Standard';
 
       candidates.push({
-        match_id:      row.match_id,
+        match_id:           row.match_id,
         outcome,
-        detected_odds: row[`best_${outcome}_odds`],
-        detected_edge: edge,
-        detected_mes:  null,
-        bookmaker:     row[`best_${outcome}_book`],
-        kickoff_at:    row._kickoff_at ?? null,
+        detected_odds:      row[`best_${outcome}_odds`],
+        detected_edge:      edge,
+        detected_mes:       null,
+        bookmaker:          row[`best_${outcome}_book`],
+        kickoff_at:         row._kickoff_at ?? null,
         signal_category,
+        model_architecture: 'MARKET_CONSENSUS',
       });
     }
   }
@@ -478,7 +468,8 @@ async function main() {
     const { error: swErr } = await supabase
       .from('computed_values')
       .update({ signals_written: true })
-      .in('match_id', matchIds);
+      .in('match_id', matchIds)
+      .eq('model_architecture', 'MARKET_CONSENSUS');
     if (swErr) console.error('[engine] signals_written update error:', swErr.message);
   }
 
