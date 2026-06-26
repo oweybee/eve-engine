@@ -18,23 +18,35 @@
  *
  * Alpha constants (Kaunitz et al., Table 3):
  *   alpha_home = 0.034  alpha_draw = 0.057  alpha_away = 0.037
- *   Set env var USE_UNIFORM_ALPHA=true to use alpha=0.05 for all outcomes.
+ *   Set env var USE_UNIFORM_ALPHA=true to use alpha=0.05 for all outcomes
+ *   (paper's real-world trading optimisation variant).
  *
- * Guard: fixtures with fewer than MIN_BOOKMAKERS (3) are skipped.
+ * Guard: fixtures with fewer than MIN_BOOKMAKERS (3) are skipped to prevent
+ * low-sample consensus distortion.
  */
 
 const { getClient } = require('./lib/supabaseClient');
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
 
 const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '3',    10);
 const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5',    10);
 const USE_UNIFORM_ALPHA   = (process.env.USE_UNIFORM_ALPHA || '').toLowerCase() === 'true';
 
+// Directional alphas (Kaunitz et al.)
 const ALPHA_HOME    = parseFloat(process.env.ALPHA_HOME    || '0.034');
 const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
 const ALPHA_AWAY    = parseFloat(process.env.ALPHA_AWAY    || '0.037');
 const ALPHA_UNIFORM = parseFloat(process.env.ALPHA_UNIFORM || '0.05');
 
+// Minimum raw edge to write a value_signal row (keeps noise out of DB)
 const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD || '0.02');
+
+// ---------------------------------------------------------------------------
+// 1. Fetch matches with odds
+// ---------------------------------------------------------------------------
 
 async function fetchMatchesForComputation(supabase) {
   const { data: matchData, error: matchError } = await supabase
@@ -71,24 +83,44 @@ async function fetchMatchesForComputation(supabase) {
     .filter(m => m.odds.length > 0);
 }
 
+// ---------------------------------------------------------------------------
+// 2. Bookmaker display names
+// ---------------------------------------------------------------------------
+
 function formatBookName(key) {
   if (!key) return null;
   const names = {
-    betfair_ex_uk:  'Betfair Exch', betfair_sb_uk:  'Betfair SB',
-    smarkets:       'Smarkets',     matchbook:      'Matchbook',
-    bet365:         'Bet365',       skybet:         'Sky Bet',
-    williamhill:    'William Hill', paddypower:     'Paddy Power',
-    coral:          'Coral',        ladbrokes_uk:   'Ladbrokes',
-    betfred_uk:     'Betfred',      betway:         'Betway',
-    betvictor:      'BetVictor',    boylesports:    'BoyleSports',
-    unibet_uk:      'Unibet',       virginbet:      'Virgin Bet',
-    sport888:       '888sport',     leovegas:       'LeoVegas',
-    casumo:         'Casumo',       grosvenor:      'Grosvenor',
-    livescorebet:   'LiveScore Bet',pinnacle:       'Pinnacle',
-    unibet:         'Unibet',       betsson:        'Betsson',
+    betfair_ex_uk:  'Betfair Exch',
+    betfair_sb_uk:  'Betfair SB',
+    smarkets:       'Smarkets',
+    matchbook:      'Matchbook',
+    bet365:         'Bet365',
+    skybet:         'Sky Bet',
+    williamhill:    'William Hill',
+    paddypower:     'Paddy Power',
+    coral:          'Coral',
+    ladbrokes_uk:   'Ladbrokes',
+    betfred_uk:     'Betfred',
+    betway:         'Betway',
+    betvictor:      'BetVictor',
+    boylesports:    'BoyleSports',
+    unibet_uk:      'Unibet',
+    virginbet:      'Virgin Bet',
+    sport888:       '888sport',
+    leovegas:       'LeoVegas',
+    casumo:         'Casumo',
+    grosvenor:      'Grosvenor',
+    livescorebet:   'LiveScore Bet',
+    pinnacle:       'Pinnacle',
+    unibet:         'Unibet',
+    betsson:        'Betsson',
   };
   return names[key] ?? key;
 }
+
+// ---------------------------------------------------------------------------
+// 3. Market consensus engine (Kaunitz et al.)
+// ---------------------------------------------------------------------------
 
 function computeConsensus(oddsRows) {
   const h2hRows = oddsRows.filter(r => (r.market ?? 'h2h') === 'h2h');
@@ -97,13 +129,16 @@ function computeConsensus(oddsRows) {
   const byBook = new Map();
   for (const row of h2hRows) {
     const existing = byBook.get(row.bookmaker);
-    if (!existing || row.fetched_at > existing.fetched_at) byBook.set(row.bookmaker, row);
+    if (!existing || row.fetched_at > existing.fetched_at) {
+      byBook.set(row.bookmaker, row);
+    }
   }
 
   if (byBook.size < MIN_BOOKMAKERS) return null;
 
   const deduped = [...byBook.values()];
   const bookmakerCount = deduped.length;
+
   const latestFetchedAt = deduped.reduce(
     (best, r) => (!best || r.fetched_at > best ? r.fetched_at : best), null
   );
@@ -127,7 +162,10 @@ function computeConsensus(oddsRows) {
       return Number.isFinite(v) && v > 1.0 && v < 1000;
     });
 
-    if (!validRows.length) { result[outcome] = null; continue; }
+    if (!validRows.length) {
+      result[outcome] = null;
+      continue;
+    }
 
     const allOdds = {};
     for (const r of validRows) {
@@ -141,11 +179,15 @@ function computeConsensus(oddsRows) {
     const p_cons     = 1 / meanOdds;
     const p_adj      = p_cons - alpha;
 
-    if (p_adj <= 0) { result[outcome] = { p_cons, p_adj: null, has_edge: false, allOdds }; continue; }
+    if (p_adj <= 0) {
+      result[outcome] = { p_cons, p_adj: null, has_edge: false, allOdds };
+      continue;
+    }
 
     const fair_odds = 1 / p_adj;
 
-    let max_odds = 0, max_book = null;
+    let max_odds = 0;
+    let max_book = null;
     for (const r of validRows) {
       const v = parseFloat(r[field]);
       if (v > max_odds) { max_odds = v; max_book = formatBookName(r.bookmaker); }
@@ -160,18 +202,22 @@ function computeConsensus(oddsRows) {
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// 4. Build computed_values row for one match
+// ---------------------------------------------------------------------------
+
 function computeMatch(match) {
   const consensus = computeConsensus(match.odds);
   if (!consensus) return { skipped: true };
 
   const { home, draw, away, bookmakerCount, latestFetchedAt } = consensus;
 
-  const best_home_odds = home?.max_odds ?? null;
-  const best_draw_odds = draw?.max_odds ?? null;
-  const best_away_odds = away?.max_odds ?? null;
-  const best_home_book = home?.max_book ?? null;
-  const best_draw_book = draw?.max_book ?? null;
-  const best_away_book = away?.max_book ?? null;
+  const best_home_odds = home?.max_odds  ?? null;
+  const best_draw_odds = draw?.max_odds  ?? null;
+  const best_away_odds = away?.max_odds  ?? null;
+  const best_home_book = home?.max_book  ?? null;
+  const best_draw_book = draw?.max_book  ?? null;
+  const best_away_book = away?.max_book  ?? null;
 
   const fair_home_odds = home?.fair_odds != null ? String(home.fair_odds.toFixed(4)) : null;
   const fair_draw_odds = draw?.fair_odds != null ? String(draw.fair_odds.toFixed(4)) : null;
@@ -185,35 +231,62 @@ function computeMatch(match) {
   const draw_value = !!(draw?.has_edge && draw.edge >= EV_THRESHOLD);
   const away_value = !!(away?.has_edge && away.edge >= EV_THRESHOLD);
 
-  const edgeMap      = { home: home_edge, draw: draw_edge, away: away_edge };
-  const best_outcome = Object.entries(edgeMap).reduce((best, [k, v]) => v > edgeMap[best] ? k : best, 'home');
+  const edgeMap    = { home: home_edge, draw: draw_edge, away: away_edge };
+  const best_outcome = Object.entries(edgeMap).reduce(
+    (best, [k, v]) => (v > edgeMap[best] ? k : best), 'home'
+  );
   const max_edge_val = Math.max(home_edge, draw_edge, away_edge);
 
   const row = {
     match_id: match.id,
-    best_home_odds, best_draw_odds, best_away_odds,
-    best_home_book, best_draw_book, best_away_book,
-    fair_home_odds, fair_draw_odds, fair_away_odds,
-    home_edge, draw_edge, away_edge,
-    home_value, draw_value, away_value,
+
+    best_home_odds,
+    best_draw_odds,
+    best_away_odds,
+    best_home_book,
+    best_draw_book,
+    best_away_book,
+
+    fair_home_odds,
+    fair_draw_odds,
+    fair_away_odds,
+
+    home_edge,
+    draw_edge,
+    away_edge,
+
+    home_value,
+    draw_value,
+    away_value,
+
     model_architecture: 'MARKET_CONSENSUS',
     odds_fetched_at:    latestFetchedAt,
     computed_at:        new Date().toISOString(),
+
     best_outcome:  max_edge_val > 0 ? best_outcome : null,
     ev_per_unit:   max_edge_val > 0 ? parseFloat(max_edge_val.toFixed(6)) : null,
+
     all_home_odds: home?.allOdds ?? null,
     all_draw_odds: draw?.allOdds ?? null,
     all_away_odds: away?.allOdds ?? null,
+
     over_edge: null, under_edge: null, over_value: false, under_value: false,
     btts_yes_edge: null, btts_no_edge: null, btts_yes_value: false, btts_no_value: false,
-    bookings_over_edge: null, bookings_under_edge: null, bookings_over_value: false, bookings_under_value: false,
-    corners_over_edge: null, corners_under_edge: null, corners_over_value: false, corners_under_value: false,
+    bookings_over_edge: null, bookings_under_edge: null,
+    bookings_over_value: false, bookings_under_value: false,
+    corners_over_edge: null, corners_under_edge: null,
+    corners_over_value: false, corners_under_value: false,
+
     _kickoff_at:     match.kickoff_at,
     _bookmakerCount: bookmakerCount,
   };
 
   return { skipped: false, row, hasValue: home_value || draw_value || away_value };
 }
+
+// ---------------------------------------------------------------------------
+// 5. Upsert computed_values
+// ---------------------------------------------------------------------------
 
 async function upsertComputedValues(supabase, rows) {
   if (!rows.length) return new Map();
@@ -235,28 +308,38 @@ async function upsertComputedValues(supabase, rows) {
   return new Map((data ?? []).map(r => [r.match_id, r.signals_written === true]));
 }
 
+// ---------------------------------------------------------------------------
+// 6. Insert value_signals (2-hour dedup)
+// ---------------------------------------------------------------------------
+
 async function insertValueSignals(supabase, rows) {
   const candidates = [];
 
   for (const row of rows) {
     for (const outcome of ['home', 'draw', 'away']) {
       if (!row[`${outcome}_value`]) continue;
+
       const edge = row[`${outcome}_edge`];
       const signal_category = edge >= 0.05 ? 'Prime' : 'Standard';
+
       candidates.push({
-        match_id:      row.match_id,
+        match_id:           row.match_id,
         outcome,
-        detected_odds: row[`best_${outcome}_odds`],
-        detected_edge: edge,
-        detected_mes:  null,
-        bookmaker:     row[`best_${outcome}_book`],
-        kickoff_at:    row._kickoff_at ?? null,
+        detected_odds:      row[`best_${outcome}_odds`],
+        detected_edge:      edge,
+        detected_mes:       null,
+        bookmaker:          row[`best_${outcome}_book`],
+        kickoff_at:         row._kickoff_at ?? null,
         signal_category,
+        model_architecture: 'MARKET_CONSENSUS',
       });
     }
   }
 
-  if (!candidates.length) { console.log('[value_signals] no value outcomes to record'); return 0; }
+  if (!candidates.length) {
+    console.log('[value_signals] no value outcomes to record');
+    return 0;
+  }
 
   const primeCount    = candidates.filter(c => c.signal_category === 'Prime').length;
   const standardCount = candidates.filter(c => c.signal_category === 'Standard').length;
@@ -283,9 +366,16 @@ async function insertValueSignals(supabase, rows) {
   const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
   if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
 
-  console.log(`[value_signals] recorded ${toInsert.length} new signal(s) (${candidates.length - toInsert.length} skipped as duplicates within 2h)`);
+  console.log(
+    `[value_signals] recorded ${toInsert.length} new signal(s)` +
+    ` (${candidates.length - toInsert.length} skipped as duplicates within 2h)`
+  );
   return toInsert.length;
 }
+
+// ---------------------------------------------------------------------------
+// 7. Bet-of-day (highest-edge match)
+// ---------------------------------------------------------------------------
 
 async function updateBetOfDay(supabase, rows) {
   await supabase.from('matches').update({ is_bet_of_day: false }).eq('is_bet_of_day', true);
@@ -305,21 +395,34 @@ async function updateBetOfDay(supabase, rows) {
   return best.match_id;
 }
 
+// ---------------------------------------------------------------------------
+// 8. Concurrency pool
+// ---------------------------------------------------------------------------
+
 async function withPool(items, fn, concurrency) {
   if (!Number.isFinite(concurrency) || concurrency < 1) {
     throw new RangeError(`COMPUTE_CONCURRENCY must be >= 1, got ${concurrency}`);
   }
+
   const results = [];
   for (let start = 0; start < items.length; start += concurrency) {
     const batch   = items.slice(start, start + concurrency);
     const settled = await Promise.allSettled(batch.map(fn));
     for (const s of settled) {
-      if (s.status === 'fulfilled') results.push(s.value);
-      else { console.error('[engine] match error:', s.reason?.message ?? s.reason); results.push(null); }
+      if (s.status === 'fulfilled') {
+        results.push(s.value);
+      } else {
+        console.error('[engine] match error:', s.reason?.message ?? s.reason);
+        results.push(null);
+      }
     }
   }
   return results;
 }
+
+// ---------------------------------------------------------------------------
+// 9. Main
+// ---------------------------------------------------------------------------
 
 async function main() {
   const supabase = getClient();
@@ -331,14 +434,18 @@ async function main() {
   );
 
   const matches = await fetchMatchesForComputation(supabase);
-  if (!matches.length) { console.log('[engine] no matches with odds — nothing to compute'); return; }
+  if (!matches.length) {
+    console.log('[engine] no matches with odds — nothing to compute');
+    return;
+  }
 
   console.log(`[engine] processing ${matches.length} match(es) (pool=${COMPUTE_CONCURRENCY})`);
 
   const results = await withPool(matches, computeMatch, COMPUTE_CONCURRENCY);
 
   let computed = 0, skipped = 0, value = 0;
-  const computedRows = [], valueRows = [];
+  const computedRows = [];
+  const valueRows    = [];
 
   for (const res of results) {
     if (!res || res.skipped) { skipped++; continue; }
