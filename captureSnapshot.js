@@ -28,7 +28,7 @@
 const { getClient } = require('./lib/supabaseClient');
 
 const CLOSING_WINDOW_MIN = 60;
-const SIGNAL_EDGE        = parseFloat(process.env.SIGNAL_EDGE ?? '0.02'); // 2 pp minimum
+const SIGNAL_EDGE        = parseFloat(process.env.SIGNAL_EDGE || '0.02'); // 2 pp minimum
 
 const OUTCOMES = ['home', 'draw', 'away'];
 const ODDS_COL = { home: 'home_odds', draw: 'draw_odds', away: 'away_odds' };

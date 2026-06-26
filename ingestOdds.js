@@ -42,8 +42,8 @@ const { getClient }    = require('./lib/supabaseClient');
 
 const API_FOOTBALL_KEY  = process.env.API_FOOTBALL_KEY;
 const API_HOST          = 'v3.football.api-sports.io';
-const ACTIVE_START_HOUR = parseInt(process.env.ACTIVE_START_HOUR ?? '8',  10);
-const ACTIVE_END_HOUR   = parseInt(process.env.ACTIVE_END_HOUR   ?? '24', 10);
+const ACTIVE_START_HOUR = parseInt(process.env.ACTIVE_START_HOUR || '8',  10);
+const ACTIVE_END_HOUR   = parseInt(process.env.ACTIVE_END_HOUR   || '24', 10);
 const DRY_RUN           = process.argv.includes('--dry-run');
 
 const MIN_PRICE_MOVEMENT = 0.01;

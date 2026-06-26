@@ -58,12 +58,12 @@ const API_FOOTBALL_HOST   = 'v3.football.api-sports.io';
 const SUPABASE_URL        = process.env.SUPABASE_URL;
 const SUPABASE_KEY        = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const DAILY_BUDGET        = parseInt(process.env.DAILY_REQUEST_BUDGET ?? '200', 10);
-const ACTIVE_START_HOUR   = parseInt(process.env.ACTIVE_START_HOUR    ?? '8',   10);
-const ACTIVE_END_HOUR     = parseInt(process.env.ACTIVE_END_HOUR      ?? '24',  10);
-const DAYS_AHEAD          = parseInt(process.env.DAYS_AHEAD ?? '1', 10);
-const WORLD_CUP_LEAGUE_ID = parseInt(process.env.WORLD_CUP_LEAGUE_ID ?? '1', 10);
-const FOOTBALL_SEASON     = parseInt(process.env.FOOTBALL_SEASON ?? String(new Date().getUTCFullYear()), 10);
+const DAILY_BUDGET        = parseInt(process.env.DAILY_REQUEST_BUDGET || '200', 10);
+const ACTIVE_START_HOUR   = parseInt(process.env.ACTIVE_START_HOUR    || '8',   10);
+const ACTIVE_END_HOUR     = parseInt(process.env.ACTIVE_END_HOUR      || '24',  10);
+const DAYS_AHEAD          = parseInt(process.env.DAYS_AHEAD || '1', 10);
+const WORLD_CUP_LEAGUE_ID = parseInt(process.env.WORLD_CUP_LEAGUE_ID || '1', 10);
+const FOOTBALL_SEASON     = parseInt(process.env.FOOTBALL_SEASON || String(new Date().getUTCFullYear()), 10);
 const DRY_RUN             = process.argv.includes('--dry-run');
 
 // ---------------------------------------------------------------------------
