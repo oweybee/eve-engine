@@ -199,16 +199,18 @@ function computeApiMatchEdge(match) {
     return { skipped: true, reason: 'incomplete_h2h' };
   }
 
-  const home_edge = home.has_edge ? home.edge : 0;
-  const draw_edge = draw.has_edge ? draw.edge : 0;
-  const away_edge = away.has_edge ? away.edge : 0;
+  // Implausible-edge guard: an edge above the cap signals an odds/prediction
+  // mismatch (coarse API percentages), not genuine value. Clamp the STORED edge
+  // to 0 — not just the value flag — so computed_values never holds a garbage
+  // edge that would surface at the top of the Market Pulse board.
+  const usable = (hasEdge, e) => (hasEdge && e <= MAX_PLAUSIBLE_EDGE ? e : 0);
+  const home_edge = usable(home.has_edge, home.edge);
+  const draw_edge = usable(draw.has_edge, draw.edge);
+  const away_edge = usable(away.has_edge, away.edge);
 
-  // Implausible-edge guard: edges this large mean the odds/prediction pair is
-  // mismatched (coarse API percentages), not genuine value — don't flag them.
-  const plausible = e => e >= EV_THRESHOLD && e <= MAX_PLAUSIBLE_EDGE;
-  const home_value = !!(home.has_edge && plausible(home.edge));
-  const draw_value = !!(draw.has_edge && plausible(draw.edge));
-  const away_value = !!(away.has_edge && plausible(away.edge));
+  const home_value = home_edge >= EV_THRESHOLD;
+  const draw_value = draw_edge >= EV_THRESHOLD;
+  const away_value = away_edge >= EV_THRESHOLD;
 
   const edgeMap    = { home: home_edge, draw: draw_edge, away: away_edge };
   const best_outcome = Object.entries(edgeMap).reduce(
