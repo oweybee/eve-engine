@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# MaxEdge EVE Engine  —  15-minute value detection pipeline
+# MaxEdge EVE Engine  —  5-minute value detection pipeline
 #
 # Pipeline per tick:
 #   1. ingestOdds.js        — pull latest odds from API-Football; plan-gated, so most
@@ -22,9 +22,9 @@ name: MaxEdge EVE Engine
 
 on:
   schedule:
-    # Pulse every 15 minutes, 24 / 7. ingestOdds.js self-gates against
+    # Pulse every 5 minutes, 24 / 7. ingestOdds.js self-gates against
     # engine_plan.next_run_at, so off-hours ticks are < 1 s no-ops.
-    - cron: '*/15 * * * *'
+    - cron: '*/5 * * * *'
 
   workflow_dispatch:
     inputs:
@@ -48,7 +48,6 @@ on:
 #   • Each new cron tick queues as "pending"; if another pending run is already
 #     waiting, the new tick REPLACES it (last-in wins — always run fresh data).
 # Net effect: at most 1 running + 1 queued run at any moment.
-# If a run takes >15 min the next tick queues and starts immediately on completion.
 concurrency:
   group: engine-${{ github.ref_name }}
   cancel-in-progress: false
@@ -62,10 +61,10 @@ jobs:
     name: EVE Engine Tick
     runs-on: ubuntu-latest
 
-    # Hard time-box: must complete before the next 15-min cron tick to avoid
-    # run pile-up. 13 min leaves 2 min slack. If a step hangs (API stall,
+    # Hard time-box: must complete before the next 5-min cron tick to avoid
+    # run pile-up. 4 min leaves 1 min slack. If a step hangs (API stall,
     # OOM), the job is killed and the alert step fires.
-    timeout-minutes: 13
+    timeout-minutes: 4
 
     env:
       # ── Supabase ─────────────────────────────────────────────────────────────
@@ -85,7 +84,7 @@ jobs:
       TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
 
       # ── Active window (must match plan-day.yml) ───────────────────────────────
-      ACTIVE_START_HOUR:         ${{ vars.ACTIVE_START_HOUR  || '8'  }}
+      ACTIVE_START_HOUR:         ${{ vars.ACTIVE_START_HOUR  || '0'  }}
       ACTIVE_END_HOUR:           ${{ vars.ACTIVE_END_HOUR    || '24' }}
 
       # ── Model tuning (override after running calibrate.js) ───────────────────
@@ -97,7 +96,7 @@ jobs:
       MIN_PROB:                  ${{ vars.MIN_PROB              }}
       MAX_ODDS:                  ${{ vars.MAX_ODDS              }}
       SIGNAL_EDGE:               ${{ vars.SIGNAL_EDGE           }}
-      DAILY_REQUEST_BUDGET:      ${{ vars.DAILY_REQUEST_BUDGET  }}
+      DAILY_REQUEST_BUDGET:      ${{ vars.DAILY_REQUEST_BUDGET || '75000' }}
 
       # ── GitHub run context ───────────────────────────────────────────────────
       GITHUB_RUN_ID:             ${{ github.run_id }}
@@ -193,7 +192,7 @@ jobs:
             --arg ts       "$TIMESTAMP" \
             '{
               embeds: [{
-                title: "\u{1F534}  EVE Engine — Pipeline Failure",
+                title: "[FAIL] EVE Engine — Pipeline Failure",
                 description: (
                   "A step exited non-zero on run [#" + $run_num + "](" + $run_url + ").\n"
                   + "Odds ingestion or signal delivery **may be stalled**. Investigate immediately."
@@ -201,12 +200,12 @@ jobs:
                 color: 15548997,
                 url:   $run_url,
                 fields: [
-                  { name: "❌  Failed Step(s)", value: $failed,                                              inline: false },
-                  { name: "\u{1F33F}  Branch",      value: ("`" + $branch + "`"),                               inline: true  },
-                  { name: "\u{1F516}  Commit",      value: ("`" + $sha + "`"),                                 inline: true  },
-                  { name: "⚡  Trigger",        value: $trigger,                                            inline: true  },
-                  { name: "\u{1F464}  Actor",       value: $actor,                                              inline: true  },
-                  { name: "\u{1F4CB}  Run logs",    value: ("[View run #" + $run_num + "](" + $run_url + ")"), inline: false }
+                  { name: "Failed Step(s)", value: $failed,                                              inline: false },
+                  { name: "Branch",         value: ("`" + $branch + "`"),                               inline: true  },
+                  { name: "Commit",         value: ("`" + $sha + "`"),                                 inline: true  },
+                  { name: "Trigger",        value: $trigger,                                            inline: true  },
+                  { name: "Actor",          value: $actor,                                              inline: true  },
+                  { name: "Run logs",       value: ("[View run #" + $run_num + "](" + $run_url + ")"), inline: false }
                 ],
                 timestamp: $ts,
                 footer: { text: ("MaxEdge EVE Engine  ·  " + $repo) }
