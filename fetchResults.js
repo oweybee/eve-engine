@@ -89,6 +89,77 @@ function fixtureOutcome(fx) {
 }
 
 // ---------------------------------------------------------------------------
+// Match status settlement
+//
+// fetchResults historically only settled value_signals — it never updated
+// matches.status. Once a match kicked off it stayed 'scheduled' forever, so
+// computeValues/computeApiValues (WHERE status IN ('scheduled','live')) kept
+// recomputing dead fixtures indefinitely, polluting Market Pulse with games
+// that already finished. This routine flips finished matches to 'completed'.
+//
+// Settles by EXACT API-Football fixture id (matches.external_id), so no fuzzy
+// name matching is needed.
+// ---------------------------------------------------------------------------
+
+async function settleFinishedMatches(supabase, cache) {
+  const cutoff = new Date(Date.now() - SETTLE_DELAY_MS).toISOString();
+  const { data: stale, error } = await supabase
+    .from('matches')
+    .select('id, external_id, kickoff_at, status')
+    .in('status', ['scheduled', 'live'])
+    .lt('kickoff_at', cutoff);
+
+  if (error) throw new Error(`settleFinishedMatches(select): ${error.message}`);
+
+  const matches = (stale ?? []).filter(m => /^\d+$/.test(m.external_id ?? ''));
+  if (!matches.length) {
+    console.log('[results] no past-kickoff matches awaiting status settlement');
+    return { completed: 0, pending: 0 };
+  }
+  if (!API_FOOTBALL_KEY) {
+    console.log(`[results] ${matches.length} match(es) past kickoff but API_FOOTBALL_KEY not set — skipping status settlement`);
+    return { completed: 0, pending: matches.length };
+  }
+
+  let completed = 0, stillPending = 0;
+  for (const m of matches) {
+    const date = new Date(m.kickoff_at).toISOString().slice(0, 10); // UTC YYYY-MM-DD
+    let fixtures;
+    try {
+      fixtures = await fetchFixturesForDate(date, cache);
+    } catch (err) {
+      // Transient API error — leave this match for the next run.
+      console.warn(`  [results] status skip fixture ${m.external_id}: ${err.message}`);
+      stillPending++;
+      continue;
+    }
+
+    const fx      = fixtures.find(f => String(f?.fixture?.id) === m.external_id);
+    const outcome = fx ? fixtureOutcome(fx) : null;
+    if (!outcome) { stillPending++; continue; } // not finished yet (or not found)
+
+    const { error: upErr } = await supabase
+      .from('matches')
+      .update({
+        status:     'completed',
+        goals_home: fx?.goals?.home ?? null,
+        goals_away: fx?.goals?.away ?? null,
+        result:     outcome,
+      })
+      .eq('id', m.id);
+    if (upErr) {
+      console.warn(`  [results] status update ${m.id} failed: ${upErr.message}`);
+      stillPending++;
+      continue;
+    }
+    completed++;
+  }
+
+  console.log(`[results] match status: completed ${completed}, still pending ${stillPending}`);
+  return { completed, pending: stillPending };
+}
+
+// ---------------------------------------------------------------------------
 // Closing Betfair price for CLV (best-effort)
 // ---------------------------------------------------------------------------
 
@@ -154,7 +225,7 @@ async function prefetchClosingOdds(supabase, signals) {
 // 1+2. Settle pending signals
 // ---------------------------------------------------------------------------
 
-async function settlePendingSignals(supabase) {
+async function settlePendingSignals(supabase, cache = new Map()) {
   const cutoff = new Date(Date.now() - SETTLE_DELAY_MS).toISOString();
   const { data: pending, error } = await supabase
     .from('value_signals')
@@ -183,7 +254,6 @@ async function settlePendingSignals(supabase) {
   // Bulk-prefetch closing odds (2 queries instead of 2×N serial round-trips)
   const closingMap = await prefetchClosingOdds(supabase, pending);
 
-  const cache = new Map();
   let settled = 0, unmatched = 0;
 
   for (const sig of pending) {
@@ -300,8 +370,18 @@ async function run() {
   console.log(`\n[results] ${new Date().toISOString()}`);
   const supabase = getClient();
 
+  // Shared fixtures-by-date cache across both settlement passes (one API call
+  // per date covers signal settlement AND match-status settlement).
+  const cache = new Map();
+
   try {
-    await settlePendingSignals(supabase);
+    await settleFinishedMatches(supabase, cache);
+  } catch (err) {
+    console.error('[results] match-status settlement error:', err.message);
+  }
+
+  try {
+    await settlePendingSignals(supabase, cache);
   } catch (err) {
     console.error('[results] settlement error:', err.message);
   }
@@ -319,4 +399,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[results] unhandled:', err); process.exit(1); });
 }
 
-module.exports = { run, calculatePerformance, settlePendingSignals, namesMatch, fixtureOutcome };
+module.exports = { run, calculatePerformance, settlePendingSignals, settleFinishedMatches, namesMatch, fixtureOutcome };
