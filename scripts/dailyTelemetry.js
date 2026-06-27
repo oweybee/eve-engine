@@ -66,27 +66,50 @@ async function runDailyTelemetry() {
   console.log(`\n${SUB}\n`);
 
   // 2. MARKET PULSE & MOVEMENT CHECK -----------------------------------------
-  const { data: oddsRows, error: oErr } = await supabase
+  // NOTE: never SELECT the whole odds table to derive max/count — Supabase caps
+  // rows at 1000 and (unordered) returns an arbitrary slice. Use an exact head
+  // count and an ordered limit-1 lookup for the genuine newest timestamp.
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  const { count: oddsTotal, error: oErr } = await supabase
     .from('odds')
-    .select('match_id, fetched_at');
+    .select('*', { count: 'exact', head: true });
+
+  const { count: odds24h } = await supabase
+    .from('odds')
+    .select('*', { count: 'exact', head: true })
+    .gte('fetched_at', dayAgo);
+
+  const { data: newestOdds } = await supabase
+    .from('odds')
+    .select('fetched_at')
+    .order('fetched_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
   if (oErr) {
     console.error('❌ Error fetching odds:', oErr.message);
   } else {
-    const lastFetch = (oddsRows ?? []).reduce(
-      (best, r) => (!best || r.fetched_at > best ? r.fetched_at : best), null,
-    );
+    const newest = newestOdds?.fetched_at ?? 'never';
+    const ageMin = newestOdds?.fetched_at
+      ? Math.round((Date.now() - new Date(newestOdds.fetched_at).getTime()) / 60000)
+      : null;
     console.log('🔄 [MARKET PULSE TRACKING]');
-    console.log(`   - Total Active Odds Lines Monitored: ${oddsRows?.length ?? 0}`);
-    console.log(`   - Most Recent Odds Fetch: ${lastFetch ?? 'never'}`);
+    console.log(`   - Total Odds Lines Stored: ${oddsTotal ?? 0}`);
+    console.log(`   - Odds Lines Written (last 24h): ${odds24h ?? 0}`);
+    console.log(`   - Most Recent Odds Fetch: ${newest}${ageMin != null ? ` (${ageMin} min ago)` : ''}`);
+    if (ageMin != null && ageMin > 180) {
+      console.log('     ⚠️  WARNING: newest odds are over 3h old — check ingestOdds.js / engine_plan.');
+    } else if (ageMin != null) {
+      console.log('     ✅ Odds feed is current.');
+    }
   }
 
   // 3. SIGNAL VELOCITY ENGINE ------------------------------------------------
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const { data: activeSignals, error: sErr } = await supabase
     .from('value_signals')
     .select('detected_at, signal_category, outcome, bookmaker, detected_edge, model_architecture')
-    .gte('detected_at', since);
+    .gte('detected_at', dayAgo);
 
   if (sErr) {
     console.error('❌ Error fetching signals:', sErr.message);
