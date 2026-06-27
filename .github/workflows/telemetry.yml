@@ -1,0 +1,52 @@
+# ───────────────────────────────────────────────────────────────────────
+# MaxEdge EVE — Daily Telemetry Report
+#
+# Standalone read-only diagnostic. Runs once a day and prints a snapshot of
+# data-feed health, market pulse, signal velocity, and a "Bet of the Day" pick.
+# Output lands in the job log and the workflow step summary.
+# ───────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Daily Telemetry
+
+on:
+  schedule:
+    # 08:03 UTC daily (off the :00 mark to avoid fleet-wide contention).
+    - cron: '3 8 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: telemetry-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  telemetry:
+    name: Daily Telemetry Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run daily telemetry report
+        shell: bash
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/dailyTelemetry.js | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
