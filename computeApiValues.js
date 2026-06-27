@@ -22,8 +22,9 @@
  *   - Require home+draw+away best odds all present before emitting a row — the
  *     computed_values best_*_odds columns are NOT NULL; writing null aborted the
  *     whole batch upsert and killed every API_PREDICTIVE row.
- *   - MAX_PLAUSIBLE_EDGE: reject implausibly large edges that signal an odds/
- *     prediction data mismatch rather than genuine value.
+ *   - MAX_PLAUSIBLE_EDGE (default 0.15): reject implausibly large edges. API-Football
+ *     /predictions percentages are coarse (45-50% draw buckets) and manufacture
+ *     phantom edges, so only modest edges are treated as genuine value.
  *
  * Coexistence: uses UNIQUE(match_id, model_architecture) — never overwrites
  * MARKET_CONSENSUS rows.
@@ -36,7 +37,7 @@ const COMPUTE_CONCURRENCY   = parseInt(process.env.COMPUTE_CONCURRENCY   || '5',
 const EV_THRESHOLD          = parseFloat(process.env.EV_THRESHOLD         || '0.005');
 const SIGNAL_DEDUP_MINUTES  = parseInt(process.env.SIGNAL_DEDUP_MINUTES  || '60', 10);
 const ODDS_MAX_AGE_HOURS    = parseFloat(process.env.ODDS_MAX_AGE_HOURS   || '24');
-const MAX_PLAUSIBLE_EDGE    = parseFloat(process.env.MAX_PLAUSIBLE_EDGE   || '0.5');
+const MAX_PLAUSIBLE_EDGE    = parseFloat(process.env.MAX_PLAUSIBLE_EDGE   || '0.15');
 
 // ── 1. Fetch matches with odds + predictions ──────────────────────────────────
 
@@ -203,7 +204,7 @@ function computeApiMatchEdge(match) {
   const away_edge = away.has_edge ? away.edge : 0;
 
   // Implausible-edge guard: edges this large mean the odds/prediction pair is
-  // mismatched (stale or wrong fixture), not genuine value — don't flag them.
+  // mismatched (coarse API percentages), not genuine value — don't flag them.
   const plausible = e => e >= EV_THRESHOLD && e <= MAX_PLAUSIBLE_EDGE;
   const home_value = !!(home.has_edge && plausible(home.edge));
   const draw_value = !!(draw.has_edge && plausible(draw.edge));
