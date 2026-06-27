@@ -247,6 +247,19 @@ function computeMatch(match) {
   );
   const max_edge_val = Math.max(home_edge, draw_edge, away_edge);
 
+  // MES (Market Edge Score): edge * 1000, so 7% edge = 70 (ruby threshold).
+  // confidence_score: scaled by bookmaker count, capped at 100.
+  const max_edge_score   = max_edge_val > 0 ? Math.round(max_edge_val * 1000) : 0;
+  const confidence_score = Math.min(100, Math.round(bookmakerCount * 5));
+
+  const mes_breakdown = {
+    home:            { edge: home_edge, has_value: home_value, p_adj: home?.p_adj ?? null, fair_odds: home?.fair_odds ?? null },
+    draw:            { edge: draw_edge, has_value: draw_value, p_adj: draw?.p_adj ?? null, fair_odds: draw?.fair_odds ?? null },
+    away:            { edge: away_edge, has_value: away_value, p_adj: away?.p_adj ?? null, fair_odds: away?.fair_odds ?? null },
+    bookmaker_count: bookmakerCount,
+    score:           max_edge_score,
+  };
+
   const row = {
     match_id: match.id,
 
@@ -275,6 +288,12 @@ function computeMatch(match) {
 
     best_outcome:  max_edge_val > 0 ? best_outcome : null,
     ev_per_unit:   max_edge_val > 0 ? parseFloat(max_edge_val.toFixed(6)) : null,
+
+    // These three columns are queried by the feed and Market Pulse chart
+    max_edge:       max_edge_val > 0 ? parseFloat(max_edge_val.toFixed(6)) : 0,
+    max_edge_score,
+    confidence_score,
+    mes_breakdown,
 
     all_home_odds: home?.allOdds ?? null,
     all_draw_odds: draw?.allOdds ?? null,
@@ -337,7 +356,7 @@ async function insertValueSignals(supabase, rows) {
         outcome,
         detected_odds:      row[`best_${outcome}_odds`],
         detected_edge:      edge,
-        detected_mes:       null,
+        detected_mes:       row.max_edge_score,
         bookmaker:          row[`best_${outcome}_book`],
         kickoff_at:         row._kickoff_at ?? null,
         signal_category,
