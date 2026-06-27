@@ -23,6 +23,9 @@
  *
  * Guard: fixtures with fewer than MIN_BOOKMAKERS (3) are skipped to prevent
  * low-sample consensus distortion.
+ *
+ * Freshness guard: fixtures with all odds older than ODDS_MAX_AGE_HOURS (24)
+ * are skipped — stale odds produce false signals and pollute the live feed.
  */
 
 const { getClient } = require('./lib/supabaseClient');
@@ -34,6 +37,7 @@ const { getClient } = require('./lib/supabaseClient');
 const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '3',    10);
 const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5',    10);
 const USE_UNIFORM_ALPHA   = (process.env.USE_UNIFORM_ALPHA || '').toLowerCase() === 'true';
+const ODDS_MAX_AGE_HOURS  = parseFloat(process.env.ODDS_MAX_AGE_HOURS || '24');
 
 // Directional alphas (Kaunitz et al.)
 const ALPHA_HOME    = parseFloat(process.env.ALPHA_HOME    || '0.034');
@@ -142,6 +146,12 @@ function computeConsensus(oddsRows) {
   const latestFetchedAt = deduped.reduce(
     (best, r) => (!best || r.fetched_at > best ? r.fetched_at : best), null
   );
+
+  // Freshness guard: skip matches with stale odds to prevent false signals.
+  const oddsAgeMs = latestFetchedAt
+    ? Date.now() - new Date(latestFetchedAt).getTime()
+    : Infinity;
+  if (oddsAgeMs > ODDS_MAX_AGE_HOURS * 3_600_000) return null;
 
   const OUTCOMES = ['home', 'draw', 'away'];
   const FIELDS   = { home: 'home_odds', draw: 'draw_odds', away: 'away_odds' };
@@ -430,7 +440,8 @@ async function main() {
   console.log('[engine] computeValues v6 — Market Consensus (Kaunitz et al.)');
   console.log(
     `[engine] alpha_mode=${USE_UNIFORM_ALPHA ? `uniform(${ALPHA_UNIFORM})` : 'directional'}` +
-    ` min_books=${MIN_BOOKMAKERS} ev_threshold=${EV_THRESHOLD} pool=${COMPUTE_CONCURRENCY}`
+    ` min_books=${MIN_BOOKMAKERS} ev_threshold=${EV_THRESHOLD} pool=${COMPUTE_CONCURRENCY}` +
+    ` odds_max_age=${ODDS_MAX_AGE_HOURS}h`
   );
 
   const matches = await fetchMatchesForComputation(supabase);
