@@ -1,23 +1,17 @@
 /**
  * MaxEdge — Automated Signal Posting (Telegram + X)
  *
- * Posts VALUE and RUBY signals to Telegram channel as they're detected.
- * X posting is wired up but skipped unless X credentials are valid (requires X Basic plan).
- *
- * Usage:  export $(cat .env | xargs) && node postToX.js
- * Dry run: DRY_RUN=1 export $(cat .env | xargs) && node postToX.js
+ * Posts VALUE, RUBY, and PRICE MOVEMENT signals to Telegram as they're detected.
+ * X posting is wired but skipped unless X credentials are valid (requires X Basic plan).
  *
  * Signal tiers:
- *   VALUE  — edge ≥ 2%   (⚡)
- *   RUBY   — edge ≥ 8%   (◆) — scarce, elite-confidence signals
- *
- * P0-1 fix: dedup state moved from ephemeral .x_state.json (destroyed on every
- * GitHub Actions runner restart) to posted_signals Supabase table with
- * UNIQUE(signal_id, channel) — survives restarts and scale-out.
+ *   PRICE MOVEMENT — signal_category='PriceMove' (odds shifted on a live value bet)
+ *   VALUE          — edge >= 2%   (standard value)
+ *   RUBY           — edge >= 8%   (elite confidence)
  */
 'use strict';
 
-const https = require('https');
+const https  = require('https');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 
@@ -42,20 +36,9 @@ function getTelegramConfig() {
   return { token, chatId };
 }
 
-// ── Durable dedup state via posted_signals table (replaces .x_state.json) ────
+// ── Durable dedup state via posted_signals table ──────────────────────────────
 
-/**
- * Load IDs that have already been posted to `channel` within the lookback window.
- * Returns a Set<string> of signal UUIDs.
- *
- * @param {ReturnType<typeof createClient>} supabase
- * @returns {Promise<Set<string>>}
- */
 async function loadPostedIds(supabase) {
-  // Load ALL previously posted signal IDs for this channel — the unique constraint
-  // on (signal_id, channel) already prevents duplicate posts; the time filter here
-  // is purely a DB scan optimisation. Use a wide window (30 days) to cover any
-  // signal that might still have a pending kickoff.
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const { data, error } = await supabase
     .from('posted_signals')
@@ -67,16 +50,6 @@ async function loadPostedIds(supabase) {
   return new Set((data ?? []).map(r => r.signal_id));
 }
 
-/**
- * Record a successful post. Upserts on (signal_id, channel) so this is
- * idempotent — re-runs will update posted_at and message_hash without
- * creating a second row.
- *
- * @param {ReturnType<typeof createClient>} supabase
- * @param {string} signalId
- * @param {string} messageHash  - SHA-256 of the rendered message body
- * @param {string|null} externalMsgId - Telegram message_id or null (dry run)
- */
 async function markPosted(supabase, signalId, messageHash, externalMsgId) {
   const { error } = await supabase
     .from('posted_signals')
@@ -98,15 +71,13 @@ async function markPosted(supabase, signalId, messageHash, externalMsgId) {
 // ── Data fetching ─────────────────────────────────────────────────────────────
 
 async function fetchRecentSignals(supabase) {
-  // Post any pending signal whose kickoff is still in the future (or up to 2h past).
-  // We filter on kickoff_at rather than detected_at so signals detected days ago
-  // for upcoming matches still get posted.
   const kickoffFloor = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 
   const { data, error } = await supabase
     .from('value_signals')
     .select(`
-      id, outcome, detected_odds, detected_edge, detected_mes, bookmaker, kickoff_at, detected_at,
+      id, outcome, detected_odds, detected_edge, detected_mes, bookmaker,
+      kickoff_at, detected_at, signal_category,
       match:matches (
         home_team:teams!matches_home_team_id_fkey ( name ),
         away_team:teams!matches_away_team_id_fkey ( name ),
@@ -127,6 +98,10 @@ function isRuby(detectedEdge) {
   return Number(detectedEdge) >= 0.08;
 }
 
+function isPriceMove(signal) {
+  return signal.signal_category === 'PriceMove';
+}
+
 function formatKickoff(isoStr) {
   if (!isoStr) return 'TBC';
   const d      = new Date(isoStr);
@@ -137,83 +112,56 @@ function formatKickoff(isoStr) {
   return `${days[d.getUTCDay()]} ${d.getUTCDate()} ${months[d.getUTCMonth()]} ${hh}:${mm} UTC`;
 }
 
-/**
- * Build the Telegram message body for a signal.
- *
- * P2-6 fix: detected_odds and detected_edge are validated before formatting.
- * Null/NaN odds → signal is skipped by the caller (not silently formatted as 0.00).
- *
- * @param {object} signal
- * @returns {string}
- */
 function buildMessage(signal) {
   const home    = signal.match?.home_team?.name ?? 'Home';
   const away    = signal.match?.away_team?.name ?? 'Away';
   const league  = signal.match?.league?.name ?? '';
   const outcome = signal.outcome.toUpperCase();
 
-  // Validated upstream — odds and edge are guaranteed finite here.
   const odds    = signal.detected_odds.toFixed(2);
   const edgePct = (signal.detected_edge * 100).toFixed(1);
   const mes     = signal.detected_mes != null ? ` | MES: ${signal.detected_mes}/100` : '';
   const book    = signal.bookmaker ?? 'Best price';
   const kickoff = formatKickoff(signal.kickoff_at);
   const ruby    = isRuby(signal.detected_edge);
+  const move    = isPriceMove(signal);
 
-  const lines = ruby
-    ? [
-        `◆ *RUBY SIGNAL*`,
-        ``,
-        `*${home} vs ${away}*`,
-        league ? `_${league}_` : null,
-        `${outcome} @ ${odds} (${book})`,
-        `Edge: +${edgePct}%${mes}`,
-        ``,
-        `⏱ Kickoff: ${kickoff}`,
-        ``,
-        `[View on MaxEdge](https://maxedge.live/feed)`,
-        `#MaxEdge #Ruby #ValueBet`,
-      ]
-    : [
-        `⚡ *VALUE SIGNAL*`,
-        ``,
-        `*${home} vs ${away}*`,
-        league ? `_${league}_` : null,
-        `${outcome} @ ${odds} (${book})`,
-        `Edge: +${edgePct}%${mes}`,
-        ``,
-        `⏱ Kickoff: ${kickoff}`,
-        ``,
-        `[View on MaxEdge](https://maxedge.live/feed)`,
-        `#MaxEdge #ValueBet`,
-      ];
+  let header;
+  let hashtags;
+  if (move) {
+    header   = `>> *ODDS MOVEMENT*`;
+    hashtags = `#MaxEdge #OddsMove`;
+  } else if (ruby) {
+    header   = `◆ *RUBY SIGNAL*`;
+    hashtags = `#MaxEdge #Ruby #ValueBet`;
+  } else {
+    header   = `⚡ *VALUE SIGNAL*`;
+    hashtags = `#MaxEdge #ValueBet`;
+  }
+
+  const lines = [
+    header,
+    ``,
+    `*${home} vs ${away}*`,
+    league ? `_${league}_` : null,
+    `${outcome} @ ${odds} (${book})`,
+    `Edge: +${edgePct}%${mes}`,
+    ``,
+    `Kickoff: ${kickoff}`,
+    ``,
+    `[View on MaxEdge](https://maxedge.live/feed)`,
+    hashtags,
+  ];
 
   return lines.filter(l => l !== null).join('\n');
 }
 
-/**
- * SHA-256 hex digest of a message string.
- * Used to detect if odds have drifted materially between runs.
- *
- * @param {string} message
- * @returns {string}
- */
 function hashMessage(message) {
   return crypto.createHash('sha256').update(message).digest('hex');
 }
 
 // ── Telegram posting ──────────────────────────────────────────────────────────
 
-/**
- * Send a message via Telegram Bot API. Returns the sent message object.
- * Throws on non-ok response or network error.
- * No retry here — caller handles retry logic at the signal loop level.
- *
- * @param {string} token
- * @param {string} chatId
- * @param {string} text
- * @returns {Promise<{message_id: number}>}
- */
 function telegramPost(token, chatId, text) {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify({
@@ -244,7 +192,6 @@ function telegramPost(token, chatId, text) {
           resolve(json.result);
         } else {
           const err = new Error(`Telegram error ${json.error_code}: ${json.description}`);
-          // Attach retry_after so the caller can back off on flood control (429)
           err.retryAfterSec = json.parameters?.retry_after ?? null;
           reject(err);
         }
@@ -267,13 +214,11 @@ async function run() {
   const supabase = getSupabase();
   const telegram = getTelegramConfig();
 
-  // Load durable dedup set from DB — survives runner restarts (P0-1 fix)
   const postedIds = await loadPostedIds(supabase);
   const signals   = await fetchRecentSignals(supabase);
 
-  console.log(`[postToX] ${signals.length} signal(s) in last ${MAX_SIGNAL_AGE_HOURS}h`);
+  console.log(`[postToX] ${signals.length} signal(s) fetched`);
 
-  // P2-6 fix: filter out signals with null/NaN odds before any formatting
   const validSignals = signals.filter(s => {
     const odds = parseFloat(s.detected_odds);
     const edge = parseFloat(s.detected_edge);
@@ -285,7 +230,6 @@ async function run() {
       console.warn(`[postToX] skip signal ${s.id} — invalid edge: ${s.detected_edge}`);
       return false;
     }
-    // Coerce to number so buildMessage doesn't call .toFixed on raw string
     s.detected_odds = odds;
     s.detected_edge = edge;
     return true;
@@ -310,10 +254,12 @@ async function run() {
   let failed = 0;
 
   for (let i = 0; i < toPost.length; i++) {
-    const signal = toPost[i];
-    const label  = isRuby(signal.detected_edge) ? 'RUBY' : 'VALUE';
-    const home   = signal.match?.home_team?.name ?? '?';
-    const away   = signal.match?.away_team?.name ?? '?';
+    const signal  = toPost[i];
+    const move    = isPriceMove(signal);
+    const ruby    = isRuby(signal.detected_edge);
+    const label   = move ? 'PRICE_MOVE' : ruby ? 'RUBY' : 'VALUE';
+    const home    = signal.match?.home_team?.name ?? '?';
+    const away    = signal.match?.away_team?.name ?? '?';
     const message     = buildMessage(signal);
     const messageHash = hashMessage(message);
 
@@ -330,21 +276,19 @@ async function run() {
 
     try {
       const res = await telegramPost(telegram.token, telegram.chatId, message);
-      console.log(`[postToX] ✓ posted — message id: ${res.message_id}`);
+      console.log(`[postToX] posted — message id: ${res.message_id}`);
       await markPosted(supabase, signal.id, messageHash, String(res.message_id));
       posted++;
     } catch (err) {
-      console.error(`[postToX] ✗ failed: ${err.message}`);
-      // Respect Telegram flood control retry_after
+      console.error(`[postToX] failed: ${err.message}`);
       if (err.retryAfterSec) {
         const waitMs = (err.retryAfterSec + 1) * 1000;
-        console.warn(`[postToX] Telegram flood control — waiting ${waitMs}ms before next attempt`);
+        console.warn(`[postToX] Telegram flood control — waiting ${waitMs}ms`);
         await new Promise(r => setTimeout(r, waitMs));
       }
       failed++;
     }
 
-    // Rate-limit courtesy gap between messages
     if (i < toPost.length - 1) {
       await new Promise(r => setTimeout(r, 1000));
     }
@@ -362,4 +306,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { run, buildMessage, isRuby };
+module.exports = { run, buildMessage, isRuby, isPriceMove };

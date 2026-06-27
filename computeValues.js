@@ -1,28 +1,15 @@
 'use strict';
 
 /**
- * EVE — Value Detection Engine  v6
+ * EVE — Value Detection Engine  v7
  *
  * Model: Market Consensus / Wisdom of Crowds (Kaunitz et al.)
  *        "Beating the bookies with their own numbers" (2017)
  *
- * Core logic:
- *   1. Collect all bookmaker odds for a fixture (h2h market only).
- *   2. Compute consensus probability: p_cons = 1 / mean(all_odds_for_outcome)
- *   3. Subtract directional margin alpha to isolate true probability:
- *        p_adj = p_cons - alpha
- *   4. Fair odds line: fair_odds = 1 / p_adj
- *   5. Edge exists when any bookmaker beats the fair line:
- *        has_edge = max_odds > fair_odds
- *        edge     = p_adj * max_odds - 1
- *
- * Alpha constants (Kaunitz et al., Table 3):
- *   alpha_home = 0.034  alpha_draw = 0.057  alpha_away = 0.037
- *   Set env var USE_UNIFORM_ALPHA=true to use alpha=0.05 for all outcomes
- *   (paper's real-world trading optimisation variant).
- *
- * Guard: fixtures with fewer than MIN_BOOKMAKERS (3) are skipped to prevent
- * low-sample consensus distortion.
+ * v7 change: price-change signalling
+ *   - Removed signals_written gate — every compute cycle re-evaluates signals
+ *   - Dedup is now odds-hash based: same price within 60min = skip;
+ *     price movement = new signal with signal_category='PriceMove'
  */
 
 const { getClient } = require('./lib/supabaseClient');
@@ -43,6 +30,9 @@ const ALPHA_UNIFORM = parseFloat(process.env.ALPHA_UNIFORM || '0.05');
 
 // Minimum raw edge to write a value_signal row (keeps noise out of DB)
 const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD || '0.02');
+
+// Dedup window: skip if same odds seen within this many minutes
+const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
 // ---------------------------------------------------------------------------
 // 1. Fetch matches with odds
@@ -289,7 +279,7 @@ function computeMatch(match) {
 // ---------------------------------------------------------------------------
 
 async function upsertComputedValues(supabase, rows) {
-  if (!rows.length) return new Map();
+  if (!rows.length) return;
 
   const dbRows = rows.map(row => {
     const clean = {};
@@ -299,17 +289,18 @@ async function upsertComputedValues(supabase, rows) {
     return clean;
   });
 
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from('computed_values')
-    .upsert(dbRows, { onConflict: 'match_id,model_architecture' })
-    .select('match_id, signals_written');
+    .upsert(dbRows, { onConflict: 'match_id,model_architecture' });
 
   if (error) throw new Error(`upsertComputedValues: ${error.message}`);
-  return new Map((data ?? []).map(r => [r.match_id, r.signals_written === true]));
 }
 
 // ---------------------------------------------------------------------------
-// 6. Insert value_signals (2-hour dedup)
+// 6. Insert value_signals — odds-hash dedup
+//
+//    Same price within SIGNAL_DEDUP_MINUTES → skip (already signalled)
+//    Different price (or no recent signal)  → insert as PriceMove or Prime/Standard
 // ---------------------------------------------------------------------------
 
 async function insertValueSignals(supabase, rows) {
@@ -320,17 +311,19 @@ async function insertValueSignals(supabase, rows) {
       if (!row[`${outcome}_value`]) continue;
 
       const edge = row[`${outcome}_edge`];
-      const signal_category = edge >= 0.05 ? 'Prime' : 'Standard';
+      const odds = row[`best_${outcome}_odds`];
 
       candidates.push({
         match_id:           row.match_id,
         outcome,
-        detected_odds:      row[`best_${outcome}_odds`],
+        detected_odds:      odds,
         detected_edge:      edge,
         detected_mes:       null,
         bookmaker:          row[`best_${outcome}_book`],
         kickoff_at:         row._kickoff_at ?? null,
-        signal_category,
+        // Category set below after dedup check
+        _edge:              edge,
+        _odds:              odds,
         model_architecture: 'MARKET_CONSENSUS',
       });
     }
@@ -341,34 +334,74 @@ async function insertValueSignals(supabase, rows) {
     return 0;
   }
 
-  const primeCount    = candidates.filter(c => c.signal_category === 'Prime').length;
-  const standardCount = candidates.filter(c => c.signal_category === 'Standard').length;
-  console.log(`[value_signals] candidates — Prime:${primeCount} Standard:${standardCount}`);
+  const matchIds  = [...new Set(candidates.map(c => c.match_id))];
+  const dedupCutoff = new Date(Date.now() - SIGNAL_DEDUP_MINUTES * 60 * 1000).toISOString();
 
-  const matchIds    = [...new Set(candidates.map(c => c.match_id))];
-  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-
+  // Fetch recent signals — we need detected_odds to compare price
   const { data: recent, error: selErr } = await supabase
     .from('value_signals')
-    .select('match_id, outcome')
+    .select('match_id, outcome, detected_odds')
     .in('match_id', matchIds)
-    .gte('detected_at', twoHoursAgo);
+    .gte('detected_at', dedupCutoff);
   if (selErr) throw new Error(`insertValueSignals(select): ${selErr.message}`);
 
-  const seen     = new Set((recent ?? []).map(r => `${r.match_id}|${r.outcome}`));
-  const toInsert = candidates.filter(c => !seen.has(`${c.match_id}|${c.outcome}`));
-
-  if (!toInsert.length) {
-    console.log(`[value_signals] all ${candidates.length} signal(s) already recorded within 2h — skipping`);
-    return 0;
+  // Map: "matchId|outcome" → last known odds within dedup window
+  const recentOdds = new Map();
+  for (const r of (recent ?? [])) {
+    const key = `${r.match_id}|${r.outcome}`;
+    const existing = recentOdds.get(key);
+    // Keep the most recent (latest) odds value
+    if (!existing || parseFloat(r.detected_odds) !== parseFloat(existing)) {
+      recentOdds.set(key, parseFloat(r.detected_odds));
+    }
   }
+
+  const toInsert = [];
+  let skippedSamePrice = 0;
+
+  for (const c of candidates) {
+    const key      = `${c.match_id}|${c.outcome}`;
+    const lastOdds = recentOdds.get(key);
+    const curOdds  = parseFloat(c._odds);
+
+    // Same price within dedup window → no new information, skip
+    if (lastOdds != null && Math.abs(lastOdds - curOdds) < 0.001) {
+      skippedSamePrice++;
+      continue;
+    }
+
+    // Price moved (or first signal) → insert
+    let signal_category;
+    if (lastOdds != null) {
+      // Re-signal on price change
+      signal_category = 'PriceMove';
+    } else if (c._edge >= 0.05) {
+      signal_category = 'Prime';
+    } else {
+      signal_category = 'Standard';
+    }
+
+    const { _edge, _odds, ...signalRow } = c;
+    toInsert.push({ ...signalRow, signal_category });
+  }
+
+  console.log(
+    `[value_signals] candidates=${candidates.length}` +
+    ` skipped_same_price=${skippedSamePrice}` +
+    ` to_insert=${toInsert.length}`
+  );
+
+  if (!toInsert.length) return 0;
 
   const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
   if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
 
+  const priceMove = toInsert.filter(r => r.signal_category === 'PriceMove').length;
+  const prime     = toInsert.filter(r => r.signal_category === 'Prime').length;
+  const standard  = toInsert.filter(r => r.signal_category === 'Standard').length;
   console.log(
-    `[value_signals] recorded ${toInsert.length} new signal(s)` +
-    ` (${candidates.length - toInsert.length} skipped as duplicates within 2h)`
+    `[value_signals] inserted ${toInsert.length}` +
+    ` (PriceMove=${priceMove} Prime=${prime} Standard=${standard})`
   );
   return toInsert.length;
 }
@@ -427,10 +460,11 @@ async function withPool(items, fn, concurrency) {
 async function main() {
   const supabase = getClient();
 
-  console.log('[engine] computeValues v6 — Market Consensus (Kaunitz et al.)');
+  console.log('[engine] computeValues v7 — Market Consensus (Kaunitz et al.) + price-change signals');
   console.log(
     `[engine] alpha_mode=${USE_UNIFORM_ALPHA ? `uniform(${ALPHA_UNIFORM})` : 'directional'}` +
-    ` min_books=${MIN_BOOKMAKERS} ev_threshold=${EV_THRESHOLD} pool=${COMPUTE_CONCURRENCY}`
+    ` min_books=${MIN_BOOKMAKERS} ev_threshold=${EV_THRESHOLD}` +
+    ` dedup_window=${SIGNAL_DEDUP_MINUTES}min pool=${COMPUTE_CONCURRENCY}`
   );
 
   const matches = await fetchMatchesForComputation(supabase);
@@ -458,19 +492,12 @@ async function main() {
 
   if (!computedRows.length) return;
 
-  const signalsWrittenMap = await upsertComputedValues(supabase, computedRows);
+  await upsertComputedValues(supabase, computedRows);
 
-  const unsignaled = valueRows.filter(r => signalsWrittenMap.get(r.match_id) !== true);
-  if (unsignaled.length) {
-    await insertValueSignals(supabase, unsignaled);
-
-    const matchIds = unsignaled.map(r => r.match_id);
-    const { error: swErr } = await supabase
-      .from('computed_values')
-      .update({ signals_written: true })
-      .in('match_id', matchIds)
-      .eq('model_architecture', 'MARKET_CONSENSUS');
-    if (swErr) console.error('[engine] signals_written update error:', swErr.message);
+  // Always evaluate signals — no signals_written gate.
+  // Dedup is odds-based: same price within dedup window = skip.
+  if (valueRows.length) {
+    await insertValueSignals(supabase, valueRows);
   }
 
   await updateBetOfDay(supabase, computedRows);
