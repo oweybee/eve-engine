@@ -6,6 +6,8 @@
 #   Odds refresh every ~55 seconds during each 5-minute job.
 #
 # Pipeline per job:
+#   Once per job (idempotent early-exit if plan exists):
+#     0. planDay.js       — build / refresh today+3day fixture plan
 #   Loop ×4 (55s gap):
 #     1. ingestOdds.js    — pull latest odds; plan-gated (off-hours = no-op)
 #     2. computeValues.js — Kaunitz edge detection; price-change signals
@@ -94,6 +96,13 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Plan today's fixtures
+        id: plan
+        continue-on-error: true
+        env:
+          DAYS_AHEAD: '3'
+        run: node planDay.js
+
       - name: Live odds loop (ingest -> compute -> snapshot)
         id: ingest_loop
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_ingest != 'true' }}
@@ -143,6 +152,7 @@ jobs:
           TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
           FAILED_STEPS=""
+          [ "${{ steps.plan.outcome }}"        = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- plan (planDay.js)"
           [ "${{ steps.ingest_loop.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- ingest-loop (ingestOdds + computeValues + captureSnapshot)"
           [ "${{ steps.api_compute.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- api-compute (computeApiValues.js)"
           [ "${{ steps.post.outcome }}"         = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- post-signals (postToX.js)"

@@ -16,7 +16,7 @@
 const { getClient } = require('./lib/supabaseClient');
 
 // Config
-const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '3',    10);
+const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '2',    10);
 const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5',    10);
 const USE_UNIFORM_ALPHA   = (process.env.USE_UNIFORM_ALPHA || '').toLowerCase() === 'true';
 const ODDS_MAX_AGE_HOURS  = parseFloat(process.env.ODDS_MAX_AGE_HOURS || '24');
@@ -196,7 +196,8 @@ function computeMatch(match) {
   );
   const max_edge_val = Math.max(home_edge, draw_edge, away_edge);
 
-  const max_edge_score   = max_edge_val > 0 ? Math.round(max_edge_val * 1000) : 0;
+  // Score out of 100: 1% edge = 10 pts, 5% = 50 pts, 10% = 100 pts
+  const max_edge_score   = max_edge_val > 0 ? Math.min(100, Math.round(max_edge_val * 1000)) : 0;
   const confidence_score = Math.min(100, Math.round(bookmakerCount * 5));
 
   const mes_breakdown = {
