@@ -1,9 +1,9 @@
 name: Plan Day
 
-# Runs once daily at 05:00 UTC — before the active polling window opens (08:00).
-# Fetches today's World Cup fixtures, calculates the optimal polling interval
-# based on the daily request budget, and writes the plan to Supabase.
-# ingestOdds.js reads this plan to gate its own execution.
+# Runs once daily at 05:00 UTC — before the active polling window opens.
+# Fetches upcoming World Cup fixtures (3 days ahead), calculates the optimal
+# polling interval based on the daily request budget, and writes the plan to
+# Supabase. ingestOdds.js reads this plan to gate its own execution.
 on:
   schedule:
     - cron: '0 5 * * *'
@@ -18,7 +18,7 @@ jobs:
       API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
       DAILY_REQUEST_BUDGET:      '75000'
       DAYS_AHEAD:                '3'
-      ACTIVE_START_HOUR:         '8'
+      ACTIVE_START_HOUR:         '0'
       ACTIVE_END_HOUR:           '24'
 
     steps:

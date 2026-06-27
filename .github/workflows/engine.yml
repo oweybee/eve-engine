@@ -42,18 +42,10 @@ on:
         default: false
 
 # ── Concurrency ───────────────────────────────────────────────────────────────
-# Prevents overlapping runs that would cause duplicate DB writes or connection
-# pool exhaustion. With cancel-in-progress: false the behaviour is:
-#   • In-progress run is NEVER interrupted (safe mid-write guarantee).
-#   • Each new cron tick queues as "pending"; if another pending run is already
-#     waiting, the new tick REPLACES it (last-in wins — always run fresh data).
-# Net effect: at most 1 running + 1 queued run at any moment.
-# If a run takes >15 min the next tick queues and starts immediately on completion.
 concurrency:
   group: engine-${{ github.ref_name }}
   cancel-in-progress: false
 
-# Minimal permissions — read-only repo access, no id-token or write-packages.
 permissions:
   contents: read
 
@@ -61,34 +53,30 @@ jobs:
   engine:
     name: EVE Engine Tick
     runs-on: ubuntu-latest
-
-    # Hard time-box: must complete before the next 15-min cron tick to avoid
-    # run pile-up. 13 min leaves 2 min slack. If a step hangs (API stall,
-    # OOM), the job is killed and the alert step fires.
     timeout-minutes: 13
 
     env:
-      # ── Supabase ─────────────────────────────────────────────────────────────
+      # ── Supabase ──────────────────────────────────────────────────────────────
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-      # ── Odds API (API-Football v3) ───────────────────────────────────────────
+      # ── Odds API (API-Football v3) ─────────────────────────────────────────
       API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
 
-      # ── Betfair Exchange ─────────────────────────────────────────────────────
+      # ── Betfair Exchange ─────────────────────────────────────────────────
       BETFAIR_APP_KEY:           ${{ secrets.BETFAIR_APP_KEY }}
       BETFAIR_USERNAME:          ${{ secrets.BETFAIR_USERNAME }}
       BETFAIR_PASSWORD:          ${{ secrets.BETFAIR_PASSWORD }}
 
-      # ── Telegram / signal delivery ───────────────────────────────────────────
+      # ── Telegram / signal delivery ──────────────────────────────────────────
       TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
 
-      # ── Active window (must match plan-day.yml) ───────────────────────────────
-      ACTIVE_START_HOUR:         ${{ vars.ACTIVE_START_HOUR  || '8'  }}
-      ACTIVE_END_HOUR:           ${{ vars.ACTIVE_END_HOUR    || '24' }}
+      # ── Active window: 0 = run 24/7, odds ingested round the clock ───────────
+      ACTIVE_START_HOUR:         '0'
+      ACTIVE_END_HOUR:           '24'
 
-      # ── Model tuning (override after running calibrate.js) ───────────────────
+      # ── Model tuning (override after running calibrate.js) ─────────────────
       SHARPNESS_MULTI_BOOK:      ${{ vars.SHARPNESS_MULTI_BOOK  }}
       SHARPNESS_SINGLE_BOOK:     ${{ vars.SHARPNESS_SINGLE_BOOK }}
       MULTI_BOOK_THRESHOLD:      ${{ vars.MULTI_BOOK_THRESHOLD  }}
@@ -99,17 +87,15 @@ jobs:
       SIGNAL_EDGE:               ${{ vars.SIGNAL_EDGE           }}
       DAILY_REQUEST_BUDGET:      ${{ vars.DAILY_REQUEST_BUDGET  }}
 
-      # ── GitHub run context ───────────────────────────────────────────────────
+      # ── GitHub run context ─────────────────────────────────────────────
       GITHUB_RUN_ID:             ${{ github.run_id }}
 
     steps:
-      # ── Checkout ─────────────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
 
-      # ── Node.js setup with dependency cache ──────────────────────────────────
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
@@ -118,12 +104,6 @@ jobs:
 
       - name: Install dependencies (cached)
         run: npm install --no-audit --no-fund
-
-      # ── Pipeline ─────────────────────────────────────────────────────────────
-      # Order: ingest → compute (Kaunitz) → compute (API predictive) → snapshot
-      #        → post → results → details
-      # NOTE: both compute steps must run before snapshot so charts always
-      # reflect the freshest computed_values from both model tracks.
 
       - name: Ingest odds
         id: ingest
@@ -159,7 +139,6 @@ jobs:
         continue-on-error: true
         run: node fetchMatchDetails.js
 
-      # ── Failure telemetry ─────────────────────────────────────────────────────
       - name: Alert on pipeline failure
         if: failure()
         shell: bash
