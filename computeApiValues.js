@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * EVE — API Predictive Value Engine  v2
+ * EVE — API Predictive Value Engine  v3
  *
  * Model: API_PREDICTIVE
  *   Sources win probabilities from match_predictions (populated by
@@ -14,11 +14,16 @@
  *   edge      = p_api * max_odds - 1
  *
  * v2 changes (parity with computeValues.js v7):
- *   - Removed signals_written gate — every compute cycle re-evaluates
- *   - Dedup is odds-based: same price within SIGNAL_DEDUP_MINUTES = skip
- *     Different price = new signal (PriceMove category)
- *   - EV_THRESHOLD default lowered to 0.005 (0.5%)
- *   - MIN_BOOKMAKERS default lowered to 2
+ *   - Removed signals_written gate; odds-hash dedup; EV_THRESHOLD 0.005; MIN_BOOKMAKERS 2
+ *
+ * v3 fail-safe guards (diagnosed from live engine logs):
+ *   - ODDS_MAX_AGE_HOURS: skip matches whose newest odds are stale, so we never
+ *     compare fresh predictions against stale prices (was producing 200%+ edges).
+ *   - Require home+draw+away best odds all present before emitting a row — the
+ *     computed_values best_*_odds columns are NOT NULL; writing null aborted the
+ *     whole batch upsert and killed every API_PREDICTIVE row.
+ *   - MAX_PLAUSIBLE_EDGE: reject implausibly large edges that signal an odds/
+ *     prediction data mismatch rather than genuine value.
  *
  * Coexistence: uses UNIQUE(match_id, model_architecture) — never overwrites
  * MARKET_CONSENSUS rows.
@@ -30,6 +35,8 @@ const MIN_BOOKMAKERS        = parseInt(process.env.MIN_BOOKMAKERS        || '2',
 const COMPUTE_CONCURRENCY   = parseInt(process.env.COMPUTE_CONCURRENCY   || '5',  10);
 const EV_THRESHOLD          = parseFloat(process.env.EV_THRESHOLD         || '0.005');
 const SIGNAL_DEDUP_MINUTES  = parseInt(process.env.SIGNAL_DEDUP_MINUTES  || '60', 10);
+const ODDS_MAX_AGE_HOURS    = parseFloat(process.env.ODDS_MAX_AGE_HOURS   || '24');
+const MAX_PLAUSIBLE_EDGE    = parseFloat(process.env.MAX_PLAUSIBLE_EDGE   || '0.5');
 
 // ── 1. Fetch matches with odds + predictions ──────────────────────────────────
 
@@ -85,7 +92,7 @@ async function fetchMatchesForApiComputation(supabase) {
     .filter(m => m.odds.length > 0 && m.prediction !== null);
 }
 
-// ── 2. Bookmaker display names ─────────────────────────────────────────────────
+// ── 2. Bookmaker display names ────────────────────────────────────────────────
 
 function formatBookName(key) {
   if (!key) return null;
@@ -124,6 +131,12 @@ function computeApiMatchEdge(match) {
   const latestFetchedAt = deduped.reduce(
     (best, r) => (!best || r.fetched_at > best ? r.fetched_at : best), null,
   );
+
+  // Stale-odds guard: do not compare fresh predictions against stale prices.
+  const oddsAgeMs = latestFetchedAt
+    ? Date.now() - new Date(latestFetchedAt).getTime()
+    : Infinity;
+  if (oddsAgeMs > ODDS_MAX_AGE_HOURS * 3_600_000) return { skipped: true, reason: 'stale_odds' };
 
   const p_home = parseFloat(prediction.pct_home);
   const p_draw = parseFloat(prediction.pct_draw);
@@ -179,13 +192,22 @@ function computeApiMatchEdge(match) {
 
   const { home, draw, away } = outcomeResults;
 
-  const home_edge = home?.has_edge ? home.edge : 0;
-  const draw_edge = draw?.has_edge ? draw.edge : 0;
-  const away_edge = away?.has_edge ? away.edge : 0;
+  // computed_values.best_*_odds are NOT NULL. Only emit a row when all three
+  // outcomes have a price — otherwise the batch upsert aborts on a null write.
+  if (!home || !draw || !away) {
+    return { skipped: true, reason: 'incomplete_h2h' };
+  }
 
-  const home_value = !!(home?.has_edge && home.edge >= EV_THRESHOLD);
-  const draw_value = !!(draw?.has_edge && draw.edge >= EV_THRESHOLD);
-  const away_value = !!(away?.has_edge && away.edge >= EV_THRESHOLD);
+  const home_edge = home.has_edge ? home.edge : 0;
+  const draw_edge = draw.has_edge ? draw.edge : 0;
+  const away_edge = away.has_edge ? away.edge : 0;
+
+  // Implausible-edge guard: edges this large mean the odds/prediction pair is
+  // mismatched (stale or wrong fixture), not genuine value — don't flag them.
+  const plausible = e => e >= EV_THRESHOLD && e <= MAX_PLAUSIBLE_EDGE;
+  const home_value = !!(home.has_edge && plausible(home.edge));
+  const draw_value = !!(draw.has_edge && plausible(draw.edge));
+  const away_value = !!(away.has_edge && plausible(away.edge));
 
   const edgeMap    = { home: home_edge, draw: draw_edge, away: away_edge };
   const best_outcome = Object.entries(edgeMap).reduce(
@@ -197,16 +219,16 @@ function computeApiMatchEdge(match) {
   const row = {
     match_id: match.id,
 
-    best_home_odds: home?.max_odds  ?? null,
-    best_draw_odds: draw?.max_odds  ?? null,
-    best_away_odds: away?.max_odds  ?? null,
-    best_home_book: home?.max_book  ?? null,
-    best_draw_book: draw?.max_book  ?? null,
-    best_away_book: away?.max_book  ?? null,
+    best_home_odds: home.max_odds,
+    best_draw_odds: draw.max_odds,
+    best_away_odds: away.max_odds,
+    best_home_book: home.max_book,
+    best_draw_book: draw.max_book,
+    best_away_book: away.max_book,
 
-    fair_home_odds: home?.fair_odds != null ? String(home.fair_odds.toFixed(4)) : null,
-    fair_draw_odds: draw?.fair_odds != null ? String(draw.fair_odds.toFixed(4)) : null,
-    fair_away_odds: away?.fair_odds != null ? String(away.fair_odds.toFixed(4)) : null,
+    fair_home_odds: String(home.fair_odds.toFixed(4)),
+    fair_draw_odds: String(draw.fair_odds.toFixed(4)),
+    fair_away_odds: String(away.fair_odds.toFixed(4)),
 
     home_edge, draw_edge, away_edge,
     home_value, draw_value, away_value,
@@ -219,9 +241,9 @@ function computeApiMatchEdge(match) {
     ev_per_unit:   max_edge_val > 0 ? parseFloat(max_edge_val.toFixed(6)) : null,
     max_edge_score,
 
-    all_home_odds: home?.allOdds ?? null,
-    all_draw_odds: draw?.allOdds ?? null,
-    all_away_odds: away?.allOdds ?? null,
+    all_home_odds: home.allOdds ?? null,
+    all_draw_odds: draw.allOdds ?? null,
+    all_away_odds: away.allOdds ?? null,
 
     over_edge: null, under_edge: null, over_value: false, under_value: false,
     btts_yes_edge: null, btts_no_edge: null, btts_yes_value: false, btts_no_value: false,
@@ -237,7 +259,7 @@ function computeApiMatchEdge(match) {
   return { skipped: false, row, hasValue: home_value || draw_value || away_value };
 }
 
-// ── 4. Upsert computed_values ─────────────────────────────────────────────────
+// ── 4. Upsert computed_values ────────────────────────────────────────────────
 
 async function upsertComputedValues(supabase, rows) {
   if (!rows.length) return;
@@ -379,8 +401,8 @@ async function withPool(items, fn, concurrency) {
 async function main() {
   const supabase = getClient();
 
-  console.log('[api_engine] computeApiValues v2 — API Predictive (API-Football /predictions)');
-  console.log(`[api_engine] min_books=${MIN_BOOKMAKERS} ev_threshold=${EV_THRESHOLD} dedup_window=${SIGNAL_DEDUP_MINUTES}min pool=${COMPUTE_CONCURRENCY}`);
+  console.log('[api_engine] computeApiValues v3 — API Predictive (API-Football /predictions)');
+  console.log(`[api_engine] min_books=${MIN_BOOKMAKERS} ev_threshold=${EV_THRESHOLD} max_edge=${MAX_PLAUSIBLE_EDGE} odds_max_age=${ODDS_MAX_AGE_HOURS}h dedup=${SIGNAL_DEDUP_MINUTES}min pool=${COMPUTE_CONCURRENCY}`);
 
   const matches = await fetchMatchesForApiComputation(supabase);
   if (!matches.length) {
@@ -392,18 +414,23 @@ async function main() {
 
   const results = await withPool(matches, computeApiMatchEdge, COMPUTE_CONCURRENCY);
 
-  let computed = 0, skipped = 0, value = 0;
+  let computed = 0, skipped = 0, value = 0, staleOdds = 0, incomplete = 0;
   const computedRows = [];
   const valueRows    = [];
 
   for (const res of results) {
-    if (!res || res.skipped) { skipped++; continue; }
+    if (!res || res.skipped) {
+      skipped++;
+      if (res?.reason === 'stale_odds')     staleOdds++;
+      if (res?.reason === 'incomplete_h2h') incomplete++;
+      continue;
+    }
     computed++;
     computedRows.push(res.row);
     if (res.hasValue) { value++; valueRows.push(res.row); }
   }
 
-  console.log(`[api_engine] computed=${computed} skipped=${skipped} value=${value}`);
+  console.log(`[api_engine] computed=${computed} skipped=${skipped} (stale_odds=${staleOdds} incomplete_h2h=${incomplete}) value=${value}`);
   if (!computedRows.length) return;
 
   await upsertComputedValues(supabase, computedRows);
