@@ -26,6 +26,9 @@
  *
  * Freshness guard: fixtures with all odds older than ODDS_MAX_AGE_HOURS (24)
  * are skipped — stale odds produce false signals and pollute the live feed.
+ *
+ * Note: max_edge is a GENERATED ALWAYS column in the DB (GREATEST of the three
+ * outcome edges) and must NOT be included in upsert payloads.
  */
 
 const { getClient } = require('./lib/supabaseClient');
@@ -248,7 +251,7 @@ function computeMatch(match) {
   const max_edge_val = Math.max(home_edge, draw_edge, away_edge);
 
   // MES (Market Edge Score): edge * 1000, so 7% edge = 70 (ruby threshold).
-  // confidence_score: scaled by bookmaker count, capped at 100.
+  // confidence_score: based on bookmaker count (more books = higher confidence), capped at 100.
   const max_edge_score   = max_edge_val > 0 ? Math.round(max_edge_val * 1000) : 0;
   const confidence_score = Math.min(100, Math.round(bookmakerCount * 5));
 
@@ -289,8 +292,7 @@ function computeMatch(match) {
     best_outcome:  max_edge_val > 0 ? best_outcome : null,
     ev_per_unit:   max_edge_val > 0 ? parseFloat(max_edge_val.toFixed(6)) : null,
 
-    // These three columns are queried by the feed and Market Pulse chart
-    max_edge:       max_edge_val > 0 ? parseFloat(max_edge_val.toFixed(6)) : 0,
+    // max_edge is GENERATED ALWAYS (GREATEST of the three edges) — do NOT include here
     max_edge_score,
     confidence_score,
     mes_breakdown,
