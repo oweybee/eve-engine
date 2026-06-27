@@ -1,47 +1,49 @@
-# ──────────────────────────────────────────────────────────────────────────────
-# MaxEdge EVE Engine  —  15-minute value detection pipeline
+# ────────────────────────────────────────────────────────────────────────────
+# MaxEdge EVE Engine  —  live odds pipeline
 #
-# Pipeline per tick:
-#   1. ingestOdds.js        — pull latest odds from API-Football; plan-gated, so most
-#                             ticks cost zero API requests outside the active window
-#   2. computeValues.js     — market consensus edge detection (Kaunitz et al.);
-#                             upserts computed_values, writes value_signals
-#   3. computeApiValues.js  — API-Football predictive engine; coexists via composite
-#                             unique (match_id, model_architecture)
-#   4. captureSnapshot.js   — record best odds per outcome + CLV open/closing snaps
-#                             (runs after compute so charts always reflect current data)
-#   5. postToX.js           — fire Telegram alerts for new value signals
-#   6. fetchResults.js      — settle completed fixtures (scores → value_signals)
-#   7. fetchMatchDetails.js — lineups, predictions, match stats (continue-on-error)
+# Budget: 75,000 API req/day
+#   288 jobs/day × 4 ingest loops × ~12 fixtures = ~13,824 req/day (18%)
+#   Odds refresh every ~55 seconds during each 5-minute job.
 #
-# Companion workflow: plan-day.yml fires at 05:00 UTC and writes the daily
-# engine_plan to Supabase; ingestOdds.js reads this plan to self-gate.
-# ──────────────────────────────────────────────────────────────────────────────
+# Pipeline per job:
+#   Loop ×4 (55s gap):
+#     1. ingestOdds.js    — pull latest odds; plan-gated (off-hours = no-op)
+#     2. computeValues.js — Kaunitz edge detection; price-change signals
+#     3. captureSnapshot.js — odds time-series for charts
+#   Once per job:
+#     4. computeApiValues.js — XG/API predictive model
+#     5. postToX.js          — Telegram: VALUE / RUBY / ODDS MOVEMENT alerts
+#     6. fetchResults.js     — settle completed fixtures
+#     7. fetchMatchDetails.js — lineups + stats
+# ────────────────────────────────────────────────────────────────────────────
 
 name: MaxEdge EVE Engine
 
 on:
   schedule:
-    # Pulse every 15 minutes, 24 / 7. ingestOdds.js self-gates against
-    # engine_plan.next_run_at, so off-hours ticks are < 1 s no-ops.
-    - cron: '*/15 * * * *'
+    # Every 5 minutes — minimum GitHub Actions interval.
+    # ingestOdds.js self-gates against engine_plan.next_run_at.
+    - cron: '*/5 * * * *'
 
   workflow_dispatch:
     inputs:
       skip_ingest:
-        description: 'Skip ingestOdds.js (reuse existing odds — useful for backtest reruns)'
+        description: 'Skip ingestOdds.js'
         type: boolean
         default: false
       skip_post:
-        description: 'Skip postToX.js (suppress Telegram alerts — useful for dry-run compute)'
+        description: 'Skip postToX.js (suppress Telegram alerts)'
         type: boolean
         default: false
       skip_results:
-        description: 'Skip fetchResults.js (skip result settlement this tick)'
+        description: 'Skip fetchResults.js'
         type: boolean
         default: false
+      loop_count:
+        description: 'Number of ingest loops (default 4)'
+        type: string
+        default: '4'
 
-# ── Concurrency ───────────────────────────────────────────────────────────────
 concurrency:
   group: engine-${{ github.ref_name }}
   cancel-in-progress: false
@@ -53,30 +55,20 @@ jobs:
   engine:
     name: EVE Engine Tick
     runs-on: ubuntu-latest
-    timeout-minutes: 13
+    timeout-minutes: 5
 
     env:
-      # ── Supabase ──────────────────────────────────────────────────────────────
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-
-      # ── Odds API (API-Football v3) ─────────────────────────────────────────
       API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
-
-      # ── Betfair Exchange ─────────────────────────────────────────────────
       BETFAIR_APP_KEY:           ${{ secrets.BETFAIR_APP_KEY }}
       BETFAIR_USERNAME:          ${{ secrets.BETFAIR_USERNAME }}
       BETFAIR_PASSWORD:          ${{ secrets.BETFAIR_PASSWORD }}
-
-      # ── Telegram / signal delivery ──────────────────────────────────────────
       TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
-
-      # ── Active window: 0 = run 24/7, odds ingested round the clock ───────────
       ACTIVE_START_HOUR:         '0'
       ACTIVE_END_HOUR:           '24'
-
-      # ── Model tuning (override after running calibrate.js) ─────────────────
+      DAILY_REQUEST_BUDGET:      ${{ vars.DAILY_REQUEST_BUDGET || '75000' }}
       SHARPNESS_MULTI_BOOK:      ${{ vars.SHARPNESS_MULTI_BOOK  }}
       SHARPNESS_SINGLE_BOOK:     ${{ vars.SHARPNESS_SINGLE_BOOK }}
       MULTI_BOOK_THRESHOLD:      ${{ vars.MULTI_BOOK_THRESHOLD  }}
@@ -85,9 +77,6 @@ jobs:
       MIN_PROB:                  ${{ vars.MIN_PROB              }}
       MAX_ODDS:                  ${{ vars.MAX_ODDS              }}
       SIGNAL_EDGE:               ${{ vars.SIGNAL_EDGE           }}
-      DAILY_REQUEST_BUDGET:      ${{ vars.DAILY_REQUEST_BUDGET  }}
-
-      # ── GitHub run context ─────────────────────────────────────────────
       GITHUB_RUN_ID:             ${{ github.run_id }}
 
     steps:
@@ -102,27 +91,32 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      - name: Install dependencies (cached)
+      - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Ingest odds
-        id: ingest
+      - name: Live odds loop (ingest -> compute -> snapshot)
+        id: ingest_loop
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_ingest != 'true' }}
-        run: node ingestOdds.js
-
-      - name: Compute values (Kaunitz market consensus)
-        id: compute
-        run: node computeValues.js
+        shell: bash
+        run: |
+          LOOPS=${{ github.event.inputs.loop_count || '4' }}
+          LOOP_EXIT=0
+          for i in $(seq 1 $LOOPS); do
+            echo "--- Loop $i / $LOOPS ---"
+            node ingestOdds.js    || LOOP_EXIT=$?
+            node computeValues.js || LOOP_EXIT=$?
+            node captureSnapshot.js 2>/dev/null || true
+            if [ "$i" -lt "$LOOPS" ]; then
+              echo "Sleeping 55s before next loop..."
+              sleep 55
+            fi
+          done
+          exit $LOOP_EXIT
 
       - name: Compute API predictive values
         id: api_compute
         continue-on-error: true
         run: node computeApiValues.js
-
-      - name: Capture snapshot
-        id: snapshot
-        continue-on-error: true
-        run: node captureSnapshot.js
 
       - name: Post signals
         id: post
@@ -149,57 +143,16 @@ jobs:
           TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
           FAILED_STEPS=""
-          [ "${{ steps.ingest.outcome }}"      = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`ingest-odds\` (ingestOdds.js)"
-          [ "${{ steps.compute.outcome }}"     = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`compute-values\` (computeValues.js)"
-          [ "${{ steps.api_compute.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`api-compute\` (computeApiValues.js)"
-          [ "${{ steps.snapshot.outcome }}"    = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`capture-snapshot\` (captureSnapshot.js)"
-          [ "${{ steps.post.outcome }}"        = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`post-signals\` (postToX.js)"
-          [ "${{ steps.results.outcome }}"     = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`settle-results\` (fetchResults.js)"
-          [ "${{ steps.details.outcome }}"     = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n• \`fetch-details\` (fetchMatchDetails.js)"
+          [ "${{ steps.ingest_loop.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- ingest-loop (ingestOdds + computeValues + captureSnapshot)"
+          [ "${{ steps.api_compute.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- api-compute (computeApiValues.js)"
+          [ "${{ steps.post.outcome }}"         = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- post-signals (postToX.js)"
+          [ "${{ steps.results.outcome }}"      = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- settle-results (fetchResults.js)"
+          [ "${{ steps.details.outcome }}"      = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- fetch-details (fetchMatchDetails.js)"
+          [ -z "$FAILED_STEPS" ] && FAILED_STEPS="\n- setup (checkout/node/npm)"
 
-          [ -z "$FAILED_STEPS" ] && FAILED_STEPS="\n• \`setup\` (checkout / node / npm ci)"
-
-          PAYLOAD=$(jq -n \
-            --arg failed   "$FAILED_STEPS" \
-            --arg run_url  "$RUN_URL" \
-            --arg run_id   "${{ github.run_id }}" \
-            --arg run_num  "${{ github.run_number }}" \
-            --arg branch   "${{ github.ref_name }}" \
-            --arg trigger  "${{ github.event_name }}" \
-            --arg actor    "${{ github.actor }}" \
-            --arg repo     "${{ github.repository }}" \
-            --arg sha      "${GITHUB_SHA::7}" \
-            --arg ts       "$TIMESTAMP" \
-            '{
-              embeds: [{
-                title: "\u{1F534}  EVE Engine — Pipeline Failure",
-                description: (
-                  "A step exited non-zero on run [#" + $run_num + "](" + $run_url + ").\n"
-                  + "Odds ingestion or signal delivery **may be stalled**. Investigate immediately."
-                ),
-                color: 15548997,
-                url:   $run_url,
-                fields: [
-                  { name: "❌  Failed Step(s)", value: $failed,                                              inline: false },
-                  { name: "\u{1F33F}  Branch",      value: ("`" + $branch + "`"),                               inline: true  },
-                  { name: "\u{1F516}  Commit",      value: ("`" + $sha + "`"),                                 inline: true  },
-                  { name: "⚡  Trigger",        value: $trigger,                                            inline: true  },
-                  { name: "\u{1F464}  Actor",       value: $actor,                                              inline: true  },
-                  { name: "\u{1F4CB}  Run logs",    value: ("[View run #" + $run_num + "](" + $run_url + ")"), inline: false }
-                ],
-                timestamp: $ts,
-                footer: { text: ("MaxEdge EVE Engine  ·  " + $repo) }
-              }]
-            }')
-
-          HTTP_STATUS=$(curl -s -o /tmp/webhook_response.txt -w "%{http_code}" \
-            -X POST "$WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
-
-          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
-            echo "Alert delivered (HTTP $HTTP_STATUS)"
-          else
-            echo "::warning::ENGINE_ALERT_WEBHOOK returned HTTP $HTTP_STATUS — check the secret and webhook URL"
-            echo "::warning::Webhook response: $(cat /tmp/webhook_response.txt)"
+          if [ -n "$WEBHOOK_URL" ]; then
+            PAYLOAD=$(printf '{"content":"[FAIL] EVE Engine pipeline failure\nBranch: %s\nRun: %s\nFailed steps:%s"}' \
+              "${{ github.ref_name }}" "$RUN_URL" "$FAILED_STEPS")
+            curl -s -X POST "$WEBHOOK_URL" -H 'Content-Type: application/json' -d "$PAYLOAD" || true
           fi
+          echo "Pipeline failed — steps:$FAILED_STEPS"

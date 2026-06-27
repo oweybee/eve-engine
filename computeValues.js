@@ -1,59 +1,36 @@
 'use strict';
 
 /**
- * EVE — Value Detection Engine  v6
+ * EVE — Value Detection Engine  v7
  *
  * Model: Market Consensus / Wisdom of Crowds (Kaunitz et al.)
  *        "Beating the bookies with their own numbers" (2017)
  *
- * Core logic:
- *   1. Collect all bookmaker odds for a fixture (h2h market only).
- *   2. Compute consensus probability: p_cons = 1 / mean(all_odds_for_outcome)
- *   3. Subtract directional margin alpha to isolate true probability:
- *        p_adj = p_cons - alpha
- *   4. Fair odds line: fair_odds = 1 / p_adj
- *   5. Edge exists when any bookmaker beats the fair line:
- *        has_edge = max_odds > fair_odds
- *        edge     = p_adj * max_odds - 1
- *
- * Alpha constants (Kaunitz et al., Table 3):
- *   alpha_home = 0.034  alpha_draw = 0.057  alpha_away = 0.037
- *   Set env var USE_UNIFORM_ALPHA=true to use alpha=0.05 for all outcomes
- *   (paper's real-world trading optimisation variant).
- *
- * Guard: fixtures with fewer than MIN_BOOKMAKERS (3) are skipped to prevent
- * low-sample consensus distortion.
- *
- * Freshness guard: fixtures with all odds older than ODDS_MAX_AGE_HOURS (24)
- * are skipped — stale odds produce false signals and pollute the live feed.
- *
- * Note: max_edge is a GENERATED ALWAYS column in the DB (GREATEST of the three
- * outcome edges) and must NOT be included in upsert payloads.
+ * v7: price-change signalling
+ *   - Removed signals_written gate — every compute cycle re-evaluates
+ *   - Dedup is odds-based: same price within SIGNAL_DEDUP_MINUTES = skip
+ *     Different price = new signal (PriceMove category)
+ *   - EV_THRESHOLD default lowered to 0.005 (0.5%) to surface marginal value
  */
 
 const { getClient } = require('./lib/supabaseClient');
 
-// ---------------------------------------------------------------------------
 // Config
-// ---------------------------------------------------------------------------
-
 const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '3',    10);
 const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5',    10);
 const USE_UNIFORM_ALPHA   = (process.env.USE_UNIFORM_ALPHA || '').toLowerCase() === 'true';
 const ODDS_MAX_AGE_HOURS  = parseFloat(process.env.ODDS_MAX_AGE_HOURS || '24');
 
-// Directional alphas (Kaunitz et al.)
 const ALPHA_HOME    = parseFloat(process.env.ALPHA_HOME    || '0.034');
 const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
 const ALPHA_AWAY    = parseFloat(process.env.ALPHA_AWAY    || '0.037');
 const ALPHA_UNIFORM = parseFloat(process.env.ALPHA_UNIFORM || '0.05');
 
-// Minimum raw edge to write a value_signal row (keeps noise out of DB)
-const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD || '0.02');
+// Lowered from 0.02 — World Cup market is efficient, 0.5% surfaces real marginal edge
+const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD || '0.005');
 
-// ---------------------------------------------------------------------------
-// 1. Fetch matches with odds
-// ---------------------------------------------------------------------------
+// Skip re-signal if same odds seen within this window (avoid spam)
+const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
 async function fetchMatchesForComputation(supabase) {
   const { data: matchData, error: matchError } = await supabase
@@ -90,44 +67,22 @@ async function fetchMatchesForComputation(supabase) {
     .filter(m => m.odds.length > 0);
 }
 
-// ---------------------------------------------------------------------------
-// 2. Bookmaker display names
-// ---------------------------------------------------------------------------
-
 function formatBookName(key) {
   if (!key) return null;
   const names = {
-    betfair_ex_uk:  'Betfair Exch',
-    betfair_sb_uk:  'Betfair SB',
-    smarkets:       'Smarkets',
-    matchbook:      'Matchbook',
-    bet365:         'Bet365',
-    skybet:         'Sky Bet',
-    williamhill:    'William Hill',
-    paddypower:     'Paddy Power',
-    coral:          'Coral',
-    ladbrokes_uk:   'Ladbrokes',
-    betfred_uk:     'Betfred',
-    betway:         'Betway',
-    betvictor:      'BetVictor',
-    boylesports:    'BoyleSports',
-    unibet_uk:      'Unibet',
-    virginbet:      'Virgin Bet',
-    sport888:       '888sport',
-    leovegas:       'LeoVegas',
-    casumo:         'Casumo',
-    grosvenor:      'Grosvenor',
-    livescorebet:   'LiveScore Bet',
-    pinnacle:       'Pinnacle',
-    unibet:         'Unibet',
-    betsson:        'Betsson',
+    betfair_ex_uk: 'Betfair Exch', betfair_sb_uk: 'Betfair SB',
+    smarkets: 'Smarkets', matchbook: 'Matchbook', bet365: 'Bet365',
+    skybet: 'Sky Bet', williamhill: 'William Hill', paddypower: 'Paddy Power',
+    coral: 'Coral', ladbrokes_uk: 'Ladbrokes', betfred_uk: 'Betfred',
+    betway: 'Betway', betvictor: 'BetVictor', boylesports: 'BoyleSports',
+    unibet_uk: 'Unibet', virginbet: 'Virgin Bet', sport888: '888sport',
+    leovegas: 'LeoVegas', casumo: 'Casumo', grosvenor: 'Grosvenor',
+    livescorebet: 'LiveScore Bet', pinnacle: 'Pinnacle', unibet: 'Unibet',
+    betsson: 'Betsson', betano: 'Betano', marathonbet: 'MarathonBet',
+    '1xbet': '1xBet', sbo: 'SBO', '888sport': '888sport', '10bet': '10bet',
   };
   return names[key] ?? key;
 }
-
-// ---------------------------------------------------------------------------
-// 3. Market consensus engine (Kaunitz et al.)
-// ---------------------------------------------------------------------------
 
 function computeConsensus(oddsRows) {
   const h2hRows = oddsRows.filter(r => (r.market ?? 'h2h') === 'h2h');
@@ -150,7 +105,6 @@ function computeConsensus(oddsRows) {
     (best, r) => (!best || r.fetched_at > best ? r.fetched_at : best), null
   );
 
-  // Freshness guard: skip matches with stale odds to prevent false signals.
   const oddsAgeMs = latestFetchedAt
     ? Date.now() - new Date(latestFetchedAt).getTime()
     : Infinity;
@@ -175,14 +129,11 @@ function computeConsensus(oddsRows) {
       return Number.isFinite(v) && v > 1.0 && v < 1000;
     });
 
-    if (!validRows.length) {
-      result[outcome] = null;
-      continue;
-    }
+    if (!validRows.length) { result[outcome] = null; continue; }
 
     const allOdds = {};
     for (const r of validRows) {
-      const v    = parseFloat(r[field]);
+      const v = parseFloat(r[field]);
       const name = formatBookName(r.bookmaker);
       if (name) allOdds[name] = v;
     }
@@ -199,8 +150,7 @@ function computeConsensus(oddsRows) {
 
     const fair_odds = 1 / p_adj;
 
-    let max_odds = 0;
-    let max_book = null;
+    let max_odds = 0, max_book = null;
     for (const r of validRows) {
       const v = parseFloat(r[field]);
       if (v > max_odds) { max_odds = v; max_book = formatBookName(r.bookmaker); }
@@ -215,22 +165,18 @@ function computeConsensus(oddsRows) {
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// 4. Build computed_values row for one match
-// ---------------------------------------------------------------------------
-
 function computeMatch(match) {
   const consensus = computeConsensus(match.odds);
   if (!consensus) return { skipped: true };
 
   const { home, draw, away, bookmakerCount, latestFetchedAt } = consensus;
 
-  const best_home_odds = home?.max_odds  ?? null;
-  const best_draw_odds = draw?.max_odds  ?? null;
-  const best_away_odds = away?.max_odds  ?? null;
-  const best_home_book = home?.max_book  ?? null;
-  const best_draw_book = draw?.max_book  ?? null;
-  const best_away_book = away?.max_book  ?? null;
+  const best_home_odds = home?.max_odds ?? null;
+  const best_draw_odds = draw?.max_odds ?? null;
+  const best_away_odds = away?.max_odds ?? null;
+  const best_home_book = home?.max_book ?? null;
+  const best_draw_book = draw?.max_book ?? null;
+  const best_away_book = away?.max_book ?? null;
 
   const fair_home_odds = home?.fair_odds != null ? String(home.fair_odds.toFixed(4)) : null;
   const fair_draw_odds = draw?.fair_odds != null ? String(draw.fair_odds.toFixed(4)) : null;
@@ -244,70 +190,45 @@ function computeMatch(match) {
   const draw_value = !!(draw?.has_edge && draw.edge >= EV_THRESHOLD);
   const away_value = !!(away?.has_edge && away.edge >= EV_THRESHOLD);
 
-  const edgeMap    = { home: home_edge, draw: draw_edge, away: away_edge };
+  const edgeMap = { home: home_edge, draw: draw_edge, away: away_edge };
   const best_outcome = Object.entries(edgeMap).reduce(
     (best, [k, v]) => (v > edgeMap[best] ? k : best), 'home'
   );
   const max_edge_val = Math.max(home_edge, draw_edge, away_edge);
 
-  // MES (Market Edge Score): edge * 1000, so 7% edge = 70 (ruby threshold).
-  // confidence_score: based on bookmaker count (more books = higher confidence), capped at 100.
   const max_edge_score   = max_edge_val > 0 ? Math.round(max_edge_val * 1000) : 0;
   const confidence_score = Math.min(100, Math.round(bookmakerCount * 5));
 
   const mes_breakdown = {
-    home:            { edge: home_edge, has_value: home_value, p_adj: home?.p_adj ?? null, fair_odds: home?.fair_odds ?? null },
-    draw:            { edge: draw_edge, has_value: draw_value, p_adj: draw?.p_adj ?? null, fair_odds: draw?.fair_odds ?? null },
-    away:            { edge: away_edge, has_value: away_value, p_adj: away?.p_adj ?? null, fair_odds: away?.fair_odds ?? null },
+    home: { edge: home_edge, has_value: home_value, p_adj: home?.p_adj ?? null, fair_odds: home?.fair_odds ?? null },
+    draw: { edge: draw_edge, has_value: draw_value, p_adj: draw?.p_adj ?? null, fair_odds: draw?.fair_odds ?? null },
+    away: { edge: away_edge, has_value: away_value, p_adj: away?.p_adj ?? null, fair_odds: away?.fair_odds ?? null },
     bookmaker_count: bookmakerCount,
-    score:           max_edge_score,
+    score: max_edge_score,
   };
 
   const row = {
     match_id: match.id,
-
-    best_home_odds,
-    best_draw_odds,
-    best_away_odds,
-    best_home_book,
-    best_draw_book,
-    best_away_book,
-
-    fair_home_odds,
-    fair_draw_odds,
-    fair_away_odds,
-
-    home_edge,
-    draw_edge,
-    away_edge,
-
-    home_value,
-    draw_value,
-    away_value,
-
+    best_home_odds, best_draw_odds, best_away_odds,
+    best_home_book, best_draw_book, best_away_book,
+    fair_home_odds, fair_draw_odds, fair_away_odds,
+    home_edge, draw_edge, away_edge,
+    home_value, draw_value, away_value,
     model_architecture: 'MARKET_CONSENSUS',
     odds_fetched_at:    latestFetchedAt,
     computed_at:        new Date().toISOString(),
-
     best_outcome:  max_edge_val > 0 ? best_outcome : null,
     ev_per_unit:   max_edge_val > 0 ? parseFloat(max_edge_val.toFixed(6)) : null,
-
-    // max_edge is GENERATED ALWAYS (GREATEST of the three edges) — do NOT include here
-    max_edge_score,
-    confidence_score,
-    mes_breakdown,
-
+    max_edge_score, confidence_score, mes_breakdown,
     all_home_odds: home?.allOdds ?? null,
     all_draw_odds: draw?.allOdds ?? null,
     all_away_odds: away?.allOdds ?? null,
-
     over_edge: null, under_edge: null, over_value: false, under_value: false,
     btts_yes_edge: null, btts_no_edge: null, btts_yes_value: false, btts_no_value: false,
     bookings_over_edge: null, bookings_under_edge: null,
     bookings_over_value: false, bookings_under_value: false,
     corners_over_edge: null, corners_under_edge: null,
     corners_over_value: false, corners_under_value: false,
-
     _kickoff_at:     match.kickoff_at,
     _bookmakerCount: bookmakerCount,
   };
@@ -315,12 +236,8 @@ function computeMatch(match) {
   return { skipped: false, row, hasValue: home_value || draw_value || away_value };
 }
 
-// ---------------------------------------------------------------------------
-// 5. Upsert computed_values
-// ---------------------------------------------------------------------------
-
 async function upsertComputedValues(supabase, rows) {
-  if (!rows.length) return new Map();
+  if (!rows.length) return;
 
   const dbRows = rows.map(row => {
     const clean = {};
@@ -330,18 +247,12 @@ async function upsertComputedValues(supabase, rows) {
     return clean;
   });
 
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from('computed_values')
-    .upsert(dbRows, { onConflict: 'match_id,model_architecture' })
-    .select('match_id, signals_written');
+    .upsert(dbRows, { onConflict: 'match_id,model_architecture' });
 
   if (error) throw new Error(`upsertComputedValues: ${error.message}`);
-  return new Map((data ?? []).map(r => [r.match_id, r.signals_written === true]));
 }
-
-// ---------------------------------------------------------------------------
-// 6. Insert value_signals (2-hour dedup)
-// ---------------------------------------------------------------------------
 
 async function insertValueSignals(supabase, rows) {
   const candidates = [];
@@ -349,10 +260,7 @@ async function insertValueSignals(supabase, rows) {
   for (const row of rows) {
     for (const outcome of ['home', 'draw', 'away']) {
       if (!row[`${outcome}_value`]) continue;
-
       const edge = row[`${outcome}_edge`];
-      const signal_category = edge >= 0.05 ? 'Prime' : 'Standard';
-
       candidates.push({
         match_id:           row.match_id,
         outcome,
@@ -361,117 +269,124 @@ async function insertValueSignals(supabase, rows) {
         detected_mes:       row.max_edge_score,
         bookmaker:          row[`best_${outcome}_book`],
         kickoff_at:         row._kickoff_at ?? null,
-        signal_category,
         model_architecture: 'MARKET_CONSENSUS',
+        _edge:              edge,
+        _odds:              row[`best_${outcome}_odds`],
       });
     }
   }
 
   if (!candidates.length) {
-    console.log('[value_signals] no value outcomes to record');
+    console.log('[value_signals] no value outcomes');
     return 0;
   }
 
-  const primeCount    = candidates.filter(c => c.signal_category === 'Prime').length;
-  const standardCount = candidates.filter(c => c.signal_category === 'Standard').length;
-  console.log(`[value_signals] candidates — Prime:${primeCount} Standard:${standardCount}`);
-
   const matchIds    = [...new Set(candidates.map(c => c.match_id))];
-  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const dedupCutoff = new Date(Date.now() - SIGNAL_DEDUP_MINUTES * 60 * 1000).toISOString();
 
   const { data: recent, error: selErr } = await supabase
     .from('value_signals')
-    .select('match_id, outcome')
+    .select('match_id, outcome, detected_odds')
     .in('match_id', matchIds)
-    .gte('detected_at', twoHoursAgo);
+    .gte('detected_at', dedupCutoff);
   if (selErr) throw new Error(`insertValueSignals(select): ${selErr.message}`);
 
-  const seen     = new Set((recent ?? []).map(r => `${r.match_id}|${r.outcome}`));
-  const toInsert = candidates.filter(c => !seen.has(`${c.match_id}|${c.outcome}`));
-
-  if (!toInsert.length) {
-    console.log(`[value_signals] all ${candidates.length} signal(s) already recorded within 2h — skipping`);
-    return 0;
+  const recentOdds = new Map();
+  for (const r of (recent ?? [])) {
+    recentOdds.set(`${r.match_id}|${r.outcome}`, parseFloat(r.detected_odds));
   }
+
+  const toInsert = [];
+  let skippedSamePrice = 0;
+
+  for (const c of candidates) {
+    const key      = `${c.match_id}|${c.outcome}`;
+    const lastOdds = recentOdds.get(key);
+    const curOdds  = parseFloat(c._odds);
+
+    if (lastOdds != null && Math.abs(lastOdds - curOdds) < 0.001) {
+      skippedSamePrice++;
+      continue;
+    }
+
+    let signal_category;
+    if (lastOdds != null) {
+      signal_category = 'PriceMove';
+    } else if (c._edge >= 0.05) {
+      signal_category = 'Prime';
+    } else {
+      signal_category = 'Standard';
+    }
+
+    const { _edge, _odds, ...signalRow } = c;
+    toInsert.push({ ...signalRow, signal_category });
+  }
+
+  console.log(
+    `[value_signals] candidates=${candidates.length}` +
+    ` skipped_same_price=${skippedSamePrice} to_insert=${toInsert.length}`
+  );
+
+  if (!toInsert.length) return 0;
 
   const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
   if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
 
-  console.log(
-    `[value_signals] recorded ${toInsert.length} new signal(s)` +
-    ` (${candidates.length - toInsert.length} skipped as duplicates within 2h)`
-  );
+  const pm = toInsert.filter(r => r.signal_category === 'PriceMove').length;
+  const pr = toInsert.filter(r => r.signal_category === 'Prime').length;
+  const st = toInsert.filter(r => r.signal_category === 'Standard').length;
+  console.log(`[value_signals] inserted ${toInsert.length} (PriceMove=${pm} Prime=${pr} Standard=${st})`);
   return toInsert.length;
 }
 
-// ---------------------------------------------------------------------------
-// 7. Bet-of-day (highest-edge match)
-// ---------------------------------------------------------------------------
-
 async function updateBetOfDay(supabase, rows) {
   await supabase.from('matches').update({ is_bet_of_day: false }).eq('is_bet_of_day', true);
-
   const candidates = rows.filter(r =>
     Math.max(r.home_edge ?? 0, r.draw_edge ?? 0, r.away_edge ?? 0) > 0
   );
   if (!candidates.length) return null;
-
   const best = candidates.reduce((top, r) => {
     const e    = Math.max(r.home_edge ?? 0, r.draw_edge ?? 0, r.away_edge ?? 0);
     const topE = Math.max(top.home_edge ?? 0, top.draw_edge ?? 0, top.away_edge ?? 0);
     return e > topE ? r : top;
   });
-
   await supabase.from('matches').update({ is_bet_of_day: true }).eq('id', best.match_id);
   return best.match_id;
 }
-
-// ---------------------------------------------------------------------------
-// 8. Concurrency pool
-// ---------------------------------------------------------------------------
 
 async function withPool(items, fn, concurrency) {
   if (!Number.isFinite(concurrency) || concurrency < 1) {
     throw new RangeError(`COMPUTE_CONCURRENCY must be >= 1, got ${concurrency}`);
   }
-
   const results = [];
   for (let start = 0; start < items.length; start += concurrency) {
     const batch   = items.slice(start, start + concurrency);
     const settled = await Promise.allSettled(batch.map(fn));
     for (const s of settled) {
-      if (s.status === 'fulfilled') {
-        results.push(s.value);
-      } else {
-        console.error('[engine] match error:', s.reason?.message ?? s.reason);
-        results.push(null);
-      }
+      results.push(s.status === 'fulfilled' ? s.value : null);
+      if (s.status === 'rejected') console.error('[engine] match error:', s.reason?.message);
     }
   }
   return results;
 }
 
-// ---------------------------------------------------------------------------
-// 9. Main
-// ---------------------------------------------------------------------------
-
 async function main() {
   const supabase = getClient();
 
-  console.log('[engine] computeValues v6 — Market Consensus (Kaunitz et al.)');
+  console.log('[engine] computeValues v7 — Market Consensus (Kaunitz) + price-change signals');
   console.log(
-    `[engine] alpha_mode=${USE_UNIFORM_ALPHA ? `uniform(${ALPHA_UNIFORM})` : 'directional'}` +
-    ` min_books=${MIN_BOOKMAKERS} ev_threshold=${EV_THRESHOLD} pool=${COMPUTE_CONCURRENCY}` +
-    ` odds_max_age=${ODDS_MAX_AGE_HOURS}h`
+    `[engine] alpha=${USE_UNIFORM_ALPHA ? `uniform(${ALPHA_UNIFORM})` : 'directional'}` +
+    ` min_books=${MIN_BOOKMAKERS} ev_threshold=${EV_THRESHOLD}` +
+    ` dedup_window=${SIGNAL_DEDUP_MINUTES}min pool=${COMPUTE_CONCURRENCY}`
   );
 
   const matches = await fetchMatchesForComputation(supabase);
   if (!matches.length) {
-    console.log('[engine] no matches with odds — nothing to compute');
+    console.log('[engine] no matches with odds — done');
     return;
   }
 
-  console.log(`[engine] processing ${matches.length} match(es) (pool=${COMPUTE_CONCURRENCY})`);
+  console.log(`[engine] processing ${matches.length} match(es)`);
 
   const results = await withPool(matches, computeMatch, COMPUTE_CONCURRENCY);
 
@@ -490,28 +405,13 @@ async function main() {
 
   if (!computedRows.length) return;
 
-  const signalsWrittenMap = await upsertComputedValues(supabase, computedRows);
+  await upsertComputedValues(supabase, computedRows);
 
-  const unsignaled = valueRows.filter(r => signalsWrittenMap.get(r.match_id) !== true);
-  if (unsignaled.length) {
-    await insertValueSignals(supabase, unsignaled);
-
-    const matchIds = unsignaled.map(r => r.match_id);
-    const { error: swErr } = await supabase
-      .from('computed_values')
-      .update({ signals_written: true })
-      .in('match_id', matchIds)
-      .eq('model_architecture', 'MARKET_CONSENSUS');
-    if (swErr) console.error('[engine] signals_written update error:', swErr.message);
+  if (valueRows.length) {
+    await insertValueSignals(supabase, valueRows);
   }
 
   await updateBetOfDay(supabase, computedRows);
-
-  if (USE_UNIFORM_ALPHA) {
-    console.log(`[engine] alpha=uniform(${ALPHA_UNIFORM})`);
-  } else {
-    console.log(`[engine] alpha=directional home=${ALPHA_HOME} draw=${ALPHA_DRAW} away=${ALPHA_AWAY}`);
-  }
 }
 
 main().catch(err => {
