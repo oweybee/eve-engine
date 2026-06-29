@@ -37,6 +37,10 @@ const WORLD_CUP_COMPETITION_ID = '12469077';
 // Minimum price movement to bother inserting a new row
 const MIN_PRICE_MOVEMENT = 0.01;
 
+// Self-throttle: skip the run if we already ingested within this many minutes.
+// Keeps Betfair logins sane regardless of how often the engine fires.
+const MIN_RUN_INTERVAL_MIN = parseFloat(process.env.BETFAIR_MIN_INTERVAL_MIN || '12');
+
 // ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
@@ -580,6 +584,19 @@ async function insertOddsRow(supabase, matchId, row) {
 
 async function ingest() {
   console.log(`\n[betfairIngest] starting ${DRY_RUN ? '(DRY RUN) ' : ''}at ${new Date().toISOString()}`);
+
+  // Self-throttle on data freshness — robust to any cron cadence. If a recent
+  // Betfair row exists, skip (no login, no API calls).
+  if (!DRY_RUN) {
+    const supa  = getSupabase();
+    const since = new Date(Date.now() - MIN_RUN_INTERVAL_MIN * 60_000).toISOString();
+    const { data: recent } = await supa
+      .from('odds').select('id').eq('bookmaker', 'betfair_ex_uk').gte('fetched_at', since).limit(1);
+    if (recent && recent.length) {
+      console.log(`[betfairIngest] skip — already ingested within ${MIN_RUN_INTERVAL_MIN} min`);
+      return { skipped: true };
+    }
+  }
 
   // Authenticate
   const sessionToken = await authenticate();

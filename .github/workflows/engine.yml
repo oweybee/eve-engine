@@ -111,15 +111,11 @@ jobs:
         shell: bash
         run: |
           # Betfair supplies the secondary markets API-Football can't (cards via
-          # Booking Points, corners) plus Exchange-priced O/U + BTTS. These move
-          # slower than the 5-min core loop and Betfair logins are rate-limited,
-          # so throttle to ~every 15 minutes. Non-fatal: a Betfair outage must
-          # never take down the core 1X2 pipeline below.
-          M=$(date -u +%M)
-          if [ $((10#$M % 15)) -ge 5 ]; then
-            echo "[betfair] skip — throttled (minute $M)"
-            exit 0
-          fi
+          # Booking Points, corners) plus Exchange-priced O/U + BTTS. Run every
+          # invocation — GitHub throttles the */5 schedule hard, so the engine is
+          # really dispatch-driven ~hourly; betfairIngest self-throttles on its own
+          # data freshness so it's safe even if the 5-min schedule does fire.
+          # Non-fatal: a Betfair outage must never take down the core 1X2 pipeline.
           node betfairIngest.js
 
       - name: Live odds loop (ingest -> compute -> snapshot)
@@ -166,12 +162,11 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          # Rolling last-N form / corners / cards / xG per team — stable across a
-          # day and self-cached per team, so only refresh every ~6h.
-          H=$(date -u +%H); M=$(date -u +%M)
-          if [ $((10#$M)) -ge 5 ] || [ $((10#$H % 6)) -ne 0 ]; then
-            echo "[teamstats] skip — throttled (H=$H M=$M)"; exit 0
-          fi
+          # Rolling last-N form / corners / cards / xG per team. Run every
+          # invocation — the script self-caches per team (TEAM_STATS_REFRESH_HOURS,
+          # default 20h), so re-running it is cheap and it only refetches stale
+          # teams. The previous wall-clock gate never aligned with the real
+          # dispatch-driven cadence, so stats never populated.
           node fetchTeamStats.js
 
       - name: Alert on pipeline failure
