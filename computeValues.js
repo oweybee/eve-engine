@@ -27,6 +27,13 @@ const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
 const ALPHA_AWAY    = parseFloat(process.env.ALPHA_AWAY    || '0.037');
 const ALPHA_UNIFORM = parseFloat(process.env.ALPHA_UNIFORM || '0.05');
 
+// De-vig margin (RELATIVE). The consensus probabilities are de-vigged (the three
+// 1/odds normalised to sum to 1), then shaved by this relative margin as a small
+// safety buffer. Relative — not the old fixed additive alpha — so it scales with
+// each outcome's probability: a flat ~5.7pp haircut made draws/longshots
+// structurally impossible to flag, whereas a 2% relative shave does not.
+const DEVIG_MARGIN = parseFloat(process.env.DEVIG_MARGIN || '0.02');
+
 // Lowered from 0.02 — World Cup market is efficient, 0.5% surfaces real marginal edge
 const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD || '0.005');
 
@@ -113,17 +120,13 @@ function computeConsensus(oddsRows) {
 
   const OUTCOMES = ['home', 'draw', 'away'];
   const FIELDS   = { home: 'home_odds', draw: 'draw_odds', away: 'away_odds' };
-  const ALPHAS   = {
-    home: USE_UNIFORM_ALPHA ? ALPHA_UNIFORM : ALPHA_HOME,
-    draw: USE_UNIFORM_ALPHA ? ALPHA_UNIFORM : ALPHA_DRAW,
-    away: USE_UNIFORM_ALPHA ? ALPHA_UNIFORM : ALPHA_AWAY,
-  };
 
   const result = { bookmakerCount, latestFetchedAt };
 
+  // ── Pass 1: per-outcome vig-inclusive consensus prob + best available price ──
+  const raw = {};
   for (const outcome of OUTCOMES) {
     const field = FIELDS[outcome];
-    const alpha = ALPHAS[outcome];
 
     const validRows = deduped.filter(r => {
       const v = parseFloat(r[field]);
@@ -133,34 +136,43 @@ function computeConsensus(oddsRows) {
     if (!validRows.length) { result[outcome] = null; continue; }
 
     const allOdds = {};
+    let max_odds = 0, max_book = null;
+    const impliedProbs = [];
     for (const r of validRows) {
       const v = parseFloat(r[field]);
       const name = formatBookName(r.bookmaker);
       if (name) allOdds[name] = v;
+      impliedProbs.push(1 / v);
+      if (v > max_odds) { max_odds = v; max_book = name; }
     }
 
-    const oddsValues = validRows.map(r => parseFloat(r[field]));
-    const meanOdds   = oddsValues.reduce((s, v) => s + v, 0) / oddsValues.length;
-    const p_cons     = 1 / meanOdds;
-    const p_adj      = p_cons - alpha;
+    // Mean implied probability across books (vig-inclusive). Averaging the
+    // probabilities — not 1/mean(odds) — is what makes the three sum to a proper
+    // overround (>1) so the de-vig normalisation below is correct.
+    const p_cons_vig = impliedProbs.reduce((s, p) => s + p, 0) / impliedProbs.length;
 
-    if (p_adj <= 0) {
-      result[outcome] = { p_cons, p_adj: null, has_edge: false, allOdds };
-      continue;
-    }
+    raw[outcome] = { p_cons_vig, max_odds, max_book, allOdds };
+  }
 
+  // ── De-vig: normalise the three consensus probs to sum to 1 (strip the
+  // overround), then shave a small RELATIVE safety margin. Edge fires when the
+  // best price beats the resulting fair odds. ──
+  const present   = OUTCOMES.filter(o => raw[o]);
+  const overround = present.reduce((s, o) => s + raw[o].p_cons_vig, 0);
+
+  for (const outcome of present) {
+    const r        = raw[outcome];
+    const p_novig  = overround > 0 ? r.p_cons_vig / overround : r.p_cons_vig;
+    const p_adj    = p_novig * (1 - DEVIG_MARGIN);
     const fair_odds = 1 / p_adj;
+    const has_edge = r.max_odds > fair_odds;
+    const edge     = has_edge ? parseFloat((p_adj * r.max_odds - 1).toFixed(6)) : 0;
 
-    let max_odds = 0, max_book = null;
-    for (const r of validRows) {
-      const v = parseFloat(r[field]);
-      if (v > max_odds) { max_odds = v; max_book = formatBookName(r.bookmaker); }
-    }
-
-    const has_edge = max_odds > fair_odds;
-    const edge     = has_edge ? parseFloat((p_adj * max_odds - 1).toFixed(6)) : 0;
-
-    result[outcome] = { p_cons, p_adj, fair_odds, max_odds, max_book, has_edge, edge, allOdds };
+    result[outcome] = {
+      p_cons: p_novig, p_adj, fair_odds,
+      max_odds: r.max_odds, max_book: r.max_book,
+      has_edge, edge, allOdds: r.allOdds,
+    };
   }
 
   return result;

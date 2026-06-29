@@ -32,6 +32,9 @@ const REFRESH_HOURS    = parseFloat(process.env.TEAM_STATS_REFRESH_HOURS || '20'
 
 const YELLOW_POINTS = 10;   // Betfair booking-points convention
 const RED_POINTS    = 25;
+// Min fixtures that must actually report a card stat before we trust cards_avg
+// (else null → the cards model uses its typical-match prior, not thin data).
+const MIN_CARD_SAMPLE = parseInt(process.env.MIN_CARD_SAMPLE || '4', 10);
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
 function httpGet(path) {
@@ -112,8 +115,18 @@ function aggregateTeamStats(results, fxStats) {
   const played = results.length;
   if (!played) return null;
 
-  const cards = fxStats.map(s => (s ? (s.yellow ?? 0) + (s.red ?? 0) : null));
-  const bookingPts = fxStats.map(s => (s ? (s.yellow ?? 0) * YELLOW_POINTS + (s.red ?? 0) * RED_POINTS : null));
+  // A fixture only informs the card averages when the API actually reported a
+  // card stat. A missing "Yellow Cards" stat (very common for internationals)
+  // was previously counted as a 0-card game, roughly halving cards_avg and
+  // letting the Poisson cards model emit absurd probabilities (e.g. 92% Under
+  // 3.5 from a ~1.6 total-cards lambda). Exclude missing-stat fixtures, and
+  // require a few real samples — otherwise leave the averages null so the
+  // pricing model falls back to its typical-match prior instead of thin data.
+  const hasCardStat = s => !!s && (s.yellow != null || s.red != null);
+  const cards = fxStats.map(s => hasCardStat(s) ? (s.yellow ?? 0) + (s.red ?? 0) : null);
+  const bookingPts = fxStats.map(s => hasCardStat(s) ? (s.yellow ?? 0) * YELLOW_POINTS + (s.red ?? 0) * RED_POINTS : null);
+  const cardSampleN = cards.filter(Number.isFinite).length;
+  const enoughCards = cardSampleN >= MIN_CARD_SAMPLE;
 
   return {
     scope:               `last${played}`,
@@ -127,8 +140,8 @@ function aggregateTeamStats(results, fxStats) {
     xg_against_avg:      round2(avg(fxStats.map(s => s?.xg_against))),
     corners_for_avg:     round2(avg(fxStats.map(s => s?.corners_for))),
     corners_against_avg: round2(avg(fxStats.map(s => s?.corners_against))),
-    cards_avg:           round2(avg(cards)),
-    booking_points_avg:  round2(avg(bookingPts)),
+    cards_avg:           enoughCards ? round2(avg(cards)) : null,
+    booking_points_avg:  enoughCards ? round2(avg(bookingPts)) : null,
   };
 }
 
@@ -194,7 +207,9 @@ async function fetchTeamWindow(teamId) {
     results.push(r);
     fxStats.push(stats);
 
-    if (r.referee && stats) {
+    // Only count fixtures where a card stat was actually reported — otherwise a
+    // missing stat counts as a 0-card game and deflates the referee tendency.
+    if (r.referee && stats && (stats.yellow != null || stats.red != null)) {
       const cards = (stats.yellow ?? 0) + (stats.red ?? 0);
       const bp    = (stats.yellow ?? 0) * YELLOW_POINTS + (stats.red ?? 0) * RED_POINTS;
       const t = refereeTally.get(r.referee) ?? { cards: 0, bp: 0, n: 0 };
