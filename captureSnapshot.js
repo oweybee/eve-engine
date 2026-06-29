@@ -33,6 +33,22 @@ const SIGNAL_EDGE        = parseFloat(process.env.SIGNAL_EDGE || '0.02'); // 2 p
 const OUTCOMES = ['home', 'draw', 'away'];
 const ODDS_COL = { home: 'home_odds', draw: 'draw_odds', away: 'away_odds' };
 
+// Secondary markets are stored as a single best price per selection in
+// computed_values (not per-book), so we snapshot one row per selection under a
+// synthetic 'best' bookmaker. market_type matches the detail page / value_signals
+// taxonomy (totals | btts | corners | bookings). This builds the price history
+// the secondary-market charts read via fetchMarketSeries.
+const SECONDARY_SNAP = [
+  { market: 'totals',   selection: 'over',     col: 'over_odds' },
+  { market: 'totals',   selection: 'under',    col: 'under_odds' },
+  { market: 'btts',     selection: 'btts_yes', col: 'btts_yes_odds' },
+  { market: 'btts',     selection: 'btts_no',  col: 'btts_no_odds' },
+  { market: 'corners',  selection: 'over',     col: 'corners_over_odds' },
+  { market: 'corners',  selection: 'under',    col: 'corners_under_odds' },
+  { market: 'bookings', selection: 'over',     col: 'bookings_over_odds' },
+  { market: 'bookings', selection: 'under',    col: 'bookings_under_odds' },
+];
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -165,6 +181,10 @@ async function run() {
       best_home_book, best_draw_book, best_away_book,
       home_edge, draw_edge, away_edge,
       home_value, draw_value, away_value,
+      over_odds, under_odds,
+      btts_yes_odds, btts_no_odds,
+      corners_over_odds, corners_under_odds,
+      bookings_over_odds, bookings_under_odds,
       match:matches ( kickoff_at, league:leagues ( name ) )
     `);
   if (cvErr) throw new Error(`computed_values fetch: ${cvErr.message}`);
@@ -238,6 +258,21 @@ async function run() {
           hour_bucket:   hourBucket,
         });
       }
+    }
+
+    // Secondary markets — one best-price row per selection (see SECONDARY_SNAP).
+    for (const s of SECONDARY_SNAP) {
+      const px = parseFloat(r[s.col]);
+      if (!Number.isFinite(px) || px <= 1) continue;
+      depthRows.push({
+        match_id:      r.match_id,
+        market_type:   s.market,
+        selection:     s.selection,
+        bookmaker:     'best',
+        odds:          px,
+        snapshot_type: snapType,
+        hour_bucket:   hourBucket,
+      });
     }
 
     if (depthRows.length) {
