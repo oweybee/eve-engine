@@ -59,7 +59,10 @@ jobs:
   engine:
     name: EVE Engine Tick
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 10 min (was 5): the 4-loop odds cycle nearly fills 5 min, so fetchTeamStats
+    # (the last step) was being killed mid-run. It self-caches per team (20h), so
+    # only the first full population is slow; later runs skip fresh teams.
+    timeout-minutes: 10
 
     env:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}

@@ -90,7 +90,9 @@ function buildMessage(signal) {
   const home    = signal.match?.home_team?.name ?? 'Home';
   const away    = signal.match?.away_team?.name ?? 'Away';
   const league  = signal.match?.league?.name ?? '';
-  const outcome = signal.outcome.toUpperCase();
+  // Underscores in outcomes (e.g. BTTS_YES) are Markdown italic delimiters and
+  // break Telegram's parser — render them as spaces ("BTTS YES").
+  const outcome = signal.outcome.toUpperCase().replace(/_/g, ' ');
   const odds    = signal.detected_odds.toFixed(2);
   const edgePct = (signal.detected_edge * 100).toFixed(1);
   const mes     = signal.detected_mes != null ? ` | MES: ${signal.detected_mes}/100` : '';
