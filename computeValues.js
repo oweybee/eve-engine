@@ -34,6 +34,14 @@ const ALPHA_UNIFORM = parseFloat(process.env.ALPHA_UNIFORM || '0.05');
 // structurally impossible to flag, whereas a 2% relative shave does not.
 const DEVIG_MARGIN = parseFloat(process.env.DEVIG_MARGIN || '0.02');
 
+// Palpable-error guard. A lone book pricing an outcome more than this multiple
+// longer/shorter than the median is almost always a mistake, not value — e.g. a
+// draw at 48.0 when every other book is ~3.5. Such a price was being taken as
+// the "best available" and producing a +258% fake edge that cascaded into the
+// goals/BTTS models. Outliers are dropped before computing both the consensus
+// and the best price. Only applied with ≥3 books (need a stable median).
+const OUTLIER_MULT = parseFloat(process.env.ODDS_OUTLIER_MULT || '3');
+
 // Lowered from 0.02 — World Cup market is efficient, 0.5% surfaces real marginal edge
 const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD || '0.005');
 
@@ -135,15 +143,27 @@ function computeConsensus(oddsRows) {
 
     if (!validRows.length) { result[outcome] = null; continue; }
 
+    // Collect prices, then drop palpable outliers (see OUTLIER_MULT).
+    const priced = validRows
+      .map(r => ({ v: parseFloat(r[field]), name: formatBookName(r.bookmaker) }))
+      .filter(p => Number.isFinite(p.v) && p.v > 1);
+    let kept = priced;
+    if (priced.length >= 3) {
+      const s = priced.map(p => p.v).sort((a, b) => a - b);
+      const mid = Math.floor(s.length / 2);
+      const median = s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+      const hi = median * OUTLIER_MULT, lo = median / OUTLIER_MULT;
+      const filtered = priced.filter(p => p.v <= hi && p.v >= lo);
+      if (filtered.length) kept = filtered;   // never drop everyone
+    }
+
     const allOdds = {};
     let max_odds = 0, max_book = null;
     const impliedProbs = [];
-    for (const r of validRows) {
-      const v = parseFloat(r[field]);
-      const name = formatBookName(r.bookmaker);
-      if (name) allOdds[name] = v;
-      impliedProbs.push(1 / v);
-      if (v > max_odds) { max_odds = v; max_book = name; }
+    for (const p of kept) {
+      if (p.name) allOdds[p.name] = p.v;
+      impliedProbs.push(1 / p.v);
+      if (p.v > max_odds) { max_odds = p.v; max_book = p.name; }
     }
 
     // Mean implied probability across books (vig-inclusive). Averaging the

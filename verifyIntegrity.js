@@ -41,6 +41,17 @@ const SELECTIONS = [
 ];
 
 const num = x => (x == null || x === '' || !Number.isFinite(Number(x)) ? null : Number(x));
+const COMPLETED = new Set(['FT', 'FINISHED', 'COMPLETED', 'AET', 'PEN', 'CANC', 'ABD', 'AWD', 'WO', 'INT']);
+const KICKOFF_GRACE_MS = 2.5 * 60 * 60 * 1000;
+// Only LIVE, pre-kickoff rows are user-facing — those are the ones whose maths
+// can mislead. Completed / long-past matches are excluded from alerting.
+function isLive(match) {
+  if (!match) return true; // no join → don't suppress
+  const st = (match.status ?? '').toUpperCase();
+  if (COMPLETED.has(st)) return false;
+  if (match.kickoff_at && Date.now() - new Date(match.kickoff_at).getTime() > KICKOFF_GRACE_MS) return false;
+  return true;
+}
 
 async function checkComputedValues(supabase, violations) {
   const cols = [
@@ -50,11 +61,14 @@ async function checkComputedValues(supabase, violations) {
   ];
   const { data, error } = await supabase
     .from('computed_values')
-    .select([...new Set(cols)].join(','))
+    .select([...new Set(cols)].join(',') + ',match:matches(status,kickoff_at)')
     .limit(2000);
-  if (error) { violations.push(`[query] computed_values: ${error.message}`); return; }
+  if (error) { violations.push(`[query] computed_values: ${error.message}`); return 0; }
 
+  let checked = 0;
   for (const row of data ?? []) {
+    if (!isLive(row.match)) continue;  // skip completed / past-kickoff
+    checked++;
     const tag = `cv ${row.match_id?.slice(0, 8)} (${row.model_architecture ?? 'null'})`;
 
     for (const col of ['btts_model_prob', 'corners_model_prob', 'bookings_model_prob']) {
@@ -75,8 +89,11 @@ async function checkComputedValues(supabase, violations) {
       if (modelProb < -PROB_TOL || modelProb > 1 + PROB_TOL) {
         violations.push(`${tag} ${label}: implied modelProb ${modelProb.toFixed(3)} outside [0,1] (edge ${edge}, odds ${odds})`);
       }
-      if (Math.abs(edge) > EDGE_CAP) {
-        violations.push(`${tag} ${label}: implausible edge ${(edge * 100).toFixed(1)}% (cap ${(EDGE_CAP * 100).toFixed(0)}%)`);
+      // Only POSITIVE edges are published as value — a large negative edge just
+      // means the model rates that side poorly and is never shown, so it isn't
+      // misinformation.
+      if (edge > EDGE_CAP) {
+        violations.push(`${tag} ${label}: implausible +edge ${(edge * 100).toFixed(1)}% (cap ${(EDGE_CAP * 100).toFixed(0)}%)`);
       }
       if (row[valueC] === true && edge < EV_THRESHOLD) {
         violations.push(`${tag} ${label}: value=true but edge ${(edge * 100).toFixed(2)}% < threshold`);
@@ -98,7 +115,7 @@ async function checkSignals(supabase, violations) {
     const tag = `signal ${String(s.id).slice(0, 8)} ${s.market}/${s.outcome}`;
     const edge = num(s.detected_edge), odds = num(s.detected_odds), mp = num(s.model_prob);
     if (odds != null && odds <= 1) violations.push(`${tag}: odds ${odds} ≤ 1`);
-    if (edge != null && Math.abs(edge) > EDGE_CAP) violations.push(`${tag}: implausible edge ${(edge * 100).toFixed(1)}%`);
+    if (edge != null && edge > EDGE_CAP) violations.push(`${tag}: implausible +edge ${(edge * 100).toFixed(1)}%`);
     if (mp != null && (mp < -PROB_TOL || mp > 1 + PROB_TOL)) violations.push(`${tag}: model_prob ${mp} outside [0,1]`);
     if (edge != null && odds != null && mp != null) {
       const recon = mp * odds - 1;
