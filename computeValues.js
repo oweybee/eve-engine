@@ -464,30 +464,37 @@ async function main() {
 
   if (!computedRows.length) return;
 
+  // Secondary markets (O/U, BTTS, corners, cards) via Dixon-Coles + data-driven
+  // corners/cards models. Price them, MERGE the prices/edges into each match's
+  // computed_values row (so the feed, detail tabs and suggested-bets see them),
+  // and collect +EV signal candidates. Non-fatal: never lose the 1X2 work.
+  let secondaryCandidates = [];
+  try {
+    const live = results.filter(r => r && !r.skipped);
+    const { statsByName, refByName } = await fetchStatsLookups(supabase, live.map(r => r.match));
+    for (const r of live) {
+      const hs = statsByName.get(normTeam(r.match.home_team?.name));
+      const as = statsByName.get(normTeam(r.match.away_team?.name));
+      const rs = r.match.referee ? refByName.get(r.match.referee) : null;
+      Object.assign(r.row, sm.secondaryComputedValues(r.match, r.consensus, hs, as, rs));
+      for (const c of sm.buildSecondarySignals(r.match, r.consensus, hs, as, rs)) {
+        secondaryCandidates.push({ ...c, kickoff_at: r.match.kickoff_at ?? null });
+      }
+    }
+  } catch (err) {
+    console.error('[secondary] pricing failed (1X2 unaffected):', err.message);
+  }
+
   await upsertComputedValues(supabase, computedRows);
 
   if (valueRows.length) {
     await insertValueSignals(supabase, valueRows);
   }
-
-  // Secondary markets (O/U, BTTS, corners, cards) via Dixon-Coles + data-driven
-  // corners/cards models. Non-fatal: a failure here must not lose the 1X2 work.
-  try {
-    const live = results.filter(r => r && !r.skipped);
-    const { statsByName, refByName } = await fetchStatsLookups(supabase, live.map(r => r.match));
-    const secondary = [];
-    for (const r of live) {
-      const hs = statsByName.get(normTeam(r.match.home_team?.name));
-      const as = statsByName.get(normTeam(r.match.away_team?.name));
-      const rs = r.match.referee ? refByName.get(r.match.referee) : null;
-      for (const c of sm.buildSecondarySignals(r.match, r.consensus, hs, as, rs)) {
-        secondary.push({ ...c, kickoff_at: r.match.kickoff_at ?? null });
-      }
-    }
-    if (secondary.length) await insertSecondarySignals(supabase, secondary);
-    else console.log('[secondary] no candidates this cycle');
-  } catch (err) {
-    console.error('[secondary] failed (1X2 unaffected):', err.message);
+  if (secondaryCandidates.length) {
+    try { await insertSecondarySignals(supabase, secondaryCandidates); }
+    catch (err) { console.error('[secondary] signal insert failed:', err.message); }
+  } else {
+    console.log('[secondary] no signal candidates this cycle');
   }
 
   await updateBetOfDay(supabase, computedRows);
