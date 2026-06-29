@@ -176,16 +176,17 @@ async function prefetchLastOdds(supabase, matchIds) {
   const since48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
   const { data, error } = await supabase
     .from('odds')
-    .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
+    .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
     .in('match_id', matchIds)
     .gte('fetched_at', since48h)
     .order('fetched_at', { ascending: false });
   if (error) throw new Error(`prefetchLastOdds: ${error.message}`);
 
   // DESC order: first occurrence of each key is the most recent row.
+  // Key includes market_line so different lines of the same market don't collide.
   const map = new Map();
   for (const row of data ?? []) {
-    const key = `${row.match_id}:${row.bookmaker}:${row.market}`;
+    const key = `${row.match_id}:${row.bookmaker}:${row.market}:${row.market_line ?? ''}`;
     if (!map.has(key)) map.set(key, row);
   }
   return map;
@@ -196,7 +197,9 @@ async function prefetchLastOdds(supabase, matchIds) {
 // ---------------------------------------------------------------------------
 
 async function fetchFixtureOdds(fixtureId) {
-  const path = `/odds?fixture=${fixtureId}&bet=1`;
+  // No &bet filter — one call returns every market (1X2, O/U, BTTS, …) for all
+  // bookmakers, so we extract secondary markets at zero extra API quota.
+  const path = `/odds?fixture=${fixtureId}`;
   console.log(`  [odds] GET ${path}`);
   const json = await httpGet(path);
   if (!json.response?.length) {
@@ -273,6 +276,77 @@ function extractH2hRows(bookmaker) {
     draw_odds:  d,
     away_odds:  a,
     fetched_at: new Date().toISOString(),
+  }];
+}
+
+/**
+ * Extracts the Goals Over/Under 2.5 line from a bookmaker object.
+ * API-Football: bet id 5 ("Goals Over/Under"), values like
+ *   { value: "Over 2.5", odd: "1.74" }, { value: "Under 2.5", odd: "2.26" }
+ *
+ * Stored to match the existing Betfair convention so downstream reads uniformly:
+ *   over → home_odds, under → away_odds, line → market_line, draw_odds → null.
+ *
+ * @param {object} bookmaker
+ * @returns {Array<object>}
+ */
+const TOTALS_TARGET_LINE = 2.5;
+function extractTotalsRows(bookmaker) {
+  const ou = (bookmaker?.bets ?? []).find(b => b.id === 5);
+  if (!ou) return [];
+
+  let over = null, under = null;
+  for (const v of ou.values ?? []) {
+    const m = String(v.value ?? '').match(/^(over|under)\s+([\d.]+)$/i);
+    if (!m || parseFloat(m[2]) !== TOTALS_TARGET_LINE) continue;
+    const odd = parseFloat(v.odd);
+    if (!(odd > 1) || odd > 999) continue;
+    if (/over/i.test(m[1])) over = odd; else under = odd;
+  }
+  if (over == null || under == null) return [];
+
+  return [{
+    bookmaker:   slugifyBookmaker(bookmaker.name ?? ''),
+    market:      'totals',
+    market_line: TOTALS_TARGET_LINE,
+    home_odds:   over,
+    draw_odds:   null,
+    away_odds:   under,
+    fetched_at:  new Date().toISOString(),
+  }];
+}
+
+/**
+ * Extracts the Both Teams To Score market from a bookmaker object.
+ * API-Football: bet id 8 ("Both Teams Score"), values { value: "Yes"/"No", odd }.
+ *
+ * Stored to match the existing Betfair convention:
+ *   yes → home_odds, no → away_odds, market_line → null, draw_odds → null.
+ *
+ * @param {object} bookmaker
+ * @returns {Array<object>}
+ */
+function extractBttsRows(bookmaker) {
+  const btts = (bookmaker?.bets ?? []).find(b => b.id === 8);
+  if (!btts) return [];
+
+  const find = label => (btts.values ?? []).find(v => String(v.value ?? '').toLowerCase() === label);
+  const yesV = find('yes');
+  const noV  = find('no');
+  if (!yesV || !noV) return [];
+
+  const y = parseFloat(yesV.odd);
+  const n = parseFloat(noV.odd);
+  if (!(y > 1) || !(n > 1) || y > 999 || n > 999) return [];
+
+  return [{
+    bookmaker:   slugifyBookmaker(bookmaker.name ?? ''),
+    market:      'btts',
+    market_line: null,
+    home_odds:   y,
+    draw_odds:   null,
+    away_odds:   n,
+    fetched_at:  new Date().toISOString(),
   }];
 }
 
@@ -425,11 +499,15 @@ async function ingest() {
         continue;
       }
 
-      // Each bookmaker object is passed to extractH2hRows individually.
-      const rows = bookmakers.flatMap(bm => extractH2hRows(bm));
+      // Each bookmaker object yields 1X2 + Over/Under + BTTS rows (where present).
+      const rows = bookmakers.flatMap(bm => [
+        ...extractH2hRows(bm),
+        ...extractTotalsRows(bm),
+        ...extractBttsRows(bm),
+      ]);
 
       if (!rows.length) {
-        console.log(`  [skip] fixture ${fixtureId} — no parseable 1X2 odds`);
+        console.log(`  [skip] fixture ${fixtureId} — no parseable odds`);
         await sleep(200);
         continue;
       }
@@ -456,13 +534,13 @@ async function ingest() {
       // Insert rows where prices have moved — O(1) Map lookup per row
       let fixtureInserted = 0;
       for (const row of rows) {
-        const key  = `${matchId}:${row.bookmaker}:${row.market ?? 'h2h'}`;
+        const key  = `${matchId}:${row.bookmaker}:${row.market ?? 'h2h'}:${row.market_line ?? ''}`;
         const last = lastOddsMap.get(key);
 
         if (!oddsHaveMoved(last, row)) continue;
 
         if (DRY_RUN) {
-          console.log(`    [dry-run] ${row.bookmaker} H=${row.home_odds} D=${row.draw_odds} A=${row.away_odds}`);
+          console.log(`    [dry-run] ${row.market} ${row.bookmaker} H=${row.home_odds} D=${row.draw_odds} A=${row.away_odds}`);
           fixtureInserted++;
           // Update map optimistically so repeated dry-runs don't double-count
           lastOddsMap.set(key, row);
@@ -535,4 +613,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { ingest, extractH2hRows, oddsHaveMoved };
+module.exports = { ingest, extractH2hRows, extractTotalsRows, extractBttsRows, oddsHaveMoved };
