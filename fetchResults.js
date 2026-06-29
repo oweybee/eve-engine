@@ -361,8 +361,10 @@ function avg(arr) {
  * Aggregates the full value_signals history into one performance_summary row.
  *   win_rate = wins / (wins + losses)
  *   yield    = Σ profit / settled        (profit = odds−1 if win else −1, 1u stake)
- *   roi      = yield (level stakes)
+ *   roi      = Σ profit / 100u bankroll   (growth on a fixed bankroll — distinct
+ *                                          from level-stakes yield)
  */
+const ROI_BANKROLL_UNITS = 100;
 async function calculatePerformance(supabase) {
   const { data, error } = await supabase
     .from('value_signals')
@@ -388,7 +390,7 @@ async function calculatePerformance(supabase) {
     losses,
     win_rate: settled.length ? +(wins / settled.length).toFixed(4) : null,
     yield:    settled.length ? +(profit / settled.length).toFixed(4) : null,
-    roi:      settled.length ? +(profit / settled.length).toFixed(4) : null,
+    roi:      settled.length ? +(profit / ROI_BANKROLL_UNITS).toFixed(4) : null,
     avg_clv:  clvs.length   ? +avg(clvs).toFixed(4)   : null,
     avg_edge: edges.length  ? +avg(edges).toFixed(4)  : null,
     avg_mes:  messes.length ? +avg(messes).toFixed(1) : null,
