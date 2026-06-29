@@ -6,10 +6,10 @@
 #   Odds refresh every ~55 seconds during each 5-minute job.
 #
 # Pipeline per job:
+#   (Betfair secondary markets — corners/cards/O-U/BTTS — are ingested from a UK
+#    host, not here; Betfair geo-blocks US runners. See scripts/betfair-vps/.)
 #   Once per job (idempotent early-exit if plan exists):
 #     0. planDay.js       — build / refresh today+3day fixture plan
-#     0b. betfairIngest.js — Exchange secondary markets (totals/BTTS/cards/
-#         corners); throttled to ~every 15 min, non-fatal.
 #   Loop ×4 (55s gap):
 #     1. ingestOdds.js    — pull latest odds; plan-gated (off-hours = no-op)
 #     2. computeValues.js — Kaunitz edge detection; price-change signals
@@ -108,18 +108,10 @@ jobs:
           DAYS_AHEAD: '3'
         run: node planDay.js
 
-      - name: Betfair Exchange ingest (totals / BTTS / cards / corners)
-        id: betfair
-        continue-on-error: true
-        shell: bash
-        run: |
-          # Betfair supplies the secondary markets API-Football can't (cards via
-          # Booking Points, corners) plus Exchange-priced O/U + BTTS. Run every
-          # invocation — GitHub throttles the */5 schedule hard, so the engine is
-          # really dispatch-driven ~hourly; betfairIngest self-throttles on its own
-          # data freshness so it's safe even if the 5-min schedule does fire.
-          # Non-fatal: a Betfair outage must never take down the core 1X2 pipeline.
-          node betfairIngest.js
+      # Betfair ingest does NOT run here: Betfair geo-blocks GitHub's US runners
+      # (HTTP 403 "Restricted"). It runs on a UK host instead — see
+      # scripts/betfair-vps/README.md — writing corners/cards/O-U/BTTS straight
+      # to Supabase, which this pipeline then prices on the next compute.
 
       - name: Live odds loop (ingest -> compute -> snapshot)
         id: ingest_loop

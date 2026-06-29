@@ -15,3 +15,6 @@ node_modules
 .env.*
 "cat .env"
 _csv_cache.csv.gz
+
+# Betfair VPS local secrets
+scripts/betfair-vps/.env
