@@ -199,6 +199,8 @@ async function upsertLineup(supabase, fixtureId, teamEntry) {
       formation:               teamEntry?.formation ?? null,
       starting_xi:             teamEntry?.startXI   ?? [],
       substitutes:             teamEntry?.substitutes ?? [],
+      team_colors:             teamEntry?.team?.colors?.player ?? null,
+      coach:                   teamEntry?.coach?.name ?? null,
       confirmed:               (teamEntry?.startXI?.length ?? 0) > 0,
       fetched_at:              new Date().toISOString(),
     }, { onConflict: 'fixture_id,team_id' });
