@@ -1,0 +1,12 @@
+[Unit]
+Description=MaxEdge Betfair Exchange ingest (UK host)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/eve-engine
+EnvironmentFile=/opt/eve-engine/scripts/betfair-vps/.env
+ExecStart=/usr/bin/node betfairIngest.js
+# Don't let a transient Betfair/Supabase blip mark the unit failed forever.
+SuccessExitStatus=0 1
