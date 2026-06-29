@@ -161,6 +161,19 @@ jobs:
         continue-on-error: true
         run: node fetchMatchDetails.js
 
+      - name: Team statistics & referee tendencies
+        id: teamstats
+        continue-on-error: true
+        shell: bash
+        run: |
+          # Rolling last-N form / corners / cards / xG per team — stable across a
+          # day and self-cached per team, so only refresh every ~6h.
+          H=$(date -u +%H); M=$(date -u +%M)
+          if [ $((10#$M)) -ge 5 ] || [ $((10#$H % 6)) -ne 0 ]; then
+            echo "[teamstats] skip — throttled (H=$H M=$M)"; exit 0
+          fi
+          node fetchTeamStats.js
+
       - name: Alert on pipeline failure
         if: failure()
         shell: bash
