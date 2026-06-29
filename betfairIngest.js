@@ -681,12 +681,15 @@ async function ingest() {
         if (bttsResult) {
           console.log(`  [btts]   Y:${bttsResult.yesOdds} N:${bttsResult.noOdds}`);
         }
-      } else if (/bookings?\s+points?/i.test(mkt.marketName)) {
+      } else if (/cards?\s+over\/under/i.test(mkt.marketName)) {
+        // Betfair's "Cards Bookings Points" market has non-over/under runners, but
+        // "Cards Over/Under 2.5 / 3.5" (card COUNT) parses cleanly. parseBookings
+        // is just over/under line detection, so it handles these directly.
         bookingsResult = parseBookings(book, runners);
         if (bookingsResult) {
           console.log(`  [cards]  line:${bookingsResult.line} O:${bookingsResult.overOdds} U:${bookingsResult.underOdds}`);
         }
-      } else if (/total corners?|asian corners?/i.test(mkt.marketName)) {
+      } else if (/corners?\s+over\/under|total corners?|asian corners?/i.test(mkt.marketName)) {
         cornersResult = parseCorners(book, runners);
         if (cornersResult) {
           console.log(`  [corners] line:${cornersResult.line} O:${cornersResult.overOdds} U:${cornersResult.underOdds}`);
