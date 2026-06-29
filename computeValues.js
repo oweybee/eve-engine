@@ -14,6 +14,7 @@
  */
 
 const { getClient } = require('./lib/supabaseClient');
+const sm            = require('./lib/secondaryMarkets');
 
 // Config
 const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '2',    10);
@@ -36,7 +37,7 @@ async function fetchMatchesForComputation(supabase) {
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
-      id, external_id, kickoff_at, status,
+      id, external_id, kickoff_at, status, referee,
       home_team:teams!matches_home_team_id_fkey ( id, name ),
       away_team:teams!matches_away_team_id_fkey ( id, name ),
       league:leagues ( id, name )
@@ -51,7 +52,7 @@ async function fetchMatchesForComputation(supabase) {
 
   const { data: oddsData, error: oddsError } = await supabase
     .from('odds')
-    .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
+    .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
     .in('match_id', matchIds);
 
   if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
@@ -234,7 +235,7 @@ function computeMatch(match) {
     _bookmakerCount: bookmakerCount,
   };
 
-  return { skipped: false, row, hasValue: home_value || draw_value || away_value };
+  return { skipped: false, row, hasValue: home_value || draw_value || away_value, match, consensus };
 }
 
 async function upsertComputedValues(supabase, rows) {
@@ -340,6 +341,63 @@ async function insertValueSignals(supabase, rows) {
   return toInsert.length;
 }
 
+const normTeam = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** Load team_statistics (by normalised name) and referee_stats for these matches. */
+async function fetchStatsLookups(supabase, matches) {
+  const statsByName = new Map();
+  const { data: teamStats } = await supabase.from('team_statistics').select('*');
+  for (const t of teamStats ?? []) statsByName.set(normTeam(t.team_name), t);
+
+  const refs = [...new Set(matches.map(m => m.referee).filter(Boolean))];
+  const refByName = new Map();
+  if (refs.length) {
+    const { data } = await supabase.from('referee_stats').select('*').in('referee_name', refs);
+    for (const r of data ?? []) refByName.set(r.referee_name, r);
+  }
+  return { statsByName, refByName };
+}
+
+/**
+ * Insert secondary-market signals (O/U, BTTS, corners, cards). Pre-filters
+ * against existing (match, market, outcome, model) keys so we never violate the
+ * dedup unique index — first signal per key wins, matching the 1X2 path.
+ */
+async function insertSecondarySignals(supabase, candidates) {
+  if (!candidates.length) return 0;
+  const matchIds = [...new Set(candidates.map(c => c.match_id))];
+
+  const { data: existing, error } = await supabase
+    .from('value_signals')
+    .select('match_id, market, outcome, model_architecture')
+    .in('match_id', matchIds);
+  if (error) throw new Error(`insertSecondarySignals(select): ${error.message}`);
+
+  const key  = r => `${r.match_id}|${r.market ?? 'h2h'}|${r.outcome}|${r.model_architecture ?? ''}`;
+  const seen = new Set((existing ?? []).map(key));
+
+  const toInsert = [];
+  for (const c of candidates) {
+    if (seen.has(key(c))) continue;
+    seen.add(key(c));
+    const { model_prob, ...rest } = c;   // model_prob is internal, not a column
+    toInsert.push({
+      ...rest,
+      detected_mes:    null,             // frontend computes risk-adjusted MES
+      signal_category: c.detected_edge >= 0.05 ? 'Prime' : 'Standard',
+    });
+  }
+
+  if (!toInsert.length) { console.log('[secondary] no new signals'); return 0; }
+
+  const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
+  if (insErr) throw new Error(`insertSecondarySignals(insert): ${insErr.message}`);
+
+  const byMkt = toInsert.reduce((m, r) => ((m[r.market] = (m[r.market] || 0) + 1), m), {});
+  console.log(`[secondary] inserted ${toInsert.length}:`, byMkt);
+  return toInsert.length;
+}
+
 async function updateBetOfDay(supabase, rows) {
   await supabase.from('matches').update({ is_bet_of_day: false }).eq('is_bet_of_day', true);
   const candidates = rows.filter(r =>
@@ -410,6 +468,26 @@ async function main() {
 
   if (valueRows.length) {
     await insertValueSignals(supabase, valueRows);
+  }
+
+  // Secondary markets (O/U, BTTS, corners, cards) via Dixon-Coles + data-driven
+  // corners/cards models. Non-fatal: a failure here must not lose the 1X2 work.
+  try {
+    const live = results.filter(r => r && !r.skipped);
+    const { statsByName, refByName } = await fetchStatsLookups(supabase, live.map(r => r.match));
+    const secondary = [];
+    for (const r of live) {
+      const hs = statsByName.get(normTeam(r.match.home_team?.name));
+      const as = statsByName.get(normTeam(r.match.away_team?.name));
+      const rs = r.match.referee ? refByName.get(r.match.referee) : null;
+      for (const c of sm.buildSecondarySignals(r.match, r.consensus, hs, as, rs)) {
+        secondary.push({ ...c, kickoff_at: r.match.kickoff_at ?? null });
+      }
+    }
+    if (secondary.length) await insertSecondarySignals(supabase, secondary);
+    else console.log('[secondary] no candidates this cycle');
+  } catch (err) {
+    console.error('[secondary] failed (1X2 unaffected):', err.message);
   }
 
   await updateBetOfDay(supabase, computedRows);
