@@ -37,6 +37,9 @@ ALTER TABLE value_signals ADD CONSTRAINT value_signals_outcome_check
 -- over/under coexist across goals/corners/cards and lets two models independently
 -- signal the same selection. COALESCE keeps legacy NULLs collapsing to the
 -- historical (match_id, outcome) behaviour.
+-- The old key is a UNIQUE constraint (which owns its index), so drop the
+-- constraint; the bare DROP INDEX is a fallback for environments where it isn't.
+ALTER TABLE value_signals DROP CONSTRAINT IF EXISTS value_signals_match_outcome_unique;
 DROP INDEX IF EXISTS value_signals_match_outcome_unique;
 CREATE UNIQUE INDEX IF NOT EXISTS value_signals_match_market_outcome_arch_unique
   ON value_signals (
