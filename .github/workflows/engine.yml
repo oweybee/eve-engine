@@ -137,6 +137,15 @@ jobs:
         continue-on-error: true
         run: node computeApiValues.js
 
+      # The "constant eye" — asserts the published maths is internally consistent
+      # (probabilities in range, edge <-> odds coherent, no implausible edges,
+      # value flags valid, signals self-consistent). Never gates the pipeline;
+      # alerts via ENGINE_ALERT_WEBHOOK on any violation.
+      - name: Data integrity check
+        id: integrity
+        continue-on-error: true
+        run: node verifyIntegrity.js
+
       - name: Post signals
         id: post
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_post != 'true' }}
