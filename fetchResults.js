@@ -88,6 +88,49 @@ function fixtureOutcome(fx) {
   return 'draw';
 }
 
+/**
+ * Settles a single value signal against a finished fixture, RESPECTING THE
+ * MARKET. The old code compared the 1X2 result to sig.outcome directly, so any
+ * secondary selection ('btts_yes', 'over', …) could never equal 'home'/'draw'/
+ * 'away' and was always marked a loss. This resolves each market from the goals
+ * payload:
+ *   h2h     → match result
+ *   btts    → did both teams score
+ *   totals  → total goals vs the .5 line
+ *   corners / bookings → not derivable from goals; returns null (stays pending)
+ * Returns 'win' | 'loss' | null (null = not finished, or unsettleable market).
+ */
+function settleSignal(fx, market, outcome, line) {
+  const status = fx?.fixture?.status?.short;
+  if (!['FT', 'AET', 'PEN'].includes(status)) return null; // not finished
+  const hg = fx?.goals?.home, ag = fx?.goals?.away;
+  if (hg == null || ag == null) return null;
+
+  const oc = (outcome ?? '').toLowerCase();
+  const mk = (market ?? 'h2h').toLowerCase();
+
+  if (mk === 'h2h' || oc === 'home' || oc === 'draw' || oc === 'away') {
+    const res = hg > ag ? 'home' : hg < ag ? 'away' : 'draw';
+    return res === oc ? 'win' : 'loss';
+  }
+  if (mk === 'btts' || oc.includes('btts') || oc === 'yes' || oc === 'no') {
+    const both = hg > 0 && ag > 0;
+    if (oc.includes('yes')) return both ? 'win' : 'loss';
+    if (oc.includes('no'))  return both ? 'loss' : 'win';
+    return null;
+  }
+  if (mk === 'totals') {
+    const L = Number(line);
+    if (!Number.isFinite(L)) return null;
+    const total = hg + ag;
+    if (oc === 'over')  return total > L ? 'win' : 'loss';
+    if (oc === 'under') return total < L ? 'win' : 'loss';
+    return null;
+  }
+  // corners / bookings — needs the statistics endpoint, not goals. Leave pending.
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Match status settlement
 //
@@ -230,7 +273,7 @@ async function settlePendingSignals(supabase, cache = new Map()) {
   const { data: pending, error } = await supabase
     .from('value_signals')
     .select(`
-      id, match_id, outcome, detected_odds, kickoff_at, result,
+      id, match_id, outcome, detected_odds, kickoff_at, result, market, market_line,
       match:matches (
         kickoff_at,
         home_team:teams!matches_home_team_id_fkey ( name ),
@@ -276,10 +319,11 @@ async function settlePendingSignals(supabase, cache = new Map()) {
     const fx = fixtures.find(f =>
       namesMatch(home, f?.teams?.home?.name) && namesMatch(away, f?.teams?.away?.name)
     );
-    const actual = fx ? fixtureOutcome(fx) : null;
-    if (!actual) { unmatched++; continue; }
+    // Market-aware: 1X2 by result, BTTS by both-scored, totals by goal line.
+    // Corners/cards return null and stay pending (not derivable from goals).
+    const result = fx ? settleSignal(fx, sig.market, sig.outcome, sig.market_line) : null;
+    if (result == null) { unmatched++; continue; }
 
-    const result  = actual === sig.outcome ? 'win' : 'loss';
     const closing = closingMap.get(`${sig.match_id}:${sig.outcome}`) ?? null;
     const detected = parseFloat(sig.detected_odds);
     // P0-3 fix: guard against NaN/Infinity before logarithm.
@@ -399,4 +443,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[results] unhandled:', err); process.exit(1); });
 }
 
-module.exports = { run, calculatePerformance, settlePendingSignals, settleFinishedMatches, namesMatch, fixtureOutcome };
+module.exports = { run, calculatePerformance, settlePendingSignals, settleFinishedMatches, namesMatch, fixtureOutcome, settleSignal };
