@@ -11,6 +11,7 @@
 const https  = require('https');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
+const { formatLiveState } = require('./lib/inplay');
 
 const DRY_RUN = process.env.DRY_RUN === '1';
 const CHANNEL = 'telegram';
@@ -24,10 +25,21 @@ function getSupabase() {
 }
 
 function getTelegramConfig() {
-  const token  = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+  const token        = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId       = process.env.TELEGRAM_CHAT_ID;
+  const inplayChatId = process.env.TELEGRAM_INPLAY_CHAT_ID || null;
   if (!token || !chatId) return null;
-  return { token, chatId };
+  return { token, chatId, inplayChatId };
+}
+
+/**
+ * Which chat a signal goes to. In-play signals route to the dedicated in-play
+ * channel; if that channel isn't configured they are NOT posted (rather than
+ * spamming the pre-match channel with live picks). Pre-match → main channel.
+ */
+function chatIdForSignal(telegram, signal) {
+  if (signal.phase === 'inplay') return telegram.inplayChatId; // null ⇒ skip
+  return telegram.chatId;
 }
 
 async function loadPostedIds(supabase) {
@@ -59,8 +71,9 @@ async function fetchRecentSignals(supabase) {
     .from('value_signals')
     .select(`
       id, outcome, detected_odds, detected_edge, detected_mes, bookmaker,
-      kickoff_at, detected_at, signal_category,
+      kickoff_at, detected_at, signal_category, phase,
       match:matches (
+        goals_home, goals_away, minute,
         home_team:teams!matches_home_team_id_fkey ( name ),
         away_team:teams!matches_away_team_id_fkey ( name ),
         league:leagues ( name )
@@ -75,6 +88,7 @@ async function fetchRecentSignals(supabase) {
 
 function isRuby(edge) { return Number(edge) >= 0.08; }
 function isPriceMove(signal) { return signal.signal_category === 'PriceMove'; }
+function isInplay(signal) { return signal.phase === 'inplay'; }
 
 function formatKickoff(isoStr) {
   if (!isoStr) return 'TBC';
@@ -98,6 +112,25 @@ function buildMessage(signal) {
   const mes     = signal.detected_mes != null ? ` | MES: ${signal.detected_mes}/100` : '';
   const book    = signal.bookmaker ?? 'Best price';
   const kickoff = formatKickoff(signal.kickoff_at);
+
+  // In-play signals are a separate tier: live score/minute instead of kickoff,
+  // and a distinct header so the dedicated channel reads unmistakably "live".
+  if (isInplay(signal)) {
+    const liveState = formatLiveState(
+      signal.match?.goals_home, signal.match?.goals_away, signal.match?.minute
+    );
+    return [
+      `🔴 *IN-PLAY VALUE*`, ``,
+      `*${home} vs ${away}*`,
+      league ? `_${league}_` : null,
+      `Live: ${liveState}`,
+      `${outcome} @ ${odds} (${book})`,
+      `Edge: +${edgePct}%${mes}`,
+      ``,
+      `[View on MaxEdge](https://maxedge.live/feed)`,
+      `#MaxEdge #InPlay #LiveValue`,
+    ].filter(l => l !== null).join('\n');
+  }
 
   let header, hashtags;
   if (isPriceMove(signal)) {
@@ -193,21 +226,36 @@ async function run() {
 
   let posted = 0, failed = 0;
 
+  let skippedNoChannel = 0;
+
   for (let i = 0; i < toPost.length; i++) {
     const signal  = toPost[i];
-    const label   = isPriceMove(signal) ? 'PRICE_MOVE' : isRuby(signal.detected_edge) ? 'RUBY' : 'VALUE';
+    const label   = isInplay(signal) ? 'IN-PLAY'
+                  : isPriceMove(signal) ? 'PRICE_MOVE'
+                  : isRuby(signal.detected_edge) ? 'RUBY' : 'VALUE';
     const home    = signal.match?.home_team?.name ?? '?';
     const away    = signal.match?.away_team?.name ?? '?';
     const message     = buildMessage(signal);
     const messageHash = hashMessage(message);
+    const chatId      = telegram ? chatIdForSignal(telegram, signal) : telegram;
 
     console.log(`\n[postToX] ${label} — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
     console.log(message);
 
     if (DRY_RUN) { await markPosted(supabase, signal.id, messageHash, null); posted++; continue; }
 
+    // In-play signal with no in-play channel configured → skip silently (don't
+    // leak live picks into the pre-match channel). Mark posted so it isn't
+    // retried every run.
+    if (!chatId) {
+      console.log(`[postToX] no channel for phase=${signal.phase} — skipping`);
+      await markPosted(supabase, signal.id, messageHash, null);
+      skippedNoChannel++;
+      continue;
+    }
+
     try {
-      const res = await telegramPost(telegram.token, telegram.chatId, message);
+      const res = await telegramPost(telegram.token, chatId, message);
       console.log(`[postToX] posted — message id: ${res.message_id}`);
       await markPosted(supabase, signal.id, messageHash, String(res.message_id));
       posted++;
@@ -220,12 +268,12 @@ async function run() {
     if (i < toPost.length - 1) await new Promise(r => setTimeout(r, 1000));
   }
 
-  console.log(`\n[postToX] done —`, { posted, failed, skipped: alreadySeen });
-  return { posted, failed, skipped: alreadySeen };
+  console.log(`\n[postToX] done —`, { posted, failed, skipped: alreadySeen, no_channel: skippedNoChannel });
+  return { posted, failed, skipped: alreadySeen, no_channel: skippedNoChannel };
 }
 
 if (require.main === module) {
   run().catch(err => { console.error('[postToX] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, buildMessage, isRuby, isPriceMove };
+module.exports = { run, buildMessage, isRuby, isPriceMove, isInplay, chatIdForSignal };

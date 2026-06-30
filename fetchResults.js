@@ -273,7 +273,7 @@ async function settlePendingSignals(supabase, cache = new Map()) {
   const { data: pending, error } = await supabase
     .from('value_signals')
     .select(`
-      id, match_id, outcome, detected_odds, kickoff_at, result, market, market_line,
+      id, match_id, outcome, detected_odds, kickoff_at, result, market, market_line, phase,
       match:matches (
         kickoff_at,
         home_team:teams!matches_home_team_id_fkey ( name ),
@@ -324,11 +324,16 @@ async function settlePendingSignals(supabase, cache = new Map()) {
     const result = fx ? settleSignal(fx, sig.market, sig.outcome, sig.market_line) : null;
     if (result == null) { unmatched++; continue; }
 
-    const closing = closingMap.get(`${sig.match_id}:${sig.outcome}`) ?? null;
+    // CLV is undefined for in-play signals — the line already closed at kickoff,
+    // so a pre-kickoff "closing" Betfair price is not a valid benchmark. Store
+    // null rather than a misleading number; in-play is judged on realised yield.
+    const isInplay = sig.phase === 'inplay';
+    const closing  = isInplay ? null : (closingMap.get(`${sig.match_id}:${sig.outcome}`) ?? null);
     const detected = parseFloat(sig.detected_odds);
     // P0-3 fix: guard against NaN/Infinity before logarithm.
     // Invalid prices (null, ≤1, NaN) → clv = null, never a garbage number.
     const clv = (
+      !isInplay &&
       Number.isFinite(closing) && closing > 1 &&
       Number.isFinite(detected) && detected > 1
     )
@@ -365,17 +370,12 @@ function avg(arr) {
  *                                          from level-stakes yield)
  */
 const ROI_BANKROLL_UNITS = 100;
-async function calculatePerformance(supabase) {
-  const { data, error } = await supabase
-    .from('value_signals')
-    .select('result, detected_odds, detected_edge, detected_mes, clv');
-  if (error) throw new Error(`calculatePerformance(select): ${error.message}`);
 
-  const rows = data ?? [];
+/** Aggregate one phase's slice of value_signals into a summary object. */
+function summarisePhase(rows, { includeClv }) {
   const settled = rows.filter(r => r.result === 'win' || r.result === 'loss');
-  const wins = settled.filter(r => r.result === 'win').length;
+  const wins   = settled.filter(r => r.result === 'win').length;
   const losses = settled.filter(r => r.result === 'loss').length;
-
   const profit = settled.reduce(
     (s, r) => s + (r.result === 'win' ? (parseFloat(r.detected_odds) - 1) : -1), 0);
 
@@ -383,7 +383,7 @@ async function calculatePerformance(supabase) {
   const edges  = rows.map(r => r.detected_edge).filter(v => v != null).map(Number);
   const messes = rows.map(r => r.detected_mes).filter(v => v != null).map(Number);
 
-  const summary = {
+  return {
     total_signals:   rows.length,
     settled_signals: settled.length,
     wins,
@@ -391,21 +391,46 @@ async function calculatePerformance(supabase) {
     win_rate: settled.length ? +(wins / settled.length).toFixed(4) : null,
     yield:    settled.length ? +(profit / settled.length).toFixed(4) : null,
     roi:      settled.length ? +(profit / ROI_BANKROLL_UNITS).toFixed(4) : null,
-    avg_clv:  clvs.length   ? +avg(clvs).toFixed(4)   : null,
+    // CLV is only meaningful pre-match (the close happens at kickoff). In-play
+    // is judged on realised yield/strike-rate alone.
+    avg_clv:  includeClv && clvs.length ? +avg(clvs).toFixed(4) : null,
     avg_edge: edges.length  ? +avg(edges).toFixed(4)  : null,
     avg_mes:  messes.length ? +avg(messes).toFixed(1) : null,
   };
+}
 
-  // P0-2 fix: upsert on singleton_key instead of blind insert.
-  // Previously, every run appended a new row — performance_summary grew without
-  // bound. Migration 016 added singleton_key='current' with a unique constraint.
+/**
+ * Recompute BOTH performance rows from the settled history:
+ *   singleton_key='current' phase='prematch' — the CLV-tracked headline
+ *   singleton_key='inplay'  phase='inplay'    — yield/strike-rate, no CLV
+ * Keeping them separate is what stops in-play picks from skewing CLV.
+ */
+async function calculatePerformance(supabase) {
+  const { data, error } = await supabase
+    .from('value_signals')
+    .select('result, detected_odds, detected_edge, detected_mes, clv, phase');
+  if (error) throw new Error(`calculatePerformance(select): ${error.message}`);
+
+  const rows = data ?? [];
+  // Legacy rows (phase NULL) predate the in-play engine and were pre-match.
+  const prematchRows = rows.filter(r => (r.phase ?? 'prematch') !== 'inplay');
+  const inplayRows   = rows.filter(r => r.phase === 'inplay');
+
+  const calculated_at = new Date().toISOString();
+  const prematch = { ...summarisePhase(prematchRows, { includeClv: true }),
+                     phase: 'prematch', singleton_key: 'current', calculated_at };
+  const inplay   = { ...summarisePhase(inplayRows, { includeClv: false }),
+                     phase: 'inplay', singleton_key: 'inplay', calculated_at };
+
+  // P0-2 fix: upsert on singleton_key — one authoritative row per phase.
   const { error: insErr } = await supabase
     .from('performance_summary')
-    .upsert({ ...summary, singleton_key: 'current' }, { onConflict: 'singleton_key' });
+    .upsert([prematch, inplay], { onConflict: 'singleton_key' });
   if (insErr) throw new Error(`calculatePerformance(upsert): ${insErr.message}`);
 
-  console.log('[performance]', JSON.stringify(summary));
-  return summary;
+  console.log('[performance] prematch', JSON.stringify(prematch));
+  console.log('[performance] inplay  ', JSON.stringify(inplay));
+  return { prematch, inplay };
 }
 
 // ---------------------------------------------------------------------------

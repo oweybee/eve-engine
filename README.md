@@ -27,6 +27,82 @@ Each run, on an `ubuntu-latest` runner with Node.js 22:
 4. Runs `node computeValues.js` — computes edges + records value signals
 5. Runs `node fetchResults.js` — settles results + refreshes performance summary
 
+A **second** workflow, `.github/workflows/run-inplay.yml`, runs the in-play
+pipeline on a tighter cadence (`*/5`). See "In-play signals" below.
+
+---
+
+## In-play signals
+
+The pre-match engine and the in-play engine are **separate pipelines that share
+one codebase**, kept apart so live picks never distort the headline CLV.
+
+**Why they must be separate.** The pre-match headline metric is CLV
+(`ln(detected/closing)`), where "closing" is the price at kickoff. *In-play,
+the line has already closed* — CLV is undefined. So in-play signals are tagged
+`value_signals.phase='inplay'` (migration `030`) and measured by their own
+`performance_summary` row (`singleton_key='inplay'`): realised yield /
+strike-rate / ROI, **no CLV**. The pre-match row (`singleton_key='current'`)
+aggregates only `phase='prematch'`, so its CLV is untouched. `computeValues.js`
+now also refuses to emit a signal for any match past kickoff even if its status
+row still says `scheduled`, closing the leak at the source.
+
+**Two value mechanisms (both-in-stages):**
+
+1. **Book-lag** (`MARKET_CONSENSUS`, on now) — the same Kaunitz consensus engine
+   run on live odds. Fires only when one book trails the live crowd. With a
+   single-source live feed (see below) it has no crowd to compare against and
+   cleanly no-ops; it lights up automatically if a multi-book live source is
+   added. Pure plumbing, no false signals in the meantime.
+2. **Model-vs-market** (`SUPERMODEL_HALFTIME`, gated `INPLAY_MODEL_ENABLED`) —
+   the real differentiator. Holds an **independent** live probability (the
+   half-time supermodel, `models/supermodel_halftime_v2.onnx`) against the
+   drifted live price: `edge = p_model × live_odds − 1`. This is what can flag
+   *"the market overreacted to the goal — the favourite is still value"*.
+
+   The parity feature service that feeds it now exists:
+   - **ELO ladder** — `computeElo.js` walks completed `matches` chronologically
+     with the trainer's exact rule (`lib/elo.js`: K=30 / home-adv 80 / default
+     1500) and upserts `team_elo`. It runs after `fetchResults.js` in
+     `run-engine.yml`.
+   - **Feature builder** — `lib/halftimeFeatures.js` assembles the 32-feature
+     vector in the exact training order (`supermodel_halftime_v2_features.json`)
+     from `team_statistics` (form), `team_elo`, league OHE and live state.
+
+   It is **honesty-gated**: the supermodel was trained only on the top-5
+   European leagues, so `buildHalftimeVector` returns `null` (logged with a
+   reason) unless the league is supported, both teams have ≥ `INPLAY_MIN_ELO_GAMES`
+   real games, and both have form. Out-of-distribution fixtures (e.g. the World
+   Cup) stay dormant rather than emitting guessed signals. A second guard,
+   `INPLAY_MAX_EDGE`, rejects implausibly large model edges as likely
+   miscalibration. The stage is still behind `INPLAY_MODEL_ENABLED` (default
+   `false`) for rollout control; flip it on once `team_elo` has accumulated
+   enough top-5-league history.
+
+**In-play run order** (`run-inplay.yml`):
+
+1. `node ingestLiveOdds.js` — `/fixtures?live=all` updates `matches`
+   (`status='live'`, current `goals_home/away`, `minute`); `/odds/live` writes
+   the current 1X2 price under the synthetic bookmaker `apifootball_live`.
+2. `node computeInplayValues.js` — Stage 1 then Stage 2, writing `phase='inplay'`.
+3. `node postToX.js` — routes `phase='inplay'` to the dedicated Telegram
+   channel (`TELEGRAM_INPLAY_CHAT_ID`). If that channel is unset, in-play
+   signals are recorded but **not** posted — they never leak into the main feed.
+
+> **Data-source caveat.** API-Football's `/odds/live` is a single aggregated
+> feed, not a crowd of books — that's enough for model-vs-market (needs one
+> price) but not for book-lag consensus.
+>
+> **Cadence caveat.** In-play edges close in seconds-to-minutes; GitHub Actions'
+> 5-minute floor is best-effort. If live value proves out, move
+> `ingestLiveOdds`/`computeInplayValues` to a short-loop worker — the code is
+> cadence-agnostic, only the trigger changes.
+
+In-play-specific env vars: `INPLAY_MODEL_ENABLED` (default `false`),
+`INPLAY_EV_THRESHOLD` (default `0.02`), `INPLAY_MAX_EDGE` (default `0.20`),
+`INPLAY_MIN_ELO_GAMES` (default `5`), `LIVE_WINDOW_MIN` (default `160`),
+`TELEGRAM_INPLAY_CHAT_ID`. ELO tuning: `ELO_K`, `ELO_HOME_ADV`, `ELO_DEFAULT`.
+
 ---
 
 ## Required secrets

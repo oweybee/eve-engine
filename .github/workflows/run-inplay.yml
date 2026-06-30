@@ -1,0 +1,60 @@
+name: Run EVE In-Play
+
+# In-play pipeline, separate from the 15-min pre-match engine.
+#
+# CADENCE CAVEAT: in-play edges close in seconds-to-minutes. GitHub Actions'
+# minimum schedule is 5 minutes AND it is best-effort (can lag several minutes
+# under load), so this is a pragmatic floor, not true real-time. If/when live
+# value proves out, move ingestLiveOdds + computeInplayValues to a dedicated
+# short-loop worker (e.g. a small always-on process polling every 20-30s during
+# live windows). The code is cadence-agnostic — only this trigger changes.
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+# Don't pile up overlapping in-play runs.
+concurrency:
+  group: eve-inplay
+  cancel-in-progress: false
+
+jobs:
+  run-inplay:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+      # Stage 2 (model-vs-market) stays OFF until a parity live-feature service
+      # exists — see computeInplayValues.js buildHalftimeFeatures(). Flip to
+      # 'true' only then; until then it is a safe no-op.
+      INPLAY_MODEL_ENABLED:      'false'
+      INPLAY_EV_THRESHOLD:       '0.02'
+      # Telegram — in-play posts route to the dedicated channel. If unset,
+      # in-play signals are recorded but NOT posted (never leak to the main feed).
+      TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_INPLAY_CHAT_ID:   ${{ secrets.TELEGRAM_INPLAY_CHAT_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Ingest live odds + match state
+        run: node ingestLiveOdds.js
+
+      - name: Compute in-play values
+        run: node computeInplayValues.js
+
+      - name: Post in-play signals to Telegram
+        run: node postToX.js
