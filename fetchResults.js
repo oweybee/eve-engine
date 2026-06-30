@@ -17,6 +17,7 @@
 'use strict';
 
 const { createClient } = require('@supabase/supabase-js');
+const { SWEET_SPOT_MIN, SWEET_SPOT_MAX } = require('./modelMetrics');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -218,7 +219,7 @@ const OUTCOME_TO_ODDS_COL = { home: 'home_odds', draw: 'draw_odds', away: 'away_
  */
 async function prefetchClosingOdds(supabase, signals) {
   const matchIds = [...new Set(signals.map(s => s.match_id).filter(Boolean))];
-  if (!matchIds.length) return new Map();
+  if (!matchIds.length) return { closingMap: new Map(), fairCloseMap: new Map() };
 
   // Query 1: closing snapshots for all match+outcome combos
   const { data: snaps } = await supabase
@@ -238,7 +239,7 @@ async function prefetchClosingOdds(supabase, signals) {
 
   // Build maps — first row per match_id is latest (DESC order)
   const snapMap    = new Map(); // key: `${matchId}:${outcome}`
-  const betfairMap = new Map(); // key: matchId → latest row
+  const betfairMap = new Map(); // key: matchId → latest row (vig-inclusive clv)
 
   for (const s of snaps ?? []) {
     const key = `${s.match_id}:${s.selection}`;
@@ -248,20 +249,43 @@ async function prefetchClosingOdds(supabase, signals) {
     if (!betfairMap.has(r.match_id)) betfairMap.set(r.match_id, r);
   }
 
-  // Resolve each signal to a closing price
-  const result = new Map();
+  // Kickoff per match — used to pick the pre-kickoff sharp close for no-vig CLV.
+  const kickoffByMatch = new Map();
+  for (const sig of signals) {
+    const k = sig.kickoff_at ?? sig.match?.kickoff_at;
+    if (k && !kickoffByMatch.has(sig.match_id)) kickoffByMatch.set(sig.match_id, new Date(k).getTime());
+  }
+
+  // Fair (de-vigged) Betfair CLOSING probabilities per match — the sharp
+  // benchmark for no-vig CLV. Latest Betfair 1X2 row at or before kickoff
+  // (in-play excluded). The best-soft close used for vig-inclusive clv drifts
+  // long and over-states CLV; the de-vigged exchange close is the correct ref.
+  const fairCloseMap = new Map(); // key: matchId → { home, draw, away } fair prob
+  for (const r of betfairRows ?? []) {
+    if (fairCloseMap.has(r.match_id)) continue;            // first (latest) pre-kickoff wins
+    const kick = kickoffByMatch.get(r.match_id);
+    if (kick != null && new Date(r.fetched_at).getTime() > kick) continue; // skip in-play
+    const h = parseFloat(r.home_odds), d = parseFloat(r.draw_odds), a = parseFloat(r.away_odds);
+    if (!(h > 1) || !(d > 1) || !(a > 1)) continue;
+    const ih = 1 / h, id = 1 / d, ia = 1 / a, sum = ih + id + ia;
+    if (!(sum > 0)) continue;
+    fairCloseMap.set(r.match_id, { home: ih / sum, draw: id / sum, away: ia / sum });
+  }
+
+  // Resolve each signal to a (vig-inclusive) closing price
+  const closingMap = new Map();
   for (const sig of signals) {
     const key = `${sig.match_id}:${sig.outcome}`;
     if (snapMap.has(key)) {
-      result.set(key, snapMap.get(key));
+      closingMap.set(key, snapMap.get(key));
       continue;
     }
     const col = OUTCOME_TO_ODDS_COL[sig.outcome];
     const row = col && betfairMap.get(sig.match_id);
     const v   = row ? parseFloat(row[col]) : NaN;
-    result.set(key, Number.isFinite(v) && v > 1 ? v : null);
+    closingMap.set(key, Number.isFinite(v) && v > 1 ? v : null);
   }
-  return result;
+  return { closingMap, fairCloseMap };
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +319,7 @@ async function settlePendingSignals(supabase, cache = new Map()) {
   }
 
   // Bulk-prefetch closing odds (2 queries instead of 2×N serial round-trips)
-  const closingMap = await prefetchClosingOdds(supabase, pending);
+  const { closingMap, fairCloseMap } = await prefetchClosingOdds(supabase, pending);
 
   let settled = 0, unmatched = 0;
 
@@ -340,9 +364,23 @@ async function settlePendingSignals(supabase, cache = new Map()) {
       ? +(Math.log(detected) - Math.log(closing)).toFixed(4)
       : null;
 
+    // No-vig CLV (pre-match h2h only): detected price vs the de-vigged Betfair
+    // CLOSING probability. no_vig_clv = ln(detected_odds × fairProb). Benchmarks
+    // against the sharp fair close rather than the soft-book best price used for
+    // `clv`, so soft closing drift can't distort it. In-play stays null.
+    const fair = (!isInplay && (sig.market == null || sig.market === 'h2h'))
+      ? fairCloseMap.get(sig.match_id) : null;
+    const fairProb = fair ? fair[sig.outcome] : null;
+    const no_vig_clv = (
+      Number.isFinite(fairProb) && fairProb > 0 &&
+      Number.isFinite(detected) && detected > 1
+    )
+      ? +(Math.log(detected * fairProb)).toFixed(4)
+      : null;
+
     const { error: upErr } = await supabase
       .from('value_signals')
-      .update({ result, closing_odds: closing, clv })
+      .update({ result, closing_odds: closing, clv, no_vig_clv })
       .eq('id', sig.id);
     if (upErr) { console.warn(`  [results] update ${sig.id} failed: ${upErr.message}`); continue; }
 
@@ -371,6 +409,16 @@ function avg(arr) {
  */
 const ROI_BANKROLL_UNITS = 100;
 
+/**
+ * Sweet-spot = detected edge in the 5-25pp band (SWEET_SPOT_MIN..MAX). Derived
+ * from detected_edge at report time, independent of the stored signal_category
+ * label (which two writers populate inconsistently).
+ */
+function isSweetSpot(edge) {
+  const e = Number(edge);
+  return Number.isFinite(e) && e >= SWEET_SPOT_MIN && e <= SWEET_SPOT_MAX;
+}
+
 /** Aggregate one phase's slice of value_signals into a summary object. */
 function summarisePhase(rows, { includeClv }) {
   const settled = rows.filter(r => r.result === 'win' || r.result === 'loss');
@@ -379,7 +427,11 @@ function summarisePhase(rows, { includeClv }) {
   const profit = settled.reduce(
     (s, r) => s + (r.result === 'win' ? (parseFloat(r.detected_odds) - 1) : -1), 0);
 
+  const sweet  = settled.filter(r => isSweetSpot(r.detected_edge));
   const clvs   = settled.map(r => r.clv).filter(v => v != null).map(Number);
+  const nvClvs = settled.map(r => r.no_vig_clv).filter(v => v != null).map(Number);
+  const clvSweet = sweet.map(r => r.clv).filter(v => v != null).map(Number);
+  const nvSweet  = sweet.map(r => r.no_vig_clv).filter(v => v != null).map(Number);
   const edges  = rows.map(r => r.detected_edge).filter(v => v != null).map(Number);
   const messes = rows.map(r => r.detected_mes).filter(v => v != null).map(Number);
 
@@ -392,8 +444,14 @@ function summarisePhase(rows, { includeClv }) {
     yield:    settled.length ? +(profit / settled.length).toFixed(4) : null,
     roi:      settled.length ? +(profit / ROI_BANKROLL_UNITS).toFixed(4) : null,
     // CLV is only meaningful pre-match (the close happens at kickoff). In-play
-    // is judged on realised yield/strike-rate alone.
-    avg_clv:  includeClv && clvs.length ? +avg(clvs).toFixed(4) : null,
+    // is judged on realised yield/strike-rate alone. Reported all-settled and
+    // sweet-spot (5-25pp edge), vig-inclusive and no-vig, with sample sizes.
+    avg_clv:                  includeClv && clvs.length     ? +avg(clvs).toFixed(4)     : null,
+    avg_clv_sweetspot:        includeClv && clvSweet.length ? +avg(clvSweet).toFixed(4) : null,
+    avg_no_vig_clv:           includeClv && nvClvs.length   ? +avg(nvClvs).toFixed(4)   : null,
+    avg_no_vig_clv_sweetspot: includeClv && nvSweet.length  ? +avg(nvSweet).toFixed(4)  : null,
+    clv_sample:           includeClv ? clvs.length     : null,
+    clv_sweetspot_sample: includeClv ? clvSweet.length : null,
     avg_edge: edges.length  ? +avg(edges).toFixed(4)  : null,
     avg_mes:  messes.length ? +avg(messes).toFixed(1) : null,
   };
@@ -408,7 +466,7 @@ function summarisePhase(rows, { includeClv }) {
 async function calculatePerformance(supabase) {
   const { data, error } = await supabase
     .from('value_signals')
-    .select('result, detected_odds, detected_edge, detected_mes, clv, phase');
+    .select('result, detected_odds, detected_edge, detected_mes, clv, no_vig_clv, phase');
   if (error) throw new Error(`calculatePerformance(select): ${error.message}`);
 
   const rows = data ?? [];
