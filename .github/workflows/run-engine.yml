@@ -56,9 +56,6 @@ jobs:
       - name: Settle results & refresh performance summary
         run: node fetchResults.js
 
-      - name: Rebuild ELO ladder (feeds in-play model)
-        run: node computeElo.js
-
       - name: Restore signal post state
         uses: actions/cache@v4
         with:
