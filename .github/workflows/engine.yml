@@ -156,6 +156,14 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_results != 'true' }}
         run: node fetchResults.js
 
+      # ELO ladder feeds the in-play half-time supermodel (computeInplayValues
+      # Stage 2). Self-gates on ELO_REFRESH_HOURS so it only fully recomputes a
+      # few times a day, not every 5-minute tick.
+      - name: Rebuild ELO ladder
+        id: elo
+        continue-on-error: true
+        run: node computeElo.js
+
       # Daily forward-test ledger for the suggested accumulators (idempotent).
       - name: Record suggested accas
         id: accas

@@ -20,6 +20,11 @@ const { getClient } = require('./lib/supabaseClient');
 const { ELO_DEFAULT, updatePair } = require('./lib/elo');
 
 const DRY_RUN = process.argv.includes('--dry-run');
+const FORCE   = process.argv.includes('--force');
+// Self-gate so the active 5-min engine pipeline doesn't fully rebuild the ladder
+// every tick. ELO only changes when results settle, so a few hours is ample;
+// in-play reads a pre-match snapshot anyway. Mirrors fetchTeamStats' self-cache.
+const ELO_REFRESH_HOURS = parseFloat(process.env.ELO_REFRESH_HOURS || '6');
 
 /** Same normalisation key as fetchStatsLookups / halftimeFeatures. */
 const normTeam = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -75,6 +80,21 @@ function buildLadder(matches) {
 async function run() {
   console.log(`\n[elo] ${new Date().toISOString()}${DRY_RUN ? ' [DRY RUN]' : ''}`);
   const supabase = getClient();
+
+  // Freshness gate: skip the full recompute if the ladder was refreshed recently.
+  if (!FORCE && !DRY_RUN && ELO_REFRESH_HOURS > 0) {
+    const { data: last } = await supabase
+      .from('team_elo')
+      .select('updated_at')
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    const ts = last?.[0]?.updated_at ? new Date(last[0].updated_at).getTime() : 0;
+    const ageH = (Date.now() - ts) / 3_600_000;
+    if (ts && ageH < ELO_REFRESH_HOURS) {
+      console.log(`[elo] ladder fresh (${ageH.toFixed(1)}h < ${ELO_REFRESH_HOURS}h) — skipping`);
+      return;
+    }
+  }
 
   const matches = await fetchCompletedMatches(supabase);
   console.log(`[elo] ${matches.length} completed match(es) in history`);
