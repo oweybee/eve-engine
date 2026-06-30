@@ -90,6 +90,15 @@ function extractLiveH2h(oddsBets) {
 
 async function run() {
   console.log(`\n[live] ${new Date().toISOString()}${DRY_RUN ? ' [DRY RUN]' : ''}`);
+
+  // Graceful no-op until the API-Football key is configured, so the in-play
+  // cron stays green (mirrors fetchResults.js's missing-key handling) rather
+  // than erroring every run before the secret is added.
+  if (!API_FOOTBALL_KEY) {
+    console.log('[live] API_FOOTBALL_KEY not set — skipping live ingest (no-op)');
+    return;
+  }
+
   const supabase = getClient();
 
   const tracked = await fetchTrackedLiveMatches(supabase);
