@@ -104,23 +104,27 @@ async function checkComputedValues(supabase, violations) {
 }
 
 async function checkSignals(supabase, violations) {
+  // value_signals has no stored model_prob — it carries detected_edge +
+  // detected_odds, from which the implied model probability is (edge+1)/odds.
+  // (The previous select of a non-existent model_prob column errored, silently
+  // disabling the entire signal check.)
   const { data, error } = await supabase
     .from('value_signals')
-    .select('id, market, outcome, detected_edge, detected_odds, model_prob')
+    .select('id, market, outcome, detected_edge, detected_odds')
     .eq('result', 'pending')
     .limit(2000);
-  if (error) { violations.push(`[query] value_signals: ${error.message}`); return; }
+  if (error) { violations.push(`[query] value_signals: ${error.message}`); return 0; }
 
   for (const s of data ?? []) {
     const tag = `signal ${String(s.id).slice(0, 8)} ${s.market}/${s.outcome}`;
-    const edge = num(s.detected_edge), odds = num(s.detected_odds), mp = num(s.model_prob);
+    const edge = num(s.detected_edge), odds = num(s.detected_odds);
     if (odds != null && odds <= 1) violations.push(`${tag}: odds ${odds} ≤ 1`);
     if (edge != null && edge > EDGE_CAP) violations.push(`${tag}: implausible +edge ${(edge * 100).toFixed(1)}%`);
-    if (mp != null && (mp < -PROB_TOL || mp > 1 + PROB_TOL)) violations.push(`${tag}: model_prob ${mp} outside [0,1]`);
-    if (edge != null && odds != null && mp != null) {
-      const recon = mp * odds - 1;
-      if (Math.abs(recon - edge) > EDGE_TOL) {
-        violations.push(`${tag}: edge ${edge} ≠ model_prob·odds−1 (${recon.toFixed(3)})`);
+    // EV↔odds consistency: the implied model probability must be a probability.
+    if (edge != null && odds != null && odds > 1) {
+      const mp = (edge + 1) / odds;
+      if (mp < -PROB_TOL || mp > 1 + PROB_TOL) {
+        violations.push(`${tag}: implied model_prob ${mp.toFixed(3)} outside [0,1] (edge ${edge}, odds ${odds})`);
       }
     }
   }

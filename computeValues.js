@@ -45,6 +45,14 @@ const OUTLIER_MULT = parseFloat(process.env.ODDS_OUTLIER_MULT || '3');
 // Lowered from 0.02 — World Cup market is efficient, 0.5% surfaces real marginal edge
 const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD || '0.005');
 
+// Implausible-edge guard. A consensus edge this large is essentially always a
+// data error — a lone stale/illiquid price (e.g. a Betfair Exchange home at 9.8
+// while every book is ~3.5) that the 3×-median outlier filter doesn't catch
+// because it sits just under the threshold. Such a price produced a +142% fake
+// edge that also tripped the integrity alarm. Mirrors computeApiValues'
+// MAX_PLAUSIBLE_EDGE: above this, drop the edge rather than publish value.
+const MAX_PLAUSIBLE_EDGE = parseFloat(process.env.MAX_PLAUSIBLE_EDGE || '0.30');
+
 // Skip re-signal if same odds seen within this window (avoid spam)
 const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
@@ -189,8 +197,18 @@ function computeConsensus(oddsRows) {
     const p_novig  = overround > 0 ? r.p_cons_vig / overround : r.p_cons_vig;
     const p_adj    = p_novig * (1 - DEVIG_MARGIN);
     const fair_odds = 1 / p_adj;
-    const has_edge = r.max_odds > fair_odds;
-    const edge     = has_edge ? parseFloat((p_adj * r.max_odds - 1).toFixed(6)) : 0;
+    let has_edge = r.max_odds > fair_odds;
+    let edge     = has_edge ? parseFloat((p_adj * r.max_odds - 1).toFixed(6)) : 0;
+
+    // Reject implausible edges: a lone stale/outlier price masquerading as value.
+    if (edge > MAX_PLAUSIBLE_EDGE) {
+      console.warn(
+        `[engine] dropped implausible edge ${(edge * 100).toFixed(0)}% on ${outcome} ` +
+        `(best ${r.max_odds} @ ${r.max_book} vs fair ${fair_odds.toFixed(2)}) — likely stale/outlier price`
+      );
+      has_edge = false;
+      edge = 0;
+    }
 
     result[outcome] = {
       p_cons: p_novig, p_adj, fair_odds,
