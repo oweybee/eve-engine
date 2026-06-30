@@ -14,9 +14,11 @@
 -- signals from default 1500s.
 -- =============================================================================
 
+-- Keyed by normalised team name (lower, alnum) — the same key halftimeFeatures
+-- and fetchStatsLookups use. No team_id column: teams.id is a UUID, ratings are
+-- looked up by name, and an unused mistyped FK only invited bugs.
 CREATE TABLE IF NOT EXISTS team_elo (
-  team_id    BIGINT,
-  team_name  TEXT PRIMARY KEY,   -- normalised match key (lower, alnum)
+  team_name  TEXT PRIMARY KEY,
   elo        NUMERIC NOT NULL DEFAULT 1500,
   games      INTEGER NOT NULL DEFAULT 0,
   updated_at TIMESTAMPTZ DEFAULT now()

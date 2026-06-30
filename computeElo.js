@@ -30,34 +30,52 @@ const ELO_REFRESH_HOURS = parseFloat(process.env.ELO_REFRESH_HOURS || '6');
 const normTeam = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 const RESULT_CODE = { home: 'H', draw: 'D', away: 'A' };
+const PAGE_SIZE = 1000; // PostgREST hard caps responses; page past it.
 
-async function fetchCompletedMatches(supabase) {
+async function fetchCompletedMatches(supabase, from = 0) {
   const { data, error } = await supabase
     .from('matches')
     .select(`
       id, kickoff_at, result,
-      home_team:teams!matches_home_team_id_fkey ( id, name ),
-      away_team:teams!matches_away_team_id_fkey ( id, name )
+      home_team:teams!matches_home_team_id_fkey ( name ),
+      away_team:teams!matches_away_team_id_fkey ( name )
     `)
     .eq('status', 'completed')
     .in('result', ['home', 'draw', 'away'])
-    .order('kickoff_at', { ascending: true });
+    // Chronological order is REQUIRED for ELO correctness — ratings flow forward
+    // in time. id breaks ties so pagination is stable.
+    .order('kickoff_at', { ascending: true })
+    .order('id', { ascending: true })
+    .range(from, from + PAGE_SIZE - 1);
   if (error) throw new Error(`fetchCompletedMatches: ${error.message}`);
   return data ?? [];
+}
+
+/**
+ * Fetch ALL completed matches, paging past PostgREST's default 1000-row cap —
+ * otherwise ELO is built from only the oldest 1000 fixtures (silently wrong).
+ */
+async function fetchAllCompletedMatches(supabase) {
+  const all = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const page = await fetchCompletedMatches(supabase, from);
+    all.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return all;
 }
 
 /**
  * Fold a chronological list of completed matches into a ratings map.
  * Pure (no I/O) so it is unit-testable.
  *
- * @returns {Map<string, {team_id:number|null, team_name:string, elo:number, games:number}>}
+ * @returns {Map<string, {team_name:string, elo:number, games:number}>}
  */
 function buildLadder(matches) {
   const ladder = new Map();
-  const get = (key, name, id) => {
+  const get = (key) => {
     let r = ladder.get(key);
-    if (!r) { r = { team_id: id ?? null, team_name: key, elo: ELO_DEFAULT, games: 0 }; ladder.set(key, r); }
-    if (id != null && r.team_id == null) r.team_id = id;
+    if (!r) { r = { team_name: key, elo: ELO_DEFAULT, games: 0 }; ladder.set(key, r); }
     return r;
   };
 
@@ -68,8 +86,8 @@ function buildLadder(matches) {
     const aKey = normTeam(m.away_team?.name);
     if (!hKey || !aKey) continue;
 
-    const h = get(hKey, hKey, m.home_team?.id);
-    const a = get(aKey, aKey, m.away_team?.id);
+    const h = get(hKey);
+    const a = get(aKey);
     const next = updatePair(h.elo, a.elo, code);
     h.elo = next.home; a.elo = next.away;
     h.games += 1; a.games += 1;
@@ -96,7 +114,7 @@ async function run() {
     }
   }
 
-  const matches = await fetchCompletedMatches(supabase);
+  const matches = await fetchAllCompletedMatches(supabase);
   console.log(`[elo] ${matches.length} completed match(es) in history`);
 
   const ladder = buildLadder(matches);
@@ -105,7 +123,6 @@ async function run() {
   if (!ladder.size) return;
 
   const rows = [...ladder.values()].map(r => ({
-    team_id:    r.team_id,
     team_name:  r.team_name,
     elo:        +r.elo.toFixed(2),
     games:      r.games,
