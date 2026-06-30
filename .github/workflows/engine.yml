@@ -156,6 +156,12 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_results != 'true' }}
         run: node fetchResults.js
 
+      # Daily forward-test ledger for the suggested accumulators (idempotent).
+      - name: Record suggested accas
+        id: accas
+        continue-on-error: true
+        run: node recordAccas.js
+
       - name: Fetch match details (lineups + stats)
         id: details
         continue-on-error: true
