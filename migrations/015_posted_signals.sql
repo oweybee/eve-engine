@@ -61,3 +61,13 @@ comment on column posted_signals.external_msg_id is
   'Platform message ID (Telegram message_id, X tweet id_str) for edits and audit.';
 comment on column posted_signals.run_id is
   'GitHub Actions GITHUB_RUN_ID. Allows audit of which CI run sent each message.';
+
+-- Row Level Security: internal dedup ledger — not exposed to clients at all.
+-- Only the service role (the engine) may touch it; anon/authenticated get
+-- nothing (no policy for them = deny). service_role bypasses RLS, but the
+-- explicit ALL policy documents intent and is robust if that ever changes.
+alter table posted_signals enable row level security;
+
+drop policy if exists posted_signals_service_role on posted_signals;
+create policy posted_signals_service_role on posted_signals
+  for all to service_role using (true) with check (true);

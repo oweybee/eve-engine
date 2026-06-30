@@ -13,8 +13,8 @@
  *   - EV_THRESHOLD default lowered to 0.005 (0.5%) to surface marginal value
  */
 
-const { getClient } = require('./lib/supabaseClient');
-const sm            = require('./lib/secondaryMarkets');
+const { getClient, withRetry } = require('./lib/supabaseClient');
+const sm                       = require('./lib/secondaryMarkets');
 
 // Config
 const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '2',    10);
@@ -471,7 +471,10 @@ async function main() {
     ` dedup_window=${SIGNAL_DEDUP_MINUTES}min pool=${COMPUTE_CONCURRENCY}`
   );
 
-  const matches = await fetchMatchesForComputation(supabase);
+  const matches = await withRetry(
+    () => fetchMatchesForComputation(supabase),
+    'fetchMatchesForComputation',
+  );
   if (!matches.length) {
     console.log('[engine] no matches with odds — done');
     return;
@@ -517,10 +520,16 @@ async function main() {
     console.error('[secondary] pricing failed (1X2 unaffected):', err.message);
   }
 
-  await upsertComputedValues(supabase, computedRows);
+  await withRetry(
+    () => upsertComputedValues(supabase, computedRows),
+    'upsertComputedValues',
+  );
 
   if (valueRows.length) {
-    await insertValueSignals(supabase, valueRows);
+    await withRetry(
+      () => insertValueSignals(supabase, valueRows),
+      'insertValueSignals',
+    );
   }
   if (secondaryCandidates.length) {
     try { await insertSecondarySignals(supabase, secondaryCandidates); }

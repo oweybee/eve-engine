@@ -16,3 +16,11 @@ create table if not exists performance_summary (
   avg_edge numeric(6,4),
   avg_mes numeric(5,1)
 );
+
+-- Row Level Security: read-only for clients (the dashboard reads this);
+-- writes restricted to the service role, which bypasses RLS.
+alter table performance_summary enable row level security;
+
+drop policy if exists anon_read on performance_summary;
+create policy anon_read on performance_summary
+  for select to anon, authenticated using (true);

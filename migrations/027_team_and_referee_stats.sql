@@ -44,3 +44,18 @@ CREATE TABLE IF NOT EXISTS referee_stats (
 
 -- Referee per match (from the fixture payload) — drives the referee adjustment.
 ALTER TABLE matches ADD COLUMN IF NOT EXISTS referee TEXT;
+
+-- Row Level Security: both tables are read-only reference data for the
+-- match-detail panels. SELECT for anon + authenticated; writes restricted to
+-- the service role (the engine), which bypasses RLS. (Re-affirmed idempotently
+-- in migration 031.)
+ALTER TABLE team_statistics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE referee_stats   ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS anon_read ON team_statistics;
+CREATE POLICY anon_read ON team_statistics
+  FOR SELECT TO anon, authenticated USING (true);
+
+DROP POLICY IF EXISTS anon_read ON referee_stats;
+CREATE POLICY anon_read ON referee_stats
+  FOR SELECT TO anon, authenticated USING (true);

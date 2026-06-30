@@ -61,3 +61,20 @@ create table if not exists odds_snapshots (
 );
 create index if not exists idx_snap_match on odds_snapshots(match_id, selection, captured_at desc);
 create index if not exists idx_snap_type  on odds_snapshots(match_id, snapshot_type);
+
+-- ---------------------------------------------------------------------------
+-- Row Level Security: both tables are read-only reference data for clients.
+-- SELECT for anon + authenticated; writes restricted to the service role
+-- (the engine), which bypasses RLS. Without these, the frontend silently
+-- receives empty result sets once RLS is enabled.
+-- ---------------------------------------------------------------------------
+alter table recommendations enable row level security;
+alter table odds_snapshots  enable row level security;
+
+drop policy if exists anon_read on recommendations;
+create policy anon_read on recommendations
+  for select to anon, authenticated using (true);
+
+drop policy if exists anon_read on odds_snapshots;
+create policy anon_read on odds_snapshots
+  for select to anon, authenticated using (true);
