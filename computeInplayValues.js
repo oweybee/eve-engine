@@ -32,6 +32,7 @@
 const { getClient } = require('./lib/supabaseClient');
 const inplay         = require('./lib/inplay');
 const sm             = require('./lib/secondaryMarkets');
+const { buildHalftimeVector } = require('./lib/halftimeFeatures');
 const {
   fetchMatchesForComputation,
   computeMatch,
@@ -44,6 +45,10 @@ const {
 const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5', 10);
 const INPLAY_MODEL_ENABLED = (process.env.INPLAY_MODEL_ENABLED || '').toLowerCase() === 'true';
 const INPLAY_EV_THRESHOLD  = parseFloat(process.env.INPLAY_EV_THRESHOLD || process.env.EV_THRESHOLD || '0.02');
+// Out-of-distribution / miscalibration guard: reject implausibly large model
+// edges (mirrors MAX_PLAUSIBLE_EDGE in computeApiValues.js). An in-play model
+// "edge" above this is almost always a calibration artefact, not real value.
+const INPLAY_MAX_EDGE = parseFloat(process.env.INPLAY_MAX_EDGE || '0.20');
 
 const normTeam = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -71,23 +76,48 @@ async function withPool(items, fn, concurrency) {
 
 // ── STAGE 2: model-vs-market (gated) ─────────────────────────────────────────
 
+const normTeam2 = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** team_elo lookup keyed by normalised team name for these matches. */
+async function fetchEloLookup(supabase) {
+  const map = new Map();
+  const { data, error } = await supabase.from('team_elo').select('team_name, elo, games');
+  if (error) { console.warn('[inplay] team_elo read failed:', error.message); return map; }
+  for (const r of data ?? []) map.set(r.team_name, r);
+  return map;
+}
+
 /**
- * Attempt to build the 32-feature half-time supermodel vector for a live match.
+ * Build the 32-feature half-time supermodel vector for a live match from DB
+ * data, at training parity. Delegates the parity logic + honesty gates to
+ * lib/halftimeFeatures.js: it returns null (with a logged reason) for
+ * out-of-distribution fixtures (unsupported league, cold-start ELO, missing
+ * form) rather than guessing — so Stage 2 only fires where it is trustworthy.
  *
- * IMPORTANT: returns null unless every feature is real data. The supermodel was
- * trained on an ELO + rolling-form + H2H + league-OHE + HT-state distribution
- * (ensemble/train_supermodel_v2.py). The Node side does not yet maintain an ELO
- * ladder or the exact rolling rates, so for now this returns null and Stage 2
- * is effectively dormant — by design, so it can never emit garbage signals from
- * half-built features. Wiring a parity feature service is the work that turns
- * Stage 2 on (set INPLAY_MODEL_ENABLED=true once it exists).
- *
- * @returns {number[]|null} 32-dim vector ordered per
- *   models/supermodel_halftime_v2_features.json, or null when not buildable.
+ * @returns {number[]|null}
  */
-function buildHalftimeFeatures(/* match, stats, liveState */) {
-  // No parity feature source available yet — skip rather than guess.
-  return null;
+function buildHalftimeFeatures(match, ctx) {
+  const hKey = normTeam2(match.home_team?.name);
+  const aKey = normTeam2(match.away_team?.name);
+  const { vector, reason } = buildHalftimeVector({
+    league:    match.league?.name,
+    homeStats: ctx.statsByName.get(hKey),
+    awayStats: ctx.statsByName.get(aKey),
+    homeElo:   ctx.eloByName.get(hKey),
+    awayElo:   ctx.eloByName.get(aKey),
+    // H2H last-5 not yet materialised in production → trainer's cold-start
+    // prior (0.45) inside the builder. Low-weight feature; documented gap.
+    h2hHomeWinRate: undefined,
+    live: {
+      homeGoals: match.goals_home, awayGoals: match.goals_away,
+      homeReds: 0, awayReds: 0,   // GAP: live red cards not ingested → 0
+    },
+  });
+  if (!vector) {
+    console.log(`[inplay] model skip ${match.home_team?.name} v ${match.away_team?.name}: ${reason}`);
+    return null;
+  }
+  return vector;
 }
 
 /**
@@ -98,7 +128,7 @@ function buildHalftimeFeatures(/* match, stats, liveState */) {
  *
  * @returns {Array<object>} value_signals candidates (phase='inplay')
  */
-async function modelVsMarket(match) {
+async function modelVsMarket(match, ctx) {
   let infer;
   try {
     infer = require('./ensemble/inference');
@@ -107,8 +137,8 @@ async function modelVsMarket(match) {
   }
   if (!infer.ensembleAvailable?.()) return [];
 
-  const features = buildHalftimeFeatures(match);
-  if (!features) return []; // feature parity not yet available — dormant
+  const features = buildHalftimeFeatures(match, ctx);
+  if (!features) return []; // out of distribution / insufficient data — dormant
 
   const probs = await infer.supermodelHalftimeInference(features);
   if (!probs) return [];
@@ -120,6 +150,10 @@ async function modelVsMarket(match) {
     if (!live) continue;
     const edge = inplay.inplayEdge(probs[outcome], live.odds);
     if (edge == null || edge < INPLAY_EV_THRESHOLD) continue;
+    if (edge > INPLAY_MAX_EDGE) {
+      console.log(`[inplay] reject ${match.home_team?.name} ${outcome} edge=${edge} > max ${INPLAY_MAX_EDGE} (likely miscalibration)`);
+      continue;
+    }
     candidates.push({
       match_id:           match.id,
       outcome,
@@ -194,12 +228,17 @@ async function main() {
   // STAGE 2 — model-vs-market (gated)
   if (INPLAY_MODEL_ENABLED) {
     try {
+      // Shared lookups: team form (team_statistics) + ELO ladder (team_elo).
+      const { statsByName } = await fetchStatsLookups(supabase, matches);
+      const eloByName = await fetchEloLookup(supabase);
+      const ctx = { statsByName, eloByName };
+
       // Loop over ALL live matches (not just consensus-passed ones): the model
       // stage needs only a single live price, so it works even where Stage 1's
       // multi-book consensus could not form.
       const modelCandidates = [];
       for (const m of matches) {
-        modelCandidates.push(...await modelVsMarket(m));
+        modelCandidates.push(...await modelVsMarket(m, ctx));
       }
       const n = await insertModelSignals(supabase, modelCandidates);
       console.log(`[inplay] model-vs-market signals: ${n}`);

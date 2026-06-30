@@ -58,12 +58,26 @@ row still says `scheduled`, closing the leak at the source.
    the real differentiator. Holds an **independent** live probability (the
    half-time supermodel, `models/supermodel_halftime_v2.onnx`) against the
    drifted live price: `edge = p_model × live_odds − 1`. This is what can flag
-   *"the market overreacted to the goal — the favourite is still value"*. It is
-   **off by default**: it needs a live feature vector at training parity (ELO +
-   rolling form + H2H + league OHE + half-time state). `buildHalftimeFeatures()`
-   in `computeInplayValues.js` returns `null` until that parity feature service
-   exists, so the stage is a safe no-op even when the flag is on — it can never
-   emit signals from half-built features.
+   *"the market overreacted to the goal — the favourite is still value"*.
+
+   The parity feature service that feeds it now exists:
+   - **ELO ladder** — `computeElo.js` walks completed `matches` chronologically
+     with the trainer's exact rule (`lib/elo.js`: K=30 / home-adv 80 / default
+     1500) and upserts `team_elo`. It runs after `fetchResults.js` in
+     `run-engine.yml`.
+   - **Feature builder** — `lib/halftimeFeatures.js` assembles the 32-feature
+     vector in the exact training order (`supermodel_halftime_v2_features.json`)
+     from `team_statistics` (form), `team_elo`, league OHE and live state.
+
+   It is **honesty-gated**: the supermodel was trained only on the top-5
+   European leagues, so `buildHalftimeVector` returns `null` (logged with a
+   reason) unless the league is supported, both teams have ≥ `INPLAY_MIN_ELO_GAMES`
+   real games, and both have form. Out-of-distribution fixtures (e.g. the World
+   Cup) stay dormant rather than emitting guessed signals. A second guard,
+   `INPLAY_MAX_EDGE`, rejects implausibly large model edges as likely
+   miscalibration. The stage is still behind `INPLAY_MODEL_ENABLED` (default
+   `false`) for rollout control; flip it on once `team_elo` has accumulated
+   enough top-5-league history.
 
 **In-play run order** (`run-inplay.yml`):
 
@@ -85,8 +99,9 @@ row still says `scheduled`, closing the leak at the source.
 > cadence-agnostic, only the trigger changes.
 
 In-play-specific env vars: `INPLAY_MODEL_ENABLED` (default `false`),
-`INPLAY_EV_THRESHOLD` (default `0.02`), `LIVE_WINDOW_MIN` (default `160`),
-`TELEGRAM_INPLAY_CHAT_ID`.
+`INPLAY_EV_THRESHOLD` (default `0.02`), `INPLAY_MAX_EDGE` (default `0.20`),
+`INPLAY_MIN_ELO_GAMES` (default `5`), `LIVE_WINDOW_MIN` (default `160`),
+`TELEGRAM_INPLAY_CHAT_ID`. ELO tuning: `ELO_K`, `ELO_HOME_ADV`, `ELO_DEFAULT`.
 
 ---
 

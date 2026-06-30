@@ -9,6 +9,9 @@ const assert = require('assert');
 const inplay = require('./lib/inplay');
 const { buildMessage, isInplay, chatIdForSignal } = require('./postToX');
 const { extractLiveH2h } = require('./ingestLiveOdds');
+const elo = require('./lib/elo');
+const { buildLadder } = require('./computeElo');
+const { buildHalftimeVector, leagueKey, formRates, FEATURE_ORDER } = require('./lib/halftimeFeatures');
 
 let passed = 0, failed = 0;
 function test(label, fn) {
@@ -119,6 +122,96 @@ test('skips suspended selections → null', () => {
 });
 test('no match-winner bet → null', () =>
   assert.strictEqual(extractLiveH2h([{ name: 'Corners', values: [] }]), null));
+
+console.log('lib/elo');
+test('equal ratings: home favoured by home advantage', () =>
+  assert.ok(elo.expectedHome(1500, 1500) > 0.5));
+test('expectedHome in (0,1)', () => {
+  const e = elo.expectedHome(1700, 1400);
+  assert.ok(e > 0 && e < 1 && e > 0.5);
+});
+test('home win raises home, lowers away', () => {
+  const { home, away } = elo.updatePair(1500, 1500, 'H');
+  assert.ok(home > 1500 && away < 1500);
+});
+test('update is zero-sum', () => {
+  const before = 1500 + 1500;
+  const { home, away } = elo.updatePair(1500, 1500, 'A');
+  assert.ok(Math.abs((home + away) - before) < 1e-9);
+});
+test('draw nudges favourite down, underdog up', () => {
+  const { home, away } = elo.updatePair(1700, 1400, 'D'); // home was favoured
+  assert.ok(home < 1700 && away > 1400);
+});
+
+console.log('computeElo.buildLadder');
+test('winner ends above loser; games counted', () => {
+  const matches = [
+    { result: 'home', home_team: { name: 'Alpha', id: 1 }, away_team: { name: 'Beta', id: 2 } },
+    { result: 'home', home_team: { name: 'Alpha', id: 1 }, away_team: { name: 'Beta', id: 2 } },
+  ];
+  const ladder = buildLadder(matches);
+  const a = ladder.get('alpha'), b = ladder.get('beta');
+  assert.ok(a.elo > 1500 && b.elo < 1500);
+  assert.strictEqual(a.games, 2);
+  assert.strictEqual(b.games, 2);
+});
+test('skips rows with no result/teams', () => {
+  const ladder = buildLadder([{ result: null, home_team: { name: 'X' }, away_team: { name: 'Y' } }]);
+  assert.strictEqual(ladder.size, 0);
+});
+
+console.log('lib/halftimeFeatures gating');
+const goodElo = { elo: 1600, games: 12 };
+const goodStats = { form: 'WWDLW', goals_for_avg: 1.8, goals_against_avg: 0.9, clean_sheet_pct: 40 };
+test('leagueKey maps common names', () => {
+  assert.strictEqual(leagueKey('English Premier League'), 'epl');
+  assert.strictEqual(leagueKey('La Liga'), 'laliga');
+  assert.strictEqual(leagueKey('Serie A'), 'seriea');
+  assert.strictEqual(leagueKey('FIFA World Cup'), null);
+});
+test('formRates from WWDLW', () => {
+  const r = formRates('WWDLW');
+  assert.ok(Math.abs(r.win_rate - 0.6) < 1e-9);
+  assert.ok(Math.abs(r.draw_rate - 0.2) < 1e-9);
+});
+test('unsupported league → dormant (null, with reason)', () => {
+  const out = buildHalftimeVector({ league: 'FIFA World Cup', homeStats: goodStats, awayStats: goodStats,
+    homeElo: goodElo, awayElo: goodElo, live: { homeGoals: 0, awayGoals: 1 } });
+  assert.strictEqual(out.vector, null);
+  assert.ok(/unsupported league/.test(out.reason));
+});
+test('cold-start ELO → dormant', () => {
+  const out = buildHalftimeVector({ league: 'Premier League', homeStats: goodStats, awayStats: goodStats,
+    homeElo: { elo: 1500, games: 1 }, awayElo: goodElo, live: { homeGoals: 0, awayGoals: 0 } });
+  assert.strictEqual(out.vector, null);
+  assert.ok(/insufficient ELO/.test(out.reason));
+});
+test('missing form → dormant', () => {
+  const out = buildHalftimeVector({ league: 'Premier League', homeStats: { form: '' }, awayStats: goodStats,
+    homeElo: goodElo, awayElo: goodElo, live: { homeGoals: 0, awayGoals: 0 } });
+  assert.strictEqual(out.vector, null);
+  assert.ok(/team form/.test(out.reason));
+});
+test('valid inputs → 32-dim vector in training order', () => {
+  const out = buildHalftimeVector({ league: 'Premier League',
+    homeStats: goodStats, awayStats: { form: 'LLDWD', goals_for_avg: 1.0, goals_against_avg: 1.5, clean_sheet_pct: 20 },
+    homeElo: { elo: 1700, games: 30 }, awayElo: { elo: 1500, games: 30 },
+    h2hHomeWinRate: 0.6, live: { homeGoals: 0, awayGoals: 1 } });
+  assert.ok(Array.isArray(out.vector));
+  assert.strictEqual(out.vector.length, FEATURE_ORDER.length);
+  assert.strictEqual(out.vector.length, 32);
+  const at = name => out.vector[FEATURE_ORDER.indexOf(name)];
+  assert.strictEqual(at('elo_differential'), 200);     // 1700 - 1500
+  assert.strictEqual(at('league_epl'), 1);
+  assert.strictEqual(at('league_seriea'), 0);
+  assert.strictEqual(at('HTHG'), 0);
+  assert.strictEqual(at('HTAG'), 1);
+  assert.strictEqual(at('ht_losing_1'), 1);            // home 0-1 → losing by 1
+  assert.strictEqual(at('ht_draw'), 0);
+  assert.ok(Math.abs(at('h2h_home_win_rate_5') - 0.6) < 1e-9);
+  assert.ok(out.vector.every(Number.isFinite));
+});
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

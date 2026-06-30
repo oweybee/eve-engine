@@ -56,7 +56,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
-      id, external_id, kickoff_at, status, referee,
+      id, external_id, kickoff_at, status, referee, goals_home, goals_away, minute,
       home_team:teams!matches_home_team_id_fkey ( id, name ),
       away_team:teams!matches_away_team_id_fkey ( id, name ),
       league:leagues ( id, name )

@@ -416,10 +416,11 @@ async function calculatePerformance(supabase) {
   const prematchRows = rows.filter(r => (r.phase ?? 'prematch') !== 'inplay');
   const inplayRows   = rows.filter(r => r.phase === 'inplay');
 
+  const calculated_at = new Date().toISOString();
   const prematch = { ...summarisePhase(prematchRows, { includeClv: true }),
-                     phase: 'prematch', singleton_key: 'current' };
+                     phase: 'prematch', singleton_key: 'current', calculated_at };
   const inplay   = { ...summarisePhase(inplayRows, { includeClv: false }),
-                     phase: 'inplay', singleton_key: 'inplay' };
+                     phase: 'inplay', singleton_key: 'inplay', calculated_at };
 
   // P0-2 fix: upsert on singleton_key — one authoritative row per phase.
   const { error: insErr } = await supabase
