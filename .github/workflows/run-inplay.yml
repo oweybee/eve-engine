@@ -10,7 +10,10 @@ name: Run EVE In-Play
 # live windows). The code is cadence-agnostic — only this trigger changes.
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    # Offset from engine.yml's '*/5' (fires at :02,:07,… not :00,:05,…). Sharing
+    # the exact same minute as another '*/5' workflow can get this one
+    # deprioritised by GitHub's scheduler; the offset also de-conflicts runners.
+    - cron: '2-59/5 * * * *'
   workflow_dispatch:
 
 # Don't pile up overlapping in-play runs.
