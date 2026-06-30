@@ -98,28 +98,43 @@ async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
  * most recent row — this is the JavaScript equivalent of DISTINCT ON.
  * 48 hours is sufficient because ingestOdds runs at least hourly.
  *
+ * Paged past PostgREST's 1000-row response cap: a single response would
+ * otherwise return only the 1000 most-recent rows globally, silently dropping
+ * the latest odds for matches/books whose newest row sits beyond that — so
+ * their charts would miss the current price point. id breaks fetched_at ties
+ * so paging is stable (no repeated/skipped rows).
+ *
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string[]} matchIds
  * @param {string}   since48hIso
  * @returns {Promise<Map<string, Map<string, object>>>}
  *   Outer key: matchId.  Inner key: bookmaker.  Value: odds row.
  */
+const ODDS_PAGE_SIZE = 1000;
 async function prefetchLatestOdds(supabase, matchIds, since48hIso) {
-  const { data, error } = await supabase
-    .from('odds')
-    .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds)
-    .eq('market', 'h2h')
-    .gte('fetched_at', since48hIso)
-    .order('fetched_at', { ascending: false });
-  if (error) throw new Error(`prefetchLatestOdds: ${error.message}`);
+  if (!matchIds?.length) return new Map();
 
   const map = new Map();
-  for (const row of data ?? []) {
-    if (!map.has(row.match_id)) map.set(row.match_id, new Map());
-    const byBook = map.get(row.match_id);
-    // First occurrence = latest (DESC order). Never overwrite.
-    if (!byBook.has(row.bookmaker)) byBook.set(row.bookmaker, row);
+  for (let from = 0; ; from += ODDS_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('odds')
+      .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
+      .in('match_id', matchIds)
+      .eq('market', 'h2h')
+      .gte('fetched_at', since48hIso)
+      .order('fetched_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(from, from + ODDS_PAGE_SIZE - 1);
+    if (error) throw new Error(`prefetchLatestOdds: ${error.message}`);
+
+    const page = data ?? [];
+    for (const row of page) {
+      if (!map.has(row.match_id)) map.set(row.match_id, new Map());
+      const byBook = map.get(row.match_id);
+      // First occurrence = latest (DESC order). Never overwrite.
+      if (!byBook.has(row.bookmaker)) byBook.set(row.bookmaker, row);
+    }
+    if (page.length < ODDS_PAGE_SIZE) break;
   }
   return map;
 }
