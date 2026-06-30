@@ -13,7 +13,7 @@
  *   - EV_THRESHOLD default lowered to 0.005 (0.5%) to surface marginal value
  */
 
-const { getClient } = require('./lib/supabaseClient');
+const { getClient, fetchOddsForMatches } = require('./lib/supabaseClient');
 const sm            = require('./lib/secondaryMarkets');
 
 // Config
@@ -77,12 +77,12 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
 
   const matchIds = matchData.map(m => m.id);
 
-  const { data: oddsData, error: oddsError } = await supabase
-    .from('odds')
-    .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds);
-
-  if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
+  // Paged fetch — a plain .in() caps at PostgREST's 1000-row limit, which
+  // silently drops matches (and secondary markets) once upcoming odds exceed it.
+  const oddsData = await fetchOddsForMatches(
+    supabase, matchIds,
+    'match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at',
+  );
 
   const oddsByMatch = {};
   for (const o of (oddsData ?? [])) {

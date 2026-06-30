@@ -30,7 +30,7 @@
  * MARKET_CONSENSUS rows.
  */
 
-const { getClient } = require('./lib/supabaseClient');
+const { getClient, fetchOddsForMatches } = require('./lib/supabaseClient');
 
 const MIN_BOOKMAKERS        = parseInt(process.env.MIN_BOOKMAKERS        || '2',  10);
 const COMPUTE_CONCURRENCY   = parseInt(process.env.COMPUTE_CONCURRENCY   || '5',  10);
@@ -59,22 +59,23 @@ async function fetchMatchesForApiComputation(supabase) {
   const matchIds    = matchData.map(m => m.id);
   const externalIds = matchData.map(m => m.external_id).filter(Boolean);
 
-  const [oddsResult, predResult] = await Promise.all([
-    supabase
-      .from('odds')
-      .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', matchIds),
+  // Paged odds fetch — a plain .in() caps at PostgREST's 1000-row limit, which
+  // silently drops matches once upcoming odds exceed it (stale predictions).
+  const [oddsData, predResult] = await Promise.all([
+    fetchOddsForMatches(
+      supabase, matchIds,
+      'match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at',
+    ),
     supabase
       .from('match_predictions')
       .select('fixture_id, pct_home, pct_draw, pct_away, advice, winner_team')
       .in('fixture_id', externalIds),
   ]);
 
-  if (oddsResult.error) throw new Error(`fetchMatchesForApiComputation[odds]: ${oddsResult.error.message}`);
   if (predResult.error) throw new Error(`fetchMatchesForApiComputation[preds]: ${predResult.error.message}`);
 
   const oddsByMatch = {};
-  for (const o of (oddsResult.data ?? [])) {
+  for (const o of (oddsData ?? [])) {
     if (!oddsByMatch[o.match_id]) oddsByMatch[o.match_id] = [];
     oddsByMatch[o.match_id].push(o);
   }
