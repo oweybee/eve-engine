@@ -27,6 +27,67 @@ Each run, on an `ubuntu-latest` runner with Node.js 22:
 4. Runs `node computeValues.js` — computes edges + records value signals
 5. Runs `node fetchResults.js` — settles results + refreshes performance summary
 
+A **second** workflow, `.github/workflows/run-inplay.yml`, runs the in-play
+pipeline on a tighter cadence (`*/5`). See "In-play signals" below.
+
+---
+
+## In-play signals
+
+The pre-match engine and the in-play engine are **separate pipelines that share
+one codebase**, kept apart so live picks never distort the headline CLV.
+
+**Why they must be separate.** The pre-match headline metric is CLV
+(`ln(detected/closing)`), where "closing" is the price at kickoff. *In-play,
+the line has already closed* — CLV is undefined. So in-play signals are tagged
+`value_signals.phase='inplay'` (migration `030`) and measured by their own
+`performance_summary` row (`singleton_key='inplay'`): realised yield /
+strike-rate / ROI, **no CLV**. The pre-match row (`singleton_key='current'`)
+aggregates only `phase='prematch'`, so its CLV is untouched. `computeValues.js`
+now also refuses to emit a signal for any match past kickoff even if its status
+row still says `scheduled`, closing the leak at the source.
+
+**Two value mechanisms (both-in-stages):**
+
+1. **Book-lag** (`MARKET_CONSENSUS`, on now) — the same Kaunitz consensus engine
+   run on live odds. Fires only when one book trails the live crowd. With a
+   single-source live feed (see below) it has no crowd to compare against and
+   cleanly no-ops; it lights up automatically if a multi-book live source is
+   added. Pure plumbing, no false signals in the meantime.
+2. **Model-vs-market** (`SUPERMODEL_HALFTIME`, gated `INPLAY_MODEL_ENABLED`) —
+   the real differentiator. Holds an **independent** live probability (the
+   half-time supermodel, `models/supermodel_halftime_v2.onnx`) against the
+   drifted live price: `edge = p_model × live_odds − 1`. This is what can flag
+   *"the market overreacted to the goal — the favourite is still value"*. It is
+   **off by default**: it needs a live feature vector at training parity (ELO +
+   rolling form + H2H + league OHE + half-time state). `buildHalftimeFeatures()`
+   in `computeInplayValues.js` returns `null` until that parity feature service
+   exists, so the stage is a safe no-op even when the flag is on — it can never
+   emit signals from half-built features.
+
+**In-play run order** (`run-inplay.yml`):
+
+1. `node ingestLiveOdds.js` — `/fixtures?live=all` updates `matches`
+   (`status='live'`, current `goals_home/away`, `minute`); `/odds/live` writes
+   the current 1X2 price under the synthetic bookmaker `apifootball_live`.
+2. `node computeInplayValues.js` — Stage 1 then Stage 2, writing `phase='inplay'`.
+3. `node postToX.js` — routes `phase='inplay'` to the dedicated Telegram
+   channel (`TELEGRAM_INPLAY_CHAT_ID`). If that channel is unset, in-play
+   signals are recorded but **not** posted — they never leak into the main feed.
+
+> **Data-source caveat.** API-Football's `/odds/live` is a single aggregated
+> feed, not a crowd of books — that's enough for model-vs-market (needs one
+> price) but not for book-lag consensus.
+>
+> **Cadence caveat.** In-play edges close in seconds-to-minutes; GitHub Actions'
+> 5-minute floor is best-effort. If live value proves out, move
+> `ingestLiveOdds`/`computeInplayValues` to a short-loop worker — the code is
+> cadence-agnostic, only the trigger changes.
+
+In-play-specific env vars: `INPLAY_MODEL_ENABLED` (default `false`),
+`INPLAY_EV_THRESHOLD` (default `0.02`), `LIVE_WINDOW_MIN` (default `160`),
+`TELEGRAM_INPLAY_CHAT_ID`.
+
 ---
 
 ## Required secrets

@@ -48,7 +48,11 @@ const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD || '0.005');
 // Skip re-signal if same odds seen within this window (avoid spam)
 const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
-async function fetchMatchesForComputation(supabase) {
+async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
+  // Pre-match engine: scheduled only. In-play matches are handled by
+  // computeInplayValues.js so their signals are tagged phase='inplay' and kept
+  // out of the CLV-tracked pre-match performance summary. (Was previously
+  // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -57,7 +61,7 @@ async function fetchMatchesForComputation(supabase) {
       away_team:teams!matches_away_team_id_fkey ( id, name ),
       league:leagues ( id, name )
     `)
-    .in('status', ['scheduled', 'live'])
+    .in('status', statuses)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
@@ -288,7 +292,7 @@ async function upsertComputedValues(supabase, rows) {
   if (error) throw new Error(`upsertComputedValues: ${error.message}`);
 }
 
-async function insertValueSignals(supabase, rows) {
+async function insertValueSignals(supabase, rows, phase = 'prematch') {
   const candidates = [];
 
   for (const row of rows) {
@@ -304,6 +308,7 @@ async function insertValueSignals(supabase, rows) {
         bookmaker:          row[`best_${outcome}_book`],
         kickoff_at:         row._kickoff_at ?? null,
         model_architecture: 'MARKET_CONSENSUS',
+        phase,
         _edge:              edge,
         _odds:              row[`best_${outcome}_odds`],
       });
@@ -395,7 +400,7 @@ async function fetchStatsLookups(supabase, matches) {
  * against existing (match, market, outcome, model) keys so we never violate the
  * dedup unique index — first signal per key wins, matching the 1X2 path.
  */
-async function insertSecondarySignals(supabase, candidates) {
+async function insertSecondarySignals(supabase, candidates, phase = 'prematch') {
   if (!candidates.length) return 0;
   const matchIds = [...new Set(candidates.map(c => c.match_id))];
 
@@ -415,6 +420,7 @@ async function insertSecondarySignals(supabase, candidates) {
     const { model_prob, ...rest } = c;   // model_prob is internal, not a column
     toInsert.push({
       ...rest,
+      phase,
       detected_mes:    null,             // frontend computes risk-adjusted MES
       signal_category: c.detected_edge >= 0.05 ? 'Prime' : 'Standard',
     });
@@ -471,9 +477,21 @@ async function main() {
     ` dedup_window=${SIGNAL_DEDUP_MINUTES}min pool=${COMPUTE_CONCURRENCY}`
   );
 
-  const matches = await fetchMatchesForComputation(supabase);
+  const allScheduled = await fetchMatchesForComputation(supabase);
+  // Belt-and-braces CLV guard: a match whose kickoff has passed is in-play even
+  // if its status row still says 'scheduled' (the live-status updater can lag).
+  // Excluding it here guarantees no edge detected after kickoff is ever stamped
+  // phase='prematch'. computeInplayValues.js picks these up instead.
+  const now = Date.now();
+  const matches = allScheduled.filter(m =>
+    !m.kickoff_at || new Date(m.kickoff_at).getTime() > now
+  );
+  const droppedLive = allScheduled.length - matches.length;
+  if (droppedLive > 0) {
+    console.log(`[engine] skipped ${droppedLive} match(es) already past kickoff (handled by in-play engine)`);
+  }
   if (!matches.length) {
-    console.log('[engine] no matches with odds — done');
+    console.log('[engine] no scheduled matches with odds — done');
     return;
   }
 
@@ -532,7 +550,24 @@ async function main() {
   await updateBetOfDay(supabase, computedRows);
 }
 
-main().catch(err => {
-  console.error('[engine] fatal:', err.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error('[engine] fatal:', err.message);
+    process.exit(1);
+  });
+}
+
+// Exported so computeInplayValues.js can reuse the consensus core and the
+// signal-insert helpers (with phase='inplay') instead of duplicating them.
+module.exports = {
+  fetchMatchesForComputation,
+  computeConsensus,
+  computeMatch,
+  upsertComputedValues,
+  insertValueSignals,
+  insertSecondarySignals,
+  fetchStatsLookups,
+  updateBetOfDay,
+  withPool,
+  formatBookName,
+};
