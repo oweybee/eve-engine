@@ -159,8 +159,12 @@ jobs:
       # ELO ladder feeds the in-play half-time supermodel (computeInplayValues
       # Stage 2). Self-gates on ELO_REFRESH_HOURS so it only fully recomputes a
       # few times a day, not every 5-minute tick.
+      # DB-only steps — independent of the ingest loop. Run even if an earlier
+      # step failed (a rate-limited ingest loop must not skip baseline capture,
+      # or inplay_baseline never populates and the win-prob stage has no anchor).
       - name: Rebuild ELO ladder
         id: elo
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: node computeElo.js
 
@@ -168,6 +172,7 @@ jobs:
       # for the in-play win-probability engine (computeInplayValues Stage 3).
       - name: Capture in-play baselines
         id: baseline
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: node captureBaseline.js
 
