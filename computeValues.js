@@ -341,6 +341,8 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
   const matchIds    = [...new Set(candidates.map(c => c.match_id))];
   const dedupCutoff = new Date(Date.now() - SIGNAL_DEDUP_MINUTES * 60 * 1000).toISOString();
 
+  // Recent-window prices: used only to categorise a signal as PriceMove vs
+  // Prime/Standard and to suppress same-price spam within the window.
   const { data: recent, error: selErr } = await supabase
     .from('value_signals')
     .select('match_id, outcome, detected_odds')
@@ -353,8 +355,31 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
     recentOdds.set(`${r.match_id}|${r.outcome}`, parseFloat(r.detected_odds));
   }
 
+  // All-time prices for these matches: value_signals_selection_price_unique
+  // forbids ever re-inserting the same (match, market, outcome, model, price)
+  // regardless of how long ago it was first recorded — there is no time
+  // dimension in that index. Odds routinely revert to a previously-seen price
+  // after the SIGNAL_DEDUP_MINUTES window closes, so the recent-only check
+  // above let a stale duplicate reach `.insert()` and crash the whole compute
+  // cycle with "duplicate key value violates unique constraint
+  // value_signals_selection_price_unique". Mirrors the all-time pre-filter
+  // insertSecondarySignals already uses for the same reason.
+  const { data: everSeen, error: everErr } = await supabase
+    .from('value_signals')
+    .select('match_id, outcome, detected_odds, market, model_architecture')
+    .in('match_id', matchIds);
+  if (everErr) throw new Error(`insertValueSignals(everSeen): ${everErr.message}`);
+
+  const seenPrices = new Set();
+  for (const r of (everSeen ?? [])) {
+    if ((r.market ?? 'h2h') !== 'h2h') continue;
+    if ((r.model_architecture ?? 'MARKET_CONSENSUS') !== 'MARKET_CONSENSUS') continue;
+    seenPrices.add(`${r.match_id}|${r.outcome}|${parseFloat(r.detected_odds).toFixed(3)}`);
+  }
+
   const toInsert = [];
   let skippedSamePrice = 0;
+  let skippedDuplicateKey = 0;
 
   for (const c of candidates) {
     const key      = `${c.match_id}|${c.outcome}`;
@@ -365,6 +390,13 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
       skippedSamePrice++;
       continue;
     }
+
+    const priceKey = `${c.match_id}|${c.outcome}|${curOdds.toFixed(3)}`;
+    if (seenPrices.has(priceKey)) {
+      skippedDuplicateKey++;
+      continue;
+    }
+    seenPrices.add(priceKey); // guard duplicate prices within this same batch too
 
     let signal_category;
     if (lastOdds != null) {
@@ -381,7 +413,8 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
 
   console.log(
     `[value_signals] candidates=${candidates.length}` +
-    ` skipped_same_price=${skippedSamePrice} to_insert=${toInsert.length}`
+    ` skipped_same_price=${skippedSamePrice} skipped_duplicate_key=${skippedDuplicateKey}` +
+    ` to_insert=${toInsert.length}`
   );
 
   if (!toInsert.length) return 0;
