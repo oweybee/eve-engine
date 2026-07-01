@@ -1,0 +1,16 @@
+[Unit]
+Description=MaxEdge in-play worker (live signal loop)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/eve-engine
+ExecStart=/usr/bin/env bash /opt/eve-engine/scripts/inplay-vps/loop.sh
+Restart=always
+RestartSec=10
+# Never give up restarting — this is a long-lived loop.
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
