@@ -1,0 +1,32 @@
+name: Backtest In-Play Win-Prob
+
+# Phase 3 validation for the in-play win-probability engine. Runs on demand:
+# pulls closing odds + half-time scores + FT results from football-data.co.uk
+# and prints pre-match + in-play (half-time-state) calibration to the log.
+# No secrets, no DB — read-only analysis. Results appear in the run's output.
+on:
+  workflow_dispatch:
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install --quiet pandas requests
+
+      - name: Verify maths port
+        run: python3 ensemble/backtest_winprob.py --selftest
+
+      - name: Run backtest
+        run: python3 ensemble/backtest_winprob.py
