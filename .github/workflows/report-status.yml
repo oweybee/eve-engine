@@ -1,13 +1,16 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# EVE — Daily API Usage + Polling Frequency Report
+# EVE — Daily Recap (public) + Ops Report (private)
 #
 # Runs automatically at midnight UTC (after the day's activity concludes) and
-# on demand. Queries today's engine_plan from Supabase and sends a Telegram
-# message showing:
-#   • Which fixtures were polled for odds
-#   • Polling interval and runs completed / planned
-#   • Exact API request counts per script vs 75,000 daily quota
-#   • Projected end-of-day usage with quota risk warnings
+# on demand. Reads from Supabase and sends two separate Telegram messages:
+#
+#   • PUBLIC RECAP → TELEGRAM_CHAT_ID (subscriber channel): a friendly summary
+#     of the day's shared signals plus a link to the site. NO business detail.
+#   • OPS REPORT   → TELEGRAM_ADMIN_CHAT_ID (private, owner-only) if configured:
+#     fixtures polled, polling cadence, API request counts vs quota, projections.
+#     If that secret is unset, the ops report stays in the (private) job logs.
+#
+# API quota / polling internals are deliberately kept OUT of the public channel.
 #
 # The report NEVER makes API-Football calls — it is entirely read-only against
 # Supabase and cannot burn quota.
@@ -38,6 +41,9 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
+      # Private owner-only chat for the full ops report (fixtures, quota,
+      # projections). Leave unset to keep the ops report to the job logs only.
+      TELEGRAM_ADMIN_CHAT_ID:    ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
       # Use dispatch override or the API-Football Ultra plan default
       DAILY_QUOTA:               ${{ inputs.daily_quota || '75000' }}
 

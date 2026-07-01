@@ -1,15 +1,21 @@
 /**
- * reportStatus.js — daily API usage + polling frequency report
+ * reportStatus.js — daily recap (public) + ops report (private)
  *
- * Queries today's engine_plan from Supabase and builds a human-readable
- * status report showing:
- *   • Which fixtures are being polled for odds today
- *   • Current polling interval and run progress
- *   • Exact API requests used vs 75,000 daily quota
- *   • Per-script breakdown (planDay / ingestOdds / fetchMatchDetails)
- *   • Next scheduled run
+ * Two distinct outputs so business internals never reach subscribers:
  *
- * Sends the report to Telegram (same bot as signal alerts).
+ *   1. PUBLIC RECAP  → TELEGRAM_CHAT_ID (the subscriber channel)
+ *      A friendly summary of the day's activity — how many value signals were
+ *      shared, a quick tier breakdown, the day's top edge — plus a link to the
+ *      site. Contains NO operational or business detail.
+ *
+ *   2. OPS REPORT    → TELEGRAM_ADMIN_CHAT_ID (private, owner-only) if set,
+ *      otherwise printed to stdout only (GitHub Actions logs are private).
+ *      The full internal view: fixtures polled, polling cadence, exact API
+ *      request counts vs the daily quota, and projected end-of-day usage.
+ *
+ * The API quota / polling detail is deliberately kept OUT of the public
+ * channel — subscribers should never see how much API budget is being burned.
+ *
  * Safe to run any time — read-only against Supabase.
  *
  * Required env vars:
@@ -17,7 +23,9 @@
  *   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
  *
  * Optional env vars:
- *   DAILY_QUOTA  — total daily limit for the API plan (default: 75000)
+ *   TELEGRAM_ADMIN_CHAT_ID — private chat for the full ops report
+ *   DAILY_QUOTA            — total daily limit for the API plan (default: 75000)
+ *   SITE_URL               — link shared in the public recap (default: https://maxedge.live/feed)
  *
  * Usage:
  *   node reportStatus.js
@@ -36,7 +44,9 @@ const SUPABASE_URL   = process.env.SUPABASE_URL;
 const SUPABASE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const BOT_TOKEN      = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID        = process.env.TELEGRAM_CHAT_ID;
+const ADMIN_CHAT_ID  = process.env.TELEGRAM_ADMIN_CHAT_ID || null;
 const DAILY_QUOTA    = parseInt(process.env.DAILY_QUOTA ?? '75000', 10);
+const SITE_URL       = process.env.SITE_URL || 'https://maxedge.live/feed';
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -51,12 +61,14 @@ function getSupabase() {
 // Telegram
 // ---------------------------------------------------------------------------
 
-function sendTelegram(text) {
-  if (!BOT_TOKEN || !CHAT_ID) {
-    console.log('[report] Telegram not configured — printing to stdout only');
+function sendTelegram(chatId, text) {
+  if (!BOT_TOKEN || !chatId) {
+    console.log('[report] Telegram target not configured — printing to stdout only');
     return Promise.resolve();
   }
-  const body = JSON.stringify({ chat_id: CHAT_ID, text, parse_mode: 'HTML' });
+  const body = JSON.stringify({
+    chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: false,
+  });
   return new Promise((resolve, reject) => {
     const req = https.request({
       method:   'POST',
@@ -77,6 +89,10 @@ function sendTelegram(text) {
 // ---------------------------------------------------------------------------
 // Data fetchers
 // ---------------------------------------------------------------------------
+
+function startOfTodayISO() {
+  return new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z';
+}
 
 async function loadTodayPlan(supabase) {
   const today = new Date().toISOString().slice(0, 10);
@@ -101,6 +117,39 @@ async function loadFixtureDetails(supabase, fixtureIds) {
     .in('external_id', fixtureIds.map(String));
   if (error) throw new Error(`loadFixtureDetails: ${error.message}`);
   return data ?? [];
+}
+
+/**
+ * Value signals actually published to the subscriber channel today. We read
+ * posted_signals (channel='telegram', with a real external_msg_id so DRY_RUN
+ * and no-channel skips are excluded) and join through to value_signals for the
+ * tier / edge / teams. This reflects exactly what subscribers saw.
+ */
+async function loadTodaysPublishedSignals(supabase) {
+  const since = startOfTodayISO();
+  const { data: posts, error: postsErr } = await supabase
+    .from('posted_signals')
+    .select('signal_id')
+    .eq('channel', 'telegram')
+    .gte('posted_at', since)
+    .not('external_msg_id', 'is', null);
+  if (postsErr) throw new Error(`loadTodaysPublishedSignals(posts): ${postsErr.message}`);
+
+  const ids = [...new Set((posts ?? []).map(p => p.signal_id))];
+  if (!ids.length) return [];
+
+  const { data: sigs, error: sigsErr } = await supabase
+    .from('value_signals')
+    .select(`
+      id, outcome, detected_odds, detected_edge, signal_category, phase,
+      match:matches (
+        home_team:teams!matches_home_team_id_fkey ( name ),
+        away_team:teams!matches_away_team_id_fkey ( name )
+      )
+    `)
+    .in('id', ids);
+  if (sigsErr) throw new Error(`loadTodaysPublishedSignals(signals): ${sigsErr.message}`);
+  return sigs ?? [];
 }
 
 // ---------------------------------------------------------------------------
@@ -130,16 +179,70 @@ function pct(used, total) {
   return ((used / total) * 100).toFixed(2) + '%';
 }
 
+// Signal tier classification — mirrors postToX.js precedence.
+function tierOf(signal) {
+  if (signal.phase === 'inplay') return 'inplay';
+  if (signal.signal_category === 'PriceMove') return 'oddsmove';
+  if (Number(signal.detected_edge) >= 0.08) return 'ruby';
+  return 'value';
+}
+
 // ---------------------------------------------------------------------------
-// Build report
+// Public recap — safe for the subscriber channel (no business internals)
 // ---------------------------------------------------------------------------
 
-async function buildReport(supabase) {
+async function buildPublicRecap(supabase) {
+  const now     = new Date();
+  const signals = await loadTodaysPublishedSignals(supabase);
+
+  const lines = [];
+  lines.push(`🏆 <b>MaxEdge — Daily Recap</b>`);
+  lines.push(`📅 ${fmtDate(now.toISOString())}\n`);
+
+  if (!signals.length) {
+    lines.push(`Quiet one today — nothing cleared our value threshold, so no picks went out.`);
+    lines.push(`We only post when the edge is genuinely there.\n`);
+    lines.push(`📲 Full history, results & live feed:`);
+    lines.push(`<a href="${SITE_URL}">${SITE_URL}</a>`);
+    return lines.join('\n');
+  }
+
+  const counts = { ruby: 0, value: 0, oddsmove: 0, inplay: 0 };
+  let best = null;
+  for (const s of signals) {
+    counts[tierOf(s)] += 1;
+    if (best === null || Number(s.detected_edge) > Number(best.detected_edge)) best = s;
+  }
+
+  lines.push(`<b>${signals.length}</b> value signal${signals.length === 1 ? '' : 's'} shared with the channel today:`);
+  if (counts.ruby)     lines.push(`  ◆ Ruby: ${counts.ruby}`);
+  if (counts.value)    lines.push(`  ⚡ Value: ${counts.value}`);
+  if (counts.oddsmove) lines.push(`  ↗️ Odds movement: ${counts.oddsmove}`);
+  if (counts.inplay)   lines.push(`  🔴 In-play: ${counts.inplay}`);
+
+  if (best) {
+    const home = best.match?.home_team?.name ?? 'Home';
+    const away = best.match?.away_team?.name ?? 'Away';
+    const edge = (Number(best.detected_edge) * 100).toFixed(1);
+    lines.push(`\n📈 Top edge of the day: <b>+${edge}%</b> — ${home} vs ${away}`);
+  }
+
+  lines.push(`\n📲 Full history, results & live feed:`);
+  lines.push(`<a href="${SITE_URL}">${SITE_URL}</a>`);
+
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Ops report — PRIVATE (owner only). Contains API quota / polling internals.
+// ---------------------------------------------------------------------------
+
+async function buildOpsReport(supabase) {
   const now  = new Date();
   const plan = await loadTodayPlan(supabase);
 
   const lines = [];
-  lines.push(`📊 <b>EVE — Daily Status Report</b>`);
+  lines.push(`📊 <b>EVE — Daily Ops Report</b> (private)`);
   lines.push(`📅 ${fmtDate(now.toISOString())}  •  ${fmtTime(now.toISOString())}\n`);
 
   if (!plan) {
@@ -240,21 +343,32 @@ async function main() {
   console.log(`[report] ${new Date().toISOString()}`);
   const supabase = getSupabase();
 
-  let report;
+  // ── Public recap → subscriber channel ──────────────────────────────────────
   try {
-    report = await buildReport(supabase);
+    const recap = await buildPublicRecap(supabase);
+    console.log('\n--- PUBLIC RECAP ---\n' + recap.replace(/<[^>]+>/g, '') + '\n');
+    if (CHAT_ID) {
+      await sendTelegram(CHAT_ID, recap);
+      console.log('[report] public recap sent to subscriber channel');
+    } else {
+      console.log('[report] TELEGRAM_CHAT_ID not set — recap not sent');
+    }
   } catch (err) {
-    console.error('[report] failed to build report:', err.message);
-    process.exit(1);
+    console.error('[report] public recap failed:', err.message);
   }
 
-  console.log('\n' + report.replace(/<[^>]+>/g, '') + '\n');
-
+  // ── Ops report → private admin chat (never the public channel) ─────────────
   try {
-    await sendTelegram(report);
-    console.log('[report] sent to Telegram');
+    const ops = await buildOpsReport(supabase);
+    console.log('\n--- OPS REPORT (private) ---\n' + ops.replace(/<[^>]+>/g, '') + '\n');
+    if (ADMIN_CHAT_ID) {
+      await sendTelegram(ADMIN_CHAT_ID, ops);
+      console.log('[report] ops report sent to admin chat');
+    } else {
+      console.log('[report] TELEGRAM_ADMIN_CHAT_ID not set — ops report kept to logs only');
+    }
   } catch (err) {
-    console.warn('[report] Telegram send failed:', err.message);
+    console.error('[report] ops report failed:', err.message);
   }
 
   console.log('[report] done');
