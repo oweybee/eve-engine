@@ -387,7 +387,29 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
   if (!toInsert.length) return 0;
 
   const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
-  if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+  if (insErr) {
+    // 23505 = unique_violation. value_signals_selection_price_unique has no time
+    // bound, but the dedup check above only looks back SIGNAL_DEDUP_MINUTES — a
+    // price that last changed longer ago than that re-triggers this on every
+    // cycle. Retry row-by-row so only the stale duplicates are dropped, not the
+    // whole batch (which would silently swallow genuinely new signals too).
+    if (insErr.code !== '23505') {
+      throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+    }
+    const inserted = [];
+    let skipped = 0;
+    for (const row of toInsert) {
+      const { error: rowErr } = await supabase.from('value_signals').insert([row]);
+      if (rowErr) {
+        if (rowErr.code === '23505') { skipped++; continue; }
+        throw new Error(`insertValueSignals(insert): ${rowErr.message}`);
+      }
+      inserted.push(row);
+    }
+    console.log(`[value_signals] batch had stale-price duplicates — inserted=${inserted.length} skipped=${skipped}`);
+    toInsert.length = 0;
+    toInsert.push(...inserted);
+  }
 
   const pm = toInsert.filter(r => r.signal_category === 'PriceMove').length;
   const pr = toInsert.filter(r => r.signal_category === 'Prime').length;
