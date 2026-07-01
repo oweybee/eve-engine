@@ -135,7 +135,8 @@ class Acc:
         self.n = 0
         self.brier = 0.0
         self.ll = 0.0
-        self.rel = [[0.0, 0] for _ in range(10)]  # home-prob reliability bins
+        # Home-win reliability bins: [sum(pred_home), total_count, home_win_count]
+        self.rel = [[0.0, 0, 0] for _ in range(10)]
 
     def add(self, probs, result):
         self.n += 1
@@ -143,7 +144,8 @@ class Acc:
         self.ll += logloss(probs, result)
         b = min(9, int(probs[0] * 10))
         self.rel[b][0] += probs[0]
-        self.rel[b][1] += 1 if result == "H" else 0
+        self.rel[b][1] += 1
+        self.rel[b][2] += 1 if result == "H" else 0
 
     def report(self, label):
         if not self.n:
@@ -151,12 +153,12 @@ class Acc:
             return
         print(f"  {label}: n={self.n}  Brier={self.brier / self.n:.4f}  "
               f"LogLoss={self.ll / self.n:.4f}")
-        print(f"    reliability (home-win prob → actual rate):")
+        print(f"    reliability (mean predicted home-win prob → actual home rate):")
         for b in range(10):
-            pred_sum, cnt = self.rel[b]
+            pred_sum, cnt, hw = self.rel[b]
             if cnt:
                 print(f"      [{b/10:.1f},{(b+1)/10:.1f}) pred~{pred_sum/cnt:.2f} "
-                      f"actual={self.rel[b][1]/cnt:.2f} n={cnt}")
+                      f"actual={hw/cnt:.2f} n={cnt}")
 
 
 # ── Self-test (stdlib only — verifies the port matches the JS unit tests) ─────
