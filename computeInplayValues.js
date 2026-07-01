@@ -33,6 +33,7 @@ const { getClient } = require('./lib/supabaseClient');
 const inplay         = require('./lib/inplay');
 const sm             = require('./lib/secondaryMarkets');
 const { buildHalftimeVector } = require('./lib/halftimeFeatures');
+const { liveWinProb } = require('./lib/inplayWinProb');
 const {
   fetchMatchesForComputation,
   computeMatch,
@@ -49,6 +50,14 @@ const INPLAY_EV_THRESHOLD  = parseFloat(process.env.INPLAY_EV_THRESHOLD || proce
 // edges (mirrors MAX_PLAUSIBLE_EDGE in computeApiValues.js). An in-play model
 // "edge" above this is almost always a calibration artefact, not real value.
 const INPLAY_MAX_EDGE = parseFloat(process.env.INPLAY_MAX_EDGE || '0.20');
+
+// Win-probability stage (Phase 2) — the competition-agnostic engine that serves
+// internationals. Independent flag so it can roll out separately from the
+// (top-5-league) supermodel stage.
+const INPLAY_WINPROB_ENABLED = (process.env.INPLAY_WINPROB_ENABLED || '').toLowerCase() === 'true';
+// Skip the chaotic closing minutes: thin liquidity + stoppage-time noise, and
+// the model's constant-λ assumption is weakest there.
+const INPLAY_WINPROB_MINUTE_CAP = parseInt(process.env.INPLAY_WINPROB_MINUTE_CAP || '85', 10);
 
 const normTeam = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -183,12 +192,84 @@ async function insertModelSignals(supabase, candidates) {
   return candidates.length;
 }
 
+// ── STAGE 3: win-probability (competition-agnostic; serves internationals) ────
+
+/**
+ * Build win-prob value candidates for one live match against its frozen
+ * pre-match baseline. Pure (no I/O) so it is unit-tested. Holds
+ * liveWinProb(λ, current score, minute) against the best live price.
+ *
+ * @param {object} match     - live match with .odds, goals_home/away, minute
+ * @param {object} baseline  - inplay_baseline row { lambda_home, lambda_away }
+ * @param {object} opts      - { evThreshold, maxEdge, minuteCap }
+ * @returns {Array<object>} value_signals candidates (phase='inplay')
+ */
+function winProbCandidates(match, baseline, opts = {}) {
+  const evThreshold = opts.evThreshold ?? INPLAY_EV_THRESHOLD;
+  const maxEdge     = opts.maxEdge ?? INPLAY_MAX_EDGE;
+  const minuteCap   = opts.minuteCap ?? INPLAY_WINPROB_MINUTE_CAP;
+
+  if (!baseline) return [];
+  const lambdaHome = Number(baseline.lambda_home);
+  const lambdaAway = Number(baseline.lambda_away);
+  if (!Number.isFinite(lambdaHome) || !Number.isFinite(lambdaAway)) return [];
+
+  const minute = Number(match.minute);
+  if (!Number.isFinite(minute)) return [];      // no live clock yet — skip
+  if (minute >= minuteCap) return [];           // chaotic closing minutes — skip
+
+  const probs = liveWinProb({
+    lambdaHome, lambdaAway,
+    homeGoals: match.goals_home, awayGoals: match.goals_away, minute,
+  });
+
+  const best = inplay.bestH2hOdds(match.odds);
+  const candidates = [];
+  for (const outcome of ['home', 'draw', 'away']) {
+    const live = best[outcome];
+    if (!live) continue;
+    const edge = inplay.inplayEdge(probs[outcome], live.odds);
+    if (edge == null || edge < evThreshold || edge > maxEdge) continue;
+    candidates.push({
+      match_id:           match.id,
+      outcome,
+      detected_odds:      live.odds,
+      detected_edge:      edge,
+      detected_mes:       null,
+      bookmaker:          live.book ?? null,
+      kickoff_at:         match.kickoff_at ?? null,
+      model_architecture: 'INPLAY_DIXON_COLES',
+      signal_category:    'InPlay',
+      phase:              'inplay',
+    });
+  }
+  return candidates;
+}
+
+async function winProbStage(supabase, matches) {
+  const ids = matches.map(m => m.id);
+  const { data, error } = await supabase
+    .from('inplay_baseline')
+    .select('match_id, lambda_home, lambda_away')
+    .in('match_id', ids);
+  if (error) { console.warn('[inplay] baseline read failed:', error.message); return 0; }
+
+  const baseByMatch = new Map((data ?? []).map(r => [r.match_id, r]));
+  const candidates = [];
+  for (const m of matches) {
+    candidates.push(...winProbCandidates(m, baseByMatch.get(m.id)));
+  }
+  const withBaseline = matches.filter(m => baseByMatch.has(m.id)).length;
+  console.log(`[inplay] win-prob: ${withBaseline}/${matches.length} live match(es) have a baseline; ${candidates.length} candidate(s)`);
+  return insertModelSignals(supabase, candidates);
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
   const supabase = getClient();
-  console.log('[inplay] computeInplayValues — book-lag consensus + model-vs-market');
-  console.log(`[inplay] model_stage=${INPLAY_MODEL_ENABLED ? 'enabled' : 'disabled'} ev_threshold=${INPLAY_EV_THRESHOLD}`);
+  console.log('[inplay] computeInplayValues — book-lag + model-vs-market + win-prob');
+  console.log(`[inplay] model_stage=${INPLAY_MODEL_ENABLED ? 'on' : 'off'} winprob_stage=${INPLAY_WINPROB_ENABLED ? 'on' : 'off'} ev_threshold=${INPLAY_EV_THRESHOLD}`);
 
   const matches = await fetchLiveMatches(supabase);
   if (!matches.length) {
@@ -247,6 +328,16 @@ async function main() {
     }
   }
 
+  // STAGE 3 — win-probability vs pre-match baseline (gated; internationals)
+  if (INPLAY_WINPROB_ENABLED) {
+    try {
+      const n = await winProbStage(supabase, matches);
+      console.log(`[inplay] win-prob signals: ${n}`);
+    } catch (err) {
+      console.error('[inplay] win-prob stage failed:', err.message);
+    }
+  }
+
   console.log('[inplay] done');
 }
 
@@ -254,4 +345,4 @@ if (require.main === module) {
   main().catch(err => { console.error('[inplay] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { fetchLiveMatches, modelVsMarket, buildHalftimeFeatures, insertModelSignals };
+module.exports = { fetchLiveMatches, modelVsMarket, buildHalftimeFeatures, insertModelSignals, winProbCandidates, winProbStage };

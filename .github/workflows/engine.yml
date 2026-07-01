@@ -164,6 +164,13 @@ jobs:
         continue-on-error: true
         run: node computeElo.js
 
+      # Freeze pre-match goal expectations (λ) for upcoming matches — the anchor
+      # for the in-play win-probability engine (computeInplayValues Stage 3).
+      - name: Capture in-play baselines
+        id: baseline
+        continue-on-error: true
+        run: node captureBaseline.js
+
       # Daily forward-test ledger for the suggested accumulators (idempotent).
       - name: Record suggested accas
         id: accas
