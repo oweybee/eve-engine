@@ -32,9 +32,10 @@ jobs:
       # exists — see computeInplayValues.js buildHalftimeFeatures(). Flip to
       # 'true' only then; until then it is a safe no-op.
       INPLAY_MODEL_ENABLED:      'false'
-      # Win-probability stage (Phase 2 — internationals + universal). Kept OFF
-      # until the backtest/forward-test (Phases 3-4) validate calibration.
-      INPLAY_WINPROB_ENABLED:    'false'
+      # Win-probability stage (internationals + universal). ENABLED — backtest
+      # validated pre-match ≈ market and in-play @ HT sharper than pre-match.
+      # With TELEGRAM_INPLAY_CHAT_ID unset these are recorded, not posted.
+      INPLAY_WINPROB_ENABLED:    'true'
       INPLAY_EV_THRESHOLD:       '0.02'
       # Telegram — in-play posts route to the dedicated channel. If unset,
       # in-play signals are recorded but NOT posted (never leak to the main feed).
