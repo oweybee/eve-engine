@@ -7,6 +7,7 @@
 
 const assert = require('assert');
 const wp = require('./lib/inplayWinProb');
+const { winProbCandidates } = require('./computeInplayValues');
 
 let passed = 0, failed = 0;
 function test(label, fn) {
@@ -128,6 +129,47 @@ test('consensus → live, probs valid and consistent at KO', () => {
   const atKO = wp.liveWinProbFromConsensus({ pHome: pre.home, pDraw: pre.draw, pAway: pre.away, homeGoals: 0, awayGoals: 0, minute: 0 });
   assert.ok(close(atKO.home + atKO.draw + atKO.away, 1, 1e-9));
   assert.ok(Math.abs(atKO.home - pre.home) < 5e-3, `KO home ${atKO.home} vs ${pre.home}`);
+});
+
+console.log('winProbCandidates (Stage 3 candidate builder)');
+// England-style favourite, 0-1 down at 40' → model home ≈ 0.28. A live home
+// price of 4.0 implies ~0.25, so backing it is +value.
+const baseline = { lambda_home: 2.2, lambda_away: 0.6 };
+const liveMatch = (over = {}) => ({
+  id: 'm1', kickoff_at: '2026-07-01T16:00:00Z', goals_home: 0, goals_away: 1, minute: 40,
+  home_team: { name: 'England' }, away_team: { name: 'Congo DR' },
+  odds: [{ bookmaker: 'x', market: 'h2h', home_odds: 4.0, draw_odds: 3.4, away_odds: 1.9 }],
+  ...over,
+});
+const opts = { evThreshold: 0.02, maxEdge: 0.20, minuteCap: 85 };
+
+test('emits an INPLAY_DIXON_COLES home candidate when the live price beats the model', () => {
+  const c = winProbCandidates(liveMatch(), baseline, opts);
+  const home = c.find(x => x.outcome === 'home');
+  assert.ok(home, 'home candidate present');
+  assert.strictEqual(home.model_architecture, 'INPLAY_DIXON_COLES');
+  assert.strictEqual(home.phase, 'inplay');
+  assert.strictEqual(home.detected_odds, 4.0);
+  assert.ok(home.detected_edge > 0.02 && home.detected_edge <= 0.20);
+});
+test('no baseline → no candidates', () => {
+  assert.strictEqual(winProbCandidates(liveMatch(), null, opts).length, 0);
+});
+test('no live clock (minute null) → no candidates', () => {
+  assert.strictEqual(winProbCandidates(liveMatch({ minute: null }), baseline, opts).length, 0);
+});
+test('past the minute cap → no candidates', () => {
+  assert.strictEqual(winProbCandidates(liveMatch({ minute: 88 }), baseline, opts).length, 0);
+});
+test('short/no-edge price → no candidate for that outcome', () => {
+  // home at 2.0 implies 0.5 >> model 0.28 → negative edge, filtered.
+  const c = winProbCandidates(liveMatch({ odds: [{ bookmaker: 'x', market: 'h2h', home_odds: 2.0, draw_odds: 3.4, away_odds: 1.9 }] }), baseline, opts);
+  assert.ok(!c.find(x => x.outcome === 'home'));
+});
+test('implausibly generous price is capped out (miscalibration guard)', () => {
+  // home at 20.0 → edge ~4.6, above maxEdge → rejected.
+  const c = winProbCandidates(liveMatch({ odds: [{ bookmaker: 'x', market: 'h2h', home_odds: 20.0, draw_odds: 3.4, away_odds: 1.9 }] }), baseline, opts);
+  assert.ok(!c.find(x => x.outcome === 'home'));
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
