@@ -368,7 +368,19 @@ async function insertValueSignals(supabase, rows) {
   if (!toInsert.length) return 0;
 
   const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
-  if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+  if (insErr) {
+    // 23505 = unique_violation. value_signals_selection_price_unique is keyed on
+    // (match_id, market, outcome, model_architecture, detected_odds) with no time
+    // bound, while the dedup check above only looks back SIGNAL_DEDUP_MINUTES —
+    // a price that reappears after sitting unchanged past that window collides
+    // with its own older row. That collision means "already recorded", not a
+    // real failure, so skip it rather than crashing the whole ingest loop.
+    if (insErr.code === '23505') {
+      console.warn(`[api_engine] duplicate-key on insert, treating as already-recorded: ${insErr.message}`);
+      return 0;
+    }
+    throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+  }
 
   const pm = toInsert.filter(r => r.signal_category === 'PriceMove').length;
   const pr = toInsert.filter(r => r.signal_category === 'Prime').length;
