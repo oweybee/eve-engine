@@ -387,7 +387,33 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
   if (!toInsert.length) return 0;
 
   const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
-  if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+  if (insErr) {
+    // value_signals_selection_price_unique is a PERMANENT unique index on
+    // (match_id, market, outcome, model_architecture, detected_odds) — it has
+    // no time bound, unlike the SIGNAL_DEDUP_MINUTES window checked above. A
+    // price that recurs after the dedup window has elapsed (common — odds
+    // oscillate) collides with an old row and Postgres aborts the WHOLE batch
+    // insert, which was crashing this step (and skipping every step after it
+    // in the workflow) on nearly every run. Retry row-by-row so one stale
+    // duplicate only drops itself, not the rest of the batch.
+    if (insErr.code === '23505') {
+      let inserted = 0;
+      for (const row of toInsert) {
+        const { error: rowErr } = await supabase.from('value_signals').insert(row);
+        if (rowErr) {
+          if (rowErr.code === '23505') continue;
+          throw new Error(`insertValueSignals(insert): ${rowErr.message}`);
+        }
+        inserted++;
+      }
+      console.warn(
+        `[value_signals] batch insert hit duplicate(s) on ` +
+        `value_signals_selection_price_unique — inserted ${inserted}/${toInsert.length} individually`
+      );
+      return inserted;
+    }
+    throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+  }
 
   const pm = toInsert.filter(r => r.signal_category === 'PriceMove').length;
   const pr = toInsert.filter(r => r.signal_category === 'Prime').length;
