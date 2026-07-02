@@ -387,13 +387,36 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
   if (!toInsert.length) return 0;
 
   const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
-  if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+  let inserted = toInsert;
 
-  const pm = toInsert.filter(r => r.signal_category === 'PriceMove').length;
-  const pr = toInsert.filter(r => r.signal_category === 'Prime').length;
-  const st = toInsert.filter(r => r.signal_category === 'Standard').length;
-  console.log(`[value_signals] inserted ${toInsert.length} (PriceMove=${pm} Prime=${pr} Standard=${st})`);
-  return toInsert.length;
+  if (insErr) {
+    // value_signals_selection_price_unique is a permanent (non-time-bound)
+    // unique index on (match_id, market, outcome, model_architecture,
+    // detected_odds), but the dedup check above only looks back
+    // SIGNAL_DEDUP_MINUTES. A price that repeats after a longer gap looks
+    // "new" to the app and collides with a row inserted long ago, and a
+    // single collision was aborting the whole batch (and the pipeline run).
+    // Fall back to per-row inserts so only the actual duplicates are
+    // dropped instead of losing every signal in the batch.
+    if (insErr.code !== '23505') {
+      throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+    }
+    console.warn(`[value_signals] batch insert hit duplicate key, retrying rows individually: ${insErr.message}`);
+
+    inserted = [];
+    for (const row of toInsert) {
+      const { error: rowErr } = await supabase.from('value_signals').insert(row);
+      if (!rowErr) { inserted.push(row); continue; }
+      if (rowErr.code === '23505') { skippedSamePrice++; continue; }
+      throw new Error(`insertValueSignals(insert): ${rowErr.message}`);
+    }
+  }
+
+  const pm = inserted.filter(r => r.signal_category === 'PriceMove').length;
+  const pr = inserted.filter(r => r.signal_category === 'Prime').length;
+  const st = inserted.filter(r => r.signal_category === 'Standard').length;
+  console.log(`[value_signals] inserted ${inserted.length} (PriceMove=${pm} Prime=${pr} Standard=${st})`);
+  return inserted.length;
 }
 
 const normTeam = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
