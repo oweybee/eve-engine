@@ -56,6 +56,31 @@ const MAX_PLAUSIBLE_EDGE = parseFloat(process.env.MAX_PLAUSIBLE_EDGE || '0.30');
 // Skip re-signal if same odds seen within this window (avoid spam)
 const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
+// PostgREST returns at most ~1000 rows per request. Page through the odds for
+// the given matches with .range() (ordered by primary key for a stable window)
+// and concatenate, so no match is silently starved of its odds. Page size is a
+// touch under the 1000 cap so `< PAGE_SIZE` reliably signals the last page.
+const ODDS_PAGE_SIZE = parseInt(process.env.ODDS_PAGE_SIZE || '1000', 10);
+
+async function fetchAllOddsForMatches(supabase, matchIds) {
+  const all = [];
+  for (let from = 0; ; from += ODDS_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('odds')
+      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
+      .in('match_id', matchIds)
+      .order('id', { ascending: true })
+      .range(from, from + ODDS_PAGE_SIZE - 1);
+
+    if (error) throw new Error(`fetchMatchesForComputation[odds]: ${error.message}`);
+    if (!data?.length) break;
+
+    all.push(...data);
+    if (data.length < ODDS_PAGE_SIZE) break;   // last (partial) page
+  }
+  return all;
+}
+
 async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // Pre-match engine: scheduled only. In-play matches are handled by
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
@@ -77,12 +102,14 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
 
   const matchIds = matchData.map(m => m.id);
 
-  const { data: oddsData, error: oddsError } = await supabase
-    .from('odds')
-    .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds);
-
-  if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
+  // Paginated fetch. PostgREST caps a single response at ~1000 rows, and the
+  // full odds set for a day's scheduled fixtures (matches × books × markets)
+  // runs into the thousands. A plain `.in(...)` therefore silently truncated —
+  // every match whose odds rows fell past the 1000th row got zero odds attached
+  // and was dropped by the `.length > 0` filter below, so it never produced a
+  // computed_values row or a signal (matches vanished from the site). We now
+  // page through the whole set ordered by a stable key (`id`) until exhausted.
+  const oddsData = await fetchAllOddsForMatches(supabase, matchIds);
 
   const oddsByMatch = {};
   for (const o of (oddsData ?? [])) {

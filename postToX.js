@@ -17,6 +17,27 @@ const DRY_RUN = process.env.DRY_RUN === '1';
 const CHANNEL = 'telegram';
 const RUN_ID  = process.env.GITHUB_RUN_ID ?? 'local';
 
+// ── Outsider gate ──────────────────────────────────────────────────────────
+// The engine emits a signal at a low flat edge (EV_THRESHOLD, ~0.5%). Combined
+// with the relative de-vig, that surfaces marginal value on long prices very
+// often, and every price drift re-signals — so large outsiders were being
+// pushed to Telegram far too frequently. Instead of a hard odds cap, we require
+// a bigger edge the longer the price: rare high-conviction longshots still post,
+// the frequent marginal ones don't. This gates Telegram posting only — signals
+// are still recorded, shown on the site, and tracked for CLV.
+//
+//   required_edge(odds) = MIN_EDGE_BASE + EDGE_SLOPE * max(0, odds - EDGE_KNEE)
+//
+// Defaults (MIN_EDGE_BASE=0.005, EDGE_KNEE=4.0, EDGE_SLOPE=0.0125) leave short
+// prices untouched and require ~8% edge at odds 10, ~12% at 13, ~22% at 21.
+const MIN_EDGE_BASE = parseFloat(process.env.TELEGRAM_MIN_EDGE       || '0.005');
+const EDGE_KNEE     = parseFloat(process.env.TELEGRAM_EDGE_ODDS_KNEE || '4.0');
+const EDGE_SLOPE    = parseFloat(process.env.TELEGRAM_EDGE_SLOPE     || '0.0125');
+
+function minEdgeForOdds(odds) {
+  return MIN_EDGE_BASE + EDGE_SLOPE * Math.max(0, odds - EDGE_KNEE);
+}
+
 function getSupabase() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -213,7 +234,25 @@ async function run() {
     return true;
   });
 
-  const toPost      = validSignals.filter(s => !postedIds.has(s.id));
+  // Outsider gate: drop signals whose edge doesn't clear the odds-scaled bar.
+  // These stay in value_signals (site + CLV) — they're just not posted. Not
+  // marked posted, so re-tuning the curve can surface them again while the
+  // match is still within the kickoff window.
+  const clearsBar = validSignals.filter(s => {
+    const req = minEdgeForOdds(s.detected_odds);
+    if (s.detected_edge < req) {
+      console.log(
+        `[postToX] skip ${s.id} — outsider gate: odds ${s.detected_odds.toFixed(2)} ` +
+        `needs edge ≥ ${(req * 100).toFixed(1)}%, got ${(s.detected_edge * 100).toFixed(1)}%`
+      );
+      return false;
+    }
+    return true;
+  });
+  const gatedOut = validSignals.length - clearsBar.length;
+  if (gatedOut > 0) console.log(`[postToX] outsider gate filtered ${gatedOut} signal(s)`);
+
+  const toPost      = clearsBar.filter(s => !postedIds.has(s.id));
   const alreadySeen = signals.length - toPost.length;
   console.log(`[postToX] ${toPost.length} new | ${alreadySeen} already posted`);
 
@@ -276,4 +315,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[postToX] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, buildMessage, isRuby, isPriceMove, isInplay, chatIdForSignal };
+module.exports = { run, buildMessage, isRuby, isPriceMove, isInplay, chatIdForSignal, minEdgeForOdds };

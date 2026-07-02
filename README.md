@@ -105,6 +105,28 @@ In-play-specific env vars: `INPLAY_MODEL_ENABLED` (default `false`),
 
 ---
 
+## Telegram posting — outsider gate
+
+`postToX.js` gates how often long-priced selections ("outsiders") reach
+Telegram. The engine emits a signal at a low flat edge (`EV_THRESHOLD`, ~0.5%),
+which — with the relative de-vig — surfaces marginal value on long prices very
+often, and every price drift re-signals. Rather than a hard odds cap, the
+required edge **scales with the price**, so rare high-conviction longshots still
+post while the frequent marginal ones don't:
+
+```
+required_edge(odds) = TELEGRAM_MIN_EDGE + TELEGRAM_EDGE_SLOPE × max(0, odds − TELEGRAM_EDGE_ODDS_KNEE)
+```
+
+Defaults: `TELEGRAM_MIN_EDGE=0.005`, `TELEGRAM_EDGE_ODDS_KNEE=4.0`,
+`TELEGRAM_EDGE_SLOPE=0.0125` → short prices unaffected, ~8% edge required at odds
+10, ~12% at 13, ~22% at 21. This gates **Telegram posting only** — gated signals
+are still recorded, shown on the site, and tracked for CLV. Odds fetching for the
+pre-match engine pages through all rows (`ODDS_PAGE_SIZE`, default `1000`) so no
+fixture is starved by PostgREST's per-response row cap.
+
+---
+
 ## Required secrets
 
 The engine needs three credentials. They are **never** stored in the repo — they
