@@ -386,14 +386,41 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
 
   if (!toInsert.length) return 0;
 
-  const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
-  if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+  // The app-level dedup above only looks back SIGNAL_DEDUP_MINUTES, but
+  // value_signals_selection_price_unique has no time bound — a price that
+  // repeats after the dedup window has passed (common: odds revisiting a
+  // prior whole/half value) collides with the old row and 23505s the whole
+  // batch insert, killing the rest of the ingest loop. Fall back to
+  // per-row inserts so one stale collision doesn't drop every fresh signal.
+  const inserted = await insertIgnoringDuplicates(supabase, 'value_signals', toInsert, '[value_signals]');
 
-  const pm = toInsert.filter(r => r.signal_category === 'PriceMove').length;
-  const pr = toInsert.filter(r => r.signal_category === 'Prime').length;
-  const st = toInsert.filter(r => r.signal_category === 'Standard').length;
-  console.log(`[value_signals] inserted ${toInsert.length} (PriceMove=${pm} Prime=${pr} Standard=${st})`);
-  return toInsert.length;
+  const pm = inserted.filter(r => r.signal_category === 'PriceMove').length;
+  const pr = inserted.filter(r => r.signal_category === 'Prime').length;
+  const st = inserted.filter(r => r.signal_category === 'Standard').length;
+  console.log(`[value_signals] inserted ${inserted.length} (PriceMove=${pm} Prime=${pr} Standard=${st})`);
+  return inserted.length;
+}
+
+/**
+ * Insert rows, retrying one-by-one on a duplicate-key (23505) batch failure
+ * so a single stale collision doesn't discard the rest of the batch.
+ * Returns the rows that were actually inserted.
+ */
+async function insertIgnoringDuplicates(supabase, table, rows, logPrefix) {
+  const { error: insErr } = await supabase.from(table).insert(rows);
+  if (!insErr) return rows;
+  if (insErr.code !== '23505') throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+
+  const survivors = [];
+  let duplicates = 0;
+  for (const row of rows) {
+    const { error: rowErr } = await supabase.from(table).insert(row);
+    if (!rowErr) { survivors.push(row); continue; }
+    if (rowErr.code === '23505') { duplicates++; continue; }
+    throw new Error(`insertValueSignals(insert): ${rowErr.message}`);
+  }
+  console.warn(`${logPrefix} batch insert hit duplicate key(s) — ${duplicates} stale collision(s) skipped, ${survivors.length} inserted individually`);
+  return survivors;
 }
 
 const normTeam = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
