@@ -386,14 +386,38 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
 
   if (!toInsert.length) return 0;
 
+  let insertedCount = 0;
   const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
-  if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+  if (insErr) {
+    // 23505 = unique_violation. The SIGNAL_DEDUP_MINUTES window above only looks
+    // back 60 minutes, but value_signals_selection_price_unique (match_id,
+    // market, outcome, model_architecture, detected_odds) has no time bound —
+    // an exact price that recurs after the dedup window has passed collides
+    // with the old row. A batch insert fails all-or-nothing on any one
+    // collision, which was crashing the whole compute run (and skipping every
+    // step after it, including odds posting). Retry row-by-row so a single
+    // stale duplicate can't take out the rest of the batch.
+    if (insErr.code !== '23505') {
+      throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+    }
+    console.warn('[value_signals] batch insert hit a duplicate signal, retrying rows individually');
+    for (const row of toInsert) {
+      const { error: rowErr } = await supabase.from('value_signals').insert(row);
+      if (rowErr) {
+        if (rowErr.code === '23505') continue;
+        throw new Error(`insertValueSignals(insert row): ${rowErr.message}`);
+      }
+      insertedCount++;
+    }
+  } else {
+    insertedCount = toInsert.length;
+  }
 
   const pm = toInsert.filter(r => r.signal_category === 'PriceMove').length;
   const pr = toInsert.filter(r => r.signal_category === 'Prime').length;
   const st = toInsert.filter(r => r.signal_category === 'Standard').length;
-  console.log(`[value_signals] inserted ${toInsert.length} (PriceMove=${pm} Prime=${pr} Standard=${st})`);
-  return toInsert.length;
+  console.log(`[value_signals] inserted ${insertedCount}/${toInsert.length} (PriceMove=${pm} Prime=${pr} Standard=${st})`);
+  return insertedCount;
 }
 
 const normTeam = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
