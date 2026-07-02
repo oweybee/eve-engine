@@ -387,13 +387,26 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
   if (!toInsert.length) return 0;
 
   const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
-  if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+  let inserted = toInsert;
+  if (insErr) {
+    if (insErr.code !== '23505') throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+    // value_signals_selection_price_unique has no time bound, so a price that
+    // repeats a value last signalled outside the SIGNAL_DEDUP_MINUTES window
+    // collides here even though it's a legitimate new PriceMove. Fall back to
+    // per-row inserts so one stale collision doesn't drop the rest of the batch.
+    inserted = [];
+    for (const row of toInsert) {
+      const { error: rowErr } = await supabase.from('value_signals').insert(row);
+      if (rowErr && rowErr.code !== '23505') throw new Error(`insertValueSignals(insert): ${rowErr.message}`);
+      if (!rowErr) inserted.push(row);
+    }
+  }
 
-  const pm = toInsert.filter(r => r.signal_category === 'PriceMove').length;
-  const pr = toInsert.filter(r => r.signal_category === 'Prime').length;
-  const st = toInsert.filter(r => r.signal_category === 'Standard').length;
-  console.log(`[value_signals] inserted ${toInsert.length} (PriceMove=${pm} Prime=${pr} Standard=${st})`);
-  return toInsert.length;
+  const pm = inserted.filter(r => r.signal_category === 'PriceMove').length;
+  const pr = inserted.filter(r => r.signal_category === 'Prime').length;
+  const st = inserted.filter(r => r.signal_category === 'Standard').length;
+  console.log(`[value_signals] inserted ${inserted.length} (PriceMove=${pm} Prime=${pr} Standard=${st})`);
+  return inserted.length;
 }
 
 const normTeam = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
