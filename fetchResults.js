@@ -17,6 +17,7 @@
 'use strict';
 
 const { createClient } = require('@supabase/supabase-js');
+const { fetchAllPaged } = require('./lib/supabaseClient');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -220,21 +221,33 @@ async function prefetchClosingOdds(supabase, signals) {
   const matchIds = [...new Set(signals.map(s => s.match_id).filter(Boolean))];
   if (!matchIds.length) return new Map();
 
-  // Query 1: closing snapshots for all match+outcome combos
-  const { data: snaps } = await supabase
-    .from('odds_snapshots')
-    .select('match_id, selection, odds, captured_at')
-    .in('match_id', matchIds)
-    .eq('snapshot_type', 'closing')
-    .order('captured_at', { ascending: false });
-
-  // Query 2: latest Betfair Exchange prices for all matches
-  const { data: betfairRows } = await supabase
-    .from('odds')
-    .select('match_id, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds)
-    .eq('bookmaker', 'betfair_ex_uk')
-    .order('fetched_at', { ascending: false });
+  // Both queries page past PostgREST's 1000-row cap — otherwise matches beyond
+  // the cap settle with a missing closing price, corrupting CLV. id breaks
+  // ties so paging is stable; first row per key is still the latest (DESC).
+  const [snaps, betfairRows] = await Promise.all([
+    // Query 1: closing snapshots for all match+outcome combos
+    fetchAllPaged((from, to) =>
+      supabase
+        .from('odds_snapshots')
+        .select('match_id, selection, odds, captured_at')
+        .in('match_id', matchIds)
+        .eq('snapshot_type', 'closing')
+        .order('captured_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(from, to),
+    'prefetchClosingOdds[snapshots]'),
+    // Query 2: latest Betfair Exchange prices for all matches
+    fetchAllPaged((from, to) =>
+      supabase
+        .from('odds')
+        .select('match_id, home_odds, draw_odds, away_odds, fetched_at')
+        .in('match_id', matchIds)
+        .eq('bookmaker', 'betfair_ex_uk')
+        .order('fetched_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(from, to),
+    'prefetchClosingOdds[betfair]'),
+  ]);
 
   // Build maps — first row per match_id is latest (DESC order)
   const snapMap    = new Map(); // key: `${matchId}:${outcome}`

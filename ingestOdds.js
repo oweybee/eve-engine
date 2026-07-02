@@ -34,7 +34,7 @@
 'use strict';
 
 const https            = require('https');
-const { getClient }    = require('./lib/supabaseClient');
+const { getClient, fetchAllPaged } = require('./lib/supabaseClient');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -174,13 +174,20 @@ async function prefetchLastOdds(supabase, matchIds) {
   if (!matchIds.length) return new Map();
 
   const since48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await supabase
-    .from('odds')
-    .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds)
-    .gte('fetched_at', since48h)
-    .order('fetched_at', { ascending: false });
-  if (error) throw new Error(`prefetchLastOdds: ${error.message}`);
+  // Paged past PostgREST's 1000-row cap — otherwise the price-movement baseline
+  // is built from only the 1000 most-recent rows, so matches beyond the cap
+  // lose their "last seen" prices and every book re-signals as a fake move.
+  // id breaks fetched_at ties so paging is stable; first row per key is latest.
+  const data = await fetchAllPaged((from, to) =>
+    supabase
+      .from('odds')
+      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
+      .in('match_id', matchIds)
+      .gte('fetched_at', since48h)
+      .order('fetched_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(from, to),
+  'prefetchLastOdds');
 
   // DESC order: first occurrence of each key is the most recent row.
   // Key includes market_line so different lines of the same market don't collide.

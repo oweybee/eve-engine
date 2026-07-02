@@ -25,7 +25,7 @@
 
 'use strict';
 
-const { getClient } = require('./lib/supabaseClient');
+const { getClient, fetchAllPaged } = require('./lib/supabaseClient');
 
 const CLOSING_WINDOW_MIN = 60;
 const SIGNAL_EDGE        = parseFloat(process.env.SIGNAL_EDGE || '0.02'); // 2 pp minimum
@@ -79,15 +79,21 @@ function edgeBucket(edge) {
  * @returns {Promise<Set<string>>}
  */
 async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
-  const { data, error } = await supabase
-    .from('odds_snapshots')
-    .select('match_id')
-    .in('match_id', matchIds)
-    .gte('captured_at', since7dIso);
-  if (error) throw new Error(`prefetchSnapshotExistence: ${error.message}`);
+  if (!matchIds?.length) return new Set();
+  // Paged past the 1000-row cap — otherwise matches beyond the cap look like
+  // they have no snapshot and get needlessly re-created.
+  const data = await fetchAllPaged((from, to) =>
+    supabase
+      .from('odds_snapshots')
+      .select('match_id')
+      .in('match_id', matchIds)
+      .gte('captured_at', since7dIso)
+      .order('id', { ascending: true })
+      .range(from, to),
+  'prefetchSnapshotExistence');
 
   // Deduplicate in JS — we only need existence, not row count.
-  return new Set((data ?? []).map(r => r.match_id));
+  return new Set(data.map(r => r.match_id));
 }
 
 /**
@@ -98,6 +104,12 @@ async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
  * most recent row — this is the JavaScript equivalent of DISTINCT ON.
  * 48 hours is sufficient because ingestOdds runs at least hourly.
  *
+ * Paged past PostgREST's 1000-row response cap: a single response would
+ * otherwise return only the 1000 most-recent rows globally, silently dropping
+ * the latest odds for matches/books whose newest row sits beyond that — so
+ * their charts would miss the current price point. id breaks fetched_at ties
+ * so paging is stable (no repeated/skipped rows).
+ *
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string[]} matchIds
  * @param {string}   since48hIso
@@ -105,17 +117,22 @@ async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
  *   Outer key: matchId.  Inner key: bookmaker.  Value: odds row.
  */
 async function prefetchLatestOdds(supabase, matchIds, since48hIso) {
-  const { data, error } = await supabase
-    .from('odds')
-    .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds)
-    .eq('market', 'h2h')
-    .gte('fetched_at', since48hIso)
-    .order('fetched_at', { ascending: false });
-  if (error) throw new Error(`prefetchLatestOdds: ${error.message}`);
+  if (!matchIds?.length) return new Map();
+
+  const rows = await fetchAllPaged((from, to) =>
+    supabase
+      .from('odds')
+      .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
+      .in('match_id', matchIds)
+      .eq('market', 'h2h')
+      .gte('fetched_at', since48hIso)
+      .order('fetched_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(from, to),
+  'prefetchLatestOdds');
 
   const map = new Map();
-  for (const row of data ?? []) {
+  for (const row of rows) {
     if (!map.has(row.match_id)) map.set(row.match_id, new Map());
     const byBook = map.get(row.match_id);
     // First occurrence = latest (DESC order). Never overwrite.
