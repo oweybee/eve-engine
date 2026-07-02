@@ -207,28 +207,6 @@ async function buildReport(supabase) {
   lines.push(`  • Remaining:       ${remaining.toLocaleString()}`);
   lines.push(`  • ${bar(totalUsed, DAILY_QUOTA)}  ${pct(totalUsed, DAILY_QUOTA)}`);
 
-  // ── Projected end-of-day usage ────────────────────────────────────────────
-  if (runsComp > 0 && fixtureIds.length > 0) {
-    const runsLeft    = runsPlan - runsComp;
-    const projOdds    = runsPlan * fixtureIds.length;
-    // fetchMatchDetails averages about 2 calls per fixture per run (pre-kickoff) or 1 (post)
-    const projDetails = Math.round(runsPlan * fixtureIds.length * 1.5);
-    const projTotal   = plannerCalls + projOdds + projDetails;
-    const safetyPct   = ((projTotal / DAILY_QUOTA) * 100).toFixed(1);
-    lines.push(`\n🔮 <b>Projected end-of-day</b>`);
-    lines.push(`  • Estimated total: ~${projTotal.toLocaleString()} calls  (${safetyPct}% of quota)`);
-    lines.push(`  • Runs remaining:  ${runsLeft}`);
-
-    if (projTotal > DAILY_QUOTA) {
-      lines.push(`  🚨 QUOTA RISK: projected usage exceeds daily limit!`);
-      lines.push(`  → Reduce DAILY_REQUEST_BUDGET in plan-day.yml`);
-    } else if (projTotal > DAILY_QUOTA * 0.8) {
-      lines.push(`  ⚠️  Projected usage above 80% — monitor closely`);
-    } else {
-      lines.push(`  ✅ Well within quota`);
-    }
-  }
-
   return lines.join('\n');
 }
 
