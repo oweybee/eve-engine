@@ -8,7 +8,7 @@
 const assert = require('assert');
 const inplay = require('./lib/inplay');
 const { buildMessage, isInplay, isSuggested, chatIdForSignal } = require('./postToX');
-const { classifyTier } = require('./lib/signalTier');
+const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
 const { extractLiveH2h } = require('./ingestLiveOdds');
 const elo = require('./lib/elo');
 const { buildLadder } = require('./computeElo');
@@ -126,6 +126,19 @@ test('classifier boundaries: 3.00 odds is a longshot, edge <2% hidden, ≥10% no
   assert.strictEqual(classifyTier({ odds: 2.0, edge: 0.015 }).tier, null);
   assert.strictEqual(classifyTier({ odds: 2.0, edge: 0.12 }).tier, 'value');
   assert.strictEqual(classifyTier({ odds: 1.4, edge: 0.04 }).tier, 'diamond');
+});
+test('dedupeConflicts keeps the highest-edge pick per match/market (no home+away wash)', () => {
+  const rows = [
+    { match_id: 'PORvCRO', market: 'h2h', outcome: 'home', detected_edge: 0.05 },
+    { match_id: 'PORvCRO', market: 'h2h', outcome: 'away', detected_edge: 0.08 },
+    { match_id: 'PORvCRO', market: 'totals', market_line: 2.5, outcome: 'over', detected_edge: 0.06 },
+    { match_id: 'OTHER',   market: 'h2h', outcome: 'home', detected_edge: 0.04 },
+  ];
+  const kept = dedupeConflicts(rows);
+  assert.strictEqual(kept.length, 3, 'one h2h + one totals for PORvCRO, plus OTHER');
+  const por = kept.find(r => r.match_id === 'PORvCRO' && r.market === 'h2h');
+  assert.strictEqual(por.outcome, 'away', 'keeps the higher-edge (away 8%) over home 5%');
+  assert.ok(kept.some(r => r.market === 'totals'), 'different market survives (not a conflict)');
 });
 test('routes in-play to in-play channel', () =>
   assert.strictEqual(chatIdForSignal({ chatId: 'main', inplayChatId: 'live' }, inplaySignal), 'live'));

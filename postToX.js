@@ -16,7 +16,7 @@ const https  = require('https');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { formatLiveState } = require('./lib/inplay');
-const { classifyTier } = require('./lib/signalTier');
+const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
 
 const DRY_RUN = process.env.DRY_RUN === '1';
 const CHANNEL = 'telegram';
@@ -75,7 +75,7 @@ async function fetchRecentSignals(supabase) {
   const { data, error } = await supabase
     .from('value_signals')
     .select(`
-      id, outcome, detected_odds, detected_edge, detected_mes, bookmaker,
+      id, match_id, market, market_line, outcome, detected_odds, detected_edge, detected_mes, bookmaker,
       kickoff_at, detected_at, signal_category, phase,
       match:matches (
         goals_home, goals_away, minute,
@@ -233,6 +233,13 @@ async function run() {
   const alreadySeen = signals.length - toPost.length;
   console.log(`[postToX] ${toPost.length} new | ${alreadySeen} already posted`);
 
+  // Conflict guard: among the pre-match Diamonds we'd broadcast this run, keep
+  // only the highest-edge pick per (match, market, line) so we never push two
+  // opposing outcomes on the same match. The rest are suppressed below.
+  const broadcastDiamondIds = new Set(
+    dedupeConflicts(toPost.filter(s => !isInplay(s) && classifyTier(s).tier === 'diamond'))
+      .map(s => s.id));
+
   if (!toPost.length) { console.log('[postToX] nothing to post'); return { posted: 0, failed: 0, skipped: alreadySeen }; }
 
   if (!telegram && !DRY_RUN) {
@@ -263,6 +270,15 @@ async function run() {
     // signals bypass this — they have their own channel + tier logic.
     if (!isInplay(signal) && !isPriceMove(signal) && tier !== 'diamond') {
       console.log(`\n[postToX] skip (${label}, not suggested) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
+      await markPosted(supabase, signal.id, messageHash, null);
+      skippedInfo++;
+      continue;
+    }
+
+    // Conflict guard: a Diamond that lost the per-match/market tie-break to a
+    // higher-edge opposing pick is suppressed so the two can't cancel out.
+    if (!isInplay(signal) && tier === 'diamond' && !broadcastDiamondIds.has(signal.id)) {
+      console.log(`\n[postToX] skip (DIAMOND conflict, lower edge) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
       await markPosted(supabase, signal.id, messageHash, null);
       skippedInfo++;
       continue;
