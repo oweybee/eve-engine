@@ -17,7 +17,13 @@
 'use strict';
 
 const { createClient } = require('@supabase/supabase-js');
-const { classifyTier } = require('./lib/signalTier');
+const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
+
+// Clean-slate epoch: performance is tracked ONLY for signals detected on or
+// after this instant — the go-live of the Diamond-only + conflict-deduped
+// structure. Everything before it was generated under the old rules and must
+// not count. Override with PERFORMANCE_EPOCH if the slate is ever reset again.
+const PERFORMANCE_EPOCH = process.env.PERFORMANCE_EPOCH || '2026-07-03T18:30:00Z';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -409,7 +415,7 @@ function summarisePhase(rows, { includeClv }) {
 async function calculatePerformance(supabase) {
   const { data, error } = await supabase
     .from('value_signals')
-    .select('result, detected_odds, detected_edge, detected_mes, clv, phase');
+    .select('result, detected_odds, detected_edge, detected_mes, clv, phase, detected_at, match_id, market, market_line');
   if (error) throw new Error(`calculatePerformance(select): ${error.message}`);
 
   const rows = data ?? [];
@@ -418,13 +424,20 @@ async function calculatePerformance(supabase) {
   const inplayRows   = rows.filter(r => r.phase === 'inplay');
 
   // Headline performance reflects DIAMOND signals only — the sole tier we
-  // suggest. Value and longshot picks stay visible on the site as a tool but
-  // must never distort the tracked win-rate / yield / ROI. (see lib/signalTier)
-  const diamondRows = prematchRows.filter(
-    r => classifyTier({ odds: r.detected_odds, edge: r.detected_edge }).tier === 'diamond');
+  // suggest — and only those detected on/after the clean-slate epoch. Value and
+  // longshot picks stay visible on the site as a tool but must never distort the
+  // tracked win-rate / yield / ROI. (see lib/signalTier)
+  const epochMs = new Date(PERFORMANCE_EPOCH).getTime();
+  const diamondRows = prematchRows.filter(r =>
+    classifyTier({ odds: r.detected_odds, edge: r.detected_edge }).tier === 'diamond' &&
+    r.detected_at != null && new Date(r.detected_at).getTime() >= epochMs);
+
+  // Collapse mutually-exclusive picks (e.g. home + away on the same match) to a
+  // single tracked bet so opposing signals can't wash out the numbers.
+  const trackedDiamonds = dedupeConflicts(diamondRows);
 
   const calculated_at = new Date().toISOString();
-  const prematch = { ...summarisePhase(diamondRows, { includeClv: true }),
+  const prematch = { ...summarisePhase(trackedDiamonds, { includeClv: true }),
                      phase: 'prematch', singleton_key: 'current', calculated_at };
   const inplay   = { ...summarisePhase(inplayRows, { includeClv: false }),
                      phase: 'inplay', singleton_key: 'inplay', calculated_at };
