@@ -2,7 +2,7 @@
  * Max Edge — multi-tiered model calibration sweep.
  *
  * The raw Dixon-Coles output under-rates favourites vs the market, so all the
- * model's "value" lands on longshots and the Ruby (value AND high probability)
+ * model's "value" lands on longshots and the Diamond (value AND high probability)
  * never fires. Temperature sharpening (s > 1) corrects this by pushing
  * probability mass toward the favourite. The optimal exponent differs between
  * market tiers because the edge-reference price quality varies:
@@ -18,7 +18,7 @@
  * For each tier the script sweeps a grid of sharpness values and reports:
  *   MAE      — mean absolute error of model vs Betfair-implied probs (market fit)
  *   meanFav  — average max-outcome probability (how strongly favourites are rated)
- *   Ruby     — count of RUBY-tier signals (edge ≥ 8pp AND prob ≥ 60% AND VS ≥ 8)
+ *   Diamond     — count of DIAMOND-tier signals (edge ≥ 8pp AND prob ≥ 60% AND VS ≥ 8)
  *   Value    — count of matches with at least one value-tier signal
  *
  * Run after each rating update or whenever adding new soft books:
@@ -54,7 +54,7 @@ const { valueScore, signalTier } = require('./modelMetrics');
  * @property {number} s        - Sharpness value tested
  * @property {number} mae      - Mean absolute error vs Betfair [0,1]
  * @property {number} meanFav  - Average max-outcome probability [0,1]
- * @property {number} ruby     - Number of RUBY signals across all matches
+ * @property {number} diamond     - Number of DIAMOND signals across all matches
  * @property {number} value    - Number of matches with any value signal
  */
 
@@ -107,7 +107,7 @@ function betfairImplied(h2hRows) {
  */
 function runSweep(usable) {
   return SWEEP.map(s => {
-    let errSum = 0, errN = 0, favSum = 0, ruby = 0, value = 0;
+    let errSum = 0, errN = 0, favSum = 0, diamond = 0, value = 0;
 
     for (const u of usable) {
       const model = matchProbabilities(u.home, u.away, s);
@@ -119,7 +119,7 @@ function runSweep(usable) {
       }
       favSum += Math.max(model.home, model.draw, model.away);
 
-      // Ruby / value per outcome using soft-implied edge
+      // Diamond / value per outcome using soft-implied edge
       const softImplied = {
         home: 1 / u.soft.home,
         draw: 1 / u.soft.draw,
@@ -131,7 +131,7 @@ function runSweep(usable) {
         const edge = model[o] - softImplied[o];
         const vs   = valueScore(edge, model[o]);
         const tier = signalTier(edge, model[o], vs);
-        if (tier === 'RUBY') ruby++;
+        if (tier === 'DIAMOND') diamond++;
         if (tier) matchHasValue = true;
       }
       if (matchHasValue) value++;
@@ -141,7 +141,7 @@ function runSweep(usable) {
       s,
       mae:     errN > 0 ? errSum / errN : NaN,
       meanFav: usable.length > 0 ? favSum / usable.length : NaN,
-      ruby,
+      diamond,
       value,
     };
   });
@@ -158,7 +158,7 @@ function printTierTable(tier) {
     return;
   }
 
-  console.log('  s      MAE          meanFav    Ruby   Value');
+  console.log('  s      MAE          meanFav    Diamond   Value');
   console.log('  ----   ----------   --------   ----   -----');
 
   const bestS = tier.best?.s;
@@ -168,7 +168,7 @@ function printTierTable(tier) {
       `  ${row.s.toFixed(1)}    ` +
       `${(row.mae * 100).toFixed(2).padStart(6)}pp     ` +
       `${(row.meanFav * 100).toFixed(1).padStart(5)}%      ` +
-      `${String(row.ruby).padStart(3)}    ` +
+      `${String(row.diamond).padStart(3)}    ` +
       `${String(row.value).padStart(3)}` +
       marker,
     );
@@ -232,9 +232,9 @@ async function run() {
     tier.results = runSweep(tier.usable);
 
     if (tier.usable.length > 0) {
-      // Best = lowest MAE; tie-break on more Ruby signals (higher model utility).
+      // Best = lowest MAE; tie-break on more Diamond signals (higher model utility).
       tier.best = tier.results.reduce((a, b) => {
-        if (Math.abs(b.mae - a.mae) < 0.0001) return b.ruby > a.ruby ? b : a;
+        if (Math.abs(b.mae - a.mae) < 0.0001) return b.diamond > a.diamond ? b : a;
         return b.mae < a.mae ? b : a;
       });
     }
@@ -247,12 +247,12 @@ async function run() {
 
   console.log('[calibrate] Recommendations (set in .env / GitHub secrets):');
   if (multi.best) {
-    console.log(`  SHARPNESS_MULTI_BOOK=${multi.best.s}    (MAE ${(multi.best.mae * 100).toFixed(2)}pp, ${multi.best.ruby} ruby, ${multi.usable.length} matches)`);
+    console.log(`  SHARPNESS_MULTI_BOOK=${multi.best.s}    (MAE ${(multi.best.mae * 100).toFixed(2)}pp, ${multi.best.diamond} diamond, ${multi.usable.length} matches)`);
   } else {
     console.log('  SHARPNESS_MULTI_BOOK=1.7    (default — no multi-book matches in calibration set)');
   }
   if (single.best) {
-    console.log(`  SHARPNESS_SINGLE_BOOK=${single.best.s}   (MAE ${(single.best.mae * 100).toFixed(2)}pp, ${single.best.ruby} ruby, ${single.usable.length} matches)`);
+    console.log(`  SHARPNESS_SINGLE_BOOK=${single.best.s}   (MAE ${(single.best.mae * 100).toFixed(2)}pp, ${single.best.diamond} diamond, ${single.usable.length} matches)`);
   } else {
     console.log('  SHARPNESS_SINGLE_BOOK=1.0   (default — no single-book matches in calibration set)');
   }

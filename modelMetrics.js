@@ -193,21 +193,21 @@ function evForStakes(modelProb, odds, stakes = [10, 50, 100]) {
 }
 
 // ---------------------------------------------------------------------------
-// Signal tiers + Ruby (premium signal layer)
+// Signal tiers + Diamond (premium signal layer)
 //
 // Philosophy: High Value + High Probability = Exceptional Opportunity.
-// A big edge on a 15%-probability longshot is NOT what we alert on. Ruby is the
-// intersection of value and model confidence, and is deliberately scarce.
+// A big edge on a 15%-probability longshot is NOT what we alert on. Diamond is
+// the intersection of value and model confidence, and is deliberately scarce.
 // ---------------------------------------------------------------------------
 
-const RUBY     = { edge: 0.08, prob: 0.60, valueScore: 8.0 };
+const DIAMOND  = { edge: 0.08, prob: 0.60, valueScore: 8.0 };
 const STRONG   = { edge: 0.05, prob: 0.55 };
 const STANDARD = { edge: 0.03 };
 
 // ---------------------------------------------------------------------------
 // Signal categorization — sweet-spot detection + outlier downgrade
 //
-// Parallel to the RUBY/STRONG/STANDARD tier system. Operates on edge magnitude
+// Parallel to the DIAMOND/STRONG/STANDARD tier system. Operates on edge magnitude
 // and model probability to label each outcome for front-end display:
 //   Prime         — edge in sweet spot AND model prob ≥ 15% → high priority, green
 //   Longshot Edge — edge in sweet spot AND model prob <  15% → deprioritised, orange
@@ -261,7 +261,7 @@ function categorizeSignal(modelProbability, marketOdds, calculatedEdge) {
 
 /**
  * Value Score on a 0–10 scale = edge(pp) × modelProb / 0.6, capped at 10.
- * Calibrated so the Ruby boundary (edge 8pp at 60% prob) scores exactly 8.0,
+ * Calibrated so the Diamond boundary (edge 8pp at 60% prob) scores exactly 8.0,
  * rewarding outcomes that pair a real edge with a genuinely likely result.
  */
 function valueScore(edge, modelProb) {
@@ -269,21 +269,21 @@ function valueScore(edge, modelProb) {
   return +clamp((edge * 100) * modelProb / 0.6, 0, 10).toFixed(2);
 }
 
-/** True only when value AND probability AND composite all clear the Ruby bar. */
-function isRuby(edge, modelProb, vScore) {
-  return edge >= RUBY.edge && modelProb >= RUBY.prob && vScore >= RUBY.valueScore;
+/** True only when value AND probability AND composite all clear the Diamond bar. */
+function isDiamond(edge, modelProb, vScore) {
+  return edge >= DIAMOND.edge && modelProb >= DIAMOND.prob && vScore >= DIAMOND.valueScore;
 }
 
-/** Per-outcome signal tier: 'RUBY' | 'STRONG' | 'STANDARD' | null. */
+/** Per-outcome signal tier: 'DIAMOND' | 'STRONG' | 'STANDARD' | null. */
 function signalTier(edge, modelProb, vScore) {
   if (edge == null || modelProb == null) return null;
-  if (isRuby(edge, modelProb, vScore)) return 'RUBY';
+  if (isDiamond(edge, modelProb, vScore)) return 'DIAMOND';
   if (edge >= STRONG.edge && modelProb >= STRONG.prob) return 'STRONG';
   if (edge >= STANDARD.edge) return 'STANDARD';
   return null;
 }
 
-const TIER_RANK = { RUBY: 3, STRONG: 2, STANDARD: 1 };
+const TIER_RANK = { DIAMOND: 3, STRONG: 2, STANDARD: 1 };
 /** Highest tier across a set of per-outcome tiers (or null). */
 function bestTier(tiers) {
   let best = null, bestRank = 0;
@@ -302,12 +302,12 @@ module.exports = {
   maxEdgeScore,
   evForStakes,
   valueScore,
-  isRuby,
+  isDiamond,
   signalTier,
   bestTier,
   categorizeSignal,
   clamp,
-  RUBY_CRITERIA:         RUBY,
+  DIAMOND_CRITERIA:      DIAMOND,
   OUTSIDER_PROB_THRESHOLD,
   SWEET_SPOT_MIN,
   SWEET_SPOT_MAX,

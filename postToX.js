@@ -1,10 +1,14 @@
 /**
  * MaxEdge — Automated Signal Posting (Telegram)
  *
- * Signal tiers:
- *   PRICE MOVEMENT — signal_category='PriceMove' (odds shifted on a live value bet)
- *   VALUE          — edge >= 0.5%
- *   RUBY           — edge >= 8%
+ * Broadcast policy (pre-match): we only ever suggest DIAMOND signals — the
+ * back-tested sweet spot of odds 1.40–3.00 with a 4–10% edge. Value and
+ * longshot picks stay visible on the site as a tool, but are never broadcast
+ * as a suggested signal and never counted in performance. See lib/signalTier.js.
+ *
+ *   DIAMOND        — odds 1.40–3.00 AND edge 4–10%. The only broadcast tier.
+ *   PRICE MOVEMENT — signal_category='PriceMove' (odds shifted on a value bet)
+ *   IN-PLAY        — phase='inplay', routed to the dedicated in-play channel
  */
 'use strict';
 
@@ -12,6 +16,7 @@ const https  = require('https');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { formatLiveState } = require('./lib/inplay');
+const { classifyTier } = require('./lib/signalTier');
 
 const DRY_RUN = process.env.DRY_RUN === '1';
 const CHANNEL = 'telegram';
@@ -86,9 +91,10 @@ async function fetchRecentSignals(supabase) {
   return data ?? [];
 }
 
-function isRuby(edge) { return Number(edge) >= 0.08; }
 function isPriceMove(signal) { return signal.signal_category === 'PriceMove'; }
 function isInplay(signal) { return signal.phase === 'inplay'; }
+/** Pre-match signals we actually suggest (and broadcast): the Diamond tier. */
+function isSuggested(signal) { return classifyTier(signal).suggested; }
 
 function formatKickoff(isoStr) {
   if (!isoStr) return 'TBC';
@@ -132,20 +138,30 @@ function buildMessage(signal) {
     ].filter(l => l !== null).join('\n');
   }
 
-  let header, hashtags;
+  let header, hashtags, note = null;
   if (isPriceMove(signal)) {
     header   = `>> *ODDS MOVEMENT*`;
     hashtags = `#MaxEdge #OddsMove`;
-  } else if (isRuby(signal.detected_edge)) {
-    header   = `◆ *RUBY SIGNAL*`;
-    hashtags = `#MaxEdge #Ruby #ValueBet`;
   } else {
-    header   = `⚡ *VALUE SIGNAL*`;
-    hashtags = `#MaxEdge #ValueBet`;
+    const { tier, notable } = classifyTier(signal);
+    if (tier === 'diamond') {
+      header   = `💎 *DIAMOND SIGNAL*`;
+      note     = `_High conviction — our only highly-suggested tier_`;
+      hashtags = `#MaxEdge #Diamond #ValueBet`;
+    } else if (tier === 'longshot') {
+      header   = notable ? `🎯 *LONGSHOT · NOTABLE EDGE*` : `🎯 *LONGSHOT*`;
+      note     = `_For information only — not a suggested signal_`;
+      hashtags = `#MaxEdge #Longshot`;
+    } else {
+      // 'value' (or below-floor) — shown as a tool, never suggested.
+      header   = `⚡ *VALUE SIGNAL*`;
+      note     = `_For information only — not a suggested signal_`;
+      hashtags = `#MaxEdge #ValueBet`;
+    }
   }
 
   return [
-    header, ``,
+    header, note, ``,
     `*${home} vs ${away}*`,
     league ? `_${league}_` : null,
     `${outcome} @ ${odds} (${book})`,
@@ -227,17 +243,30 @@ async function run() {
   let posted = 0, failed = 0;
 
   let skippedNoChannel = 0;
+  let skippedInfo      = 0;
 
   for (let i = 0; i < toPost.length; i++) {
     const signal  = toPost[i];
+    const { tier } = classifyTier(signal);
     const label   = isInplay(signal) ? 'IN-PLAY'
                   : isPriceMove(signal) ? 'PRICE_MOVE'
-                  : isRuby(signal.detected_edge) ? 'RUBY' : 'VALUE';
+                  : (tier ? tier.toUpperCase() : 'BELOW_FLOOR');
     const home    = signal.match?.home_team?.name ?? '?';
     const away    = signal.match?.away_team?.name ?? '?';
     const message     = buildMessage(signal);
     const messageHash = hashMessage(message);
     const chatId      = telegram ? chatIdForSignal(telegram, signal) : telegram;
+
+    // Broadcast policy: pre-match, we only suggest DIAMOND signals. Value and
+    // longshot picks remain visible on the site but are never pushed to the
+    // channel. Mark them posted so they aren't reconsidered every run. In-play
+    // signals bypass this — they have their own channel + tier logic.
+    if (!isInplay(signal) && !isPriceMove(signal) && tier !== 'diamond') {
+      console.log(`\n[postToX] skip (${label}, not suggested) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
+      await markPosted(supabase, signal.id, messageHash, null);
+      skippedInfo++;
+      continue;
+    }
 
     console.log(`\n[postToX] ${label} — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
     console.log(message);
@@ -268,12 +297,12 @@ async function run() {
     if (i < toPost.length - 1) await new Promise(r => setTimeout(r, 1000));
   }
 
-  console.log(`\n[postToX] done —`, { posted, failed, skipped: alreadySeen, no_channel: skippedNoChannel });
-  return { posted, failed, skipped: alreadySeen, no_channel: skippedNoChannel };
+  console.log(`\n[postToX] done —`, { posted, failed, skipped: alreadySeen, no_channel: skippedNoChannel, info_only: skippedInfo });
+  return { posted, failed, skipped: alreadySeen, no_channel: skippedNoChannel, info_only: skippedInfo };
 }
 
 if (require.main === module) {
   run().catch(err => { console.error('[postToX] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, buildMessage, isRuby, isPriceMove, isInplay, chatIdForSignal };
+module.exports = { run, buildMessage, isSuggested, isPriceMove, isInplay, chatIdForSignal };

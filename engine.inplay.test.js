@@ -7,7 +7,8 @@
 
 const assert = require('assert');
 const inplay = require('./lib/inplay');
-const { buildMessage, isInplay, chatIdForSignal } = require('./postToX');
+const { buildMessage, isInplay, isSuggested, chatIdForSignal } = require('./postToX');
+const { classifyTier } = require('./lib/signalTier');
 const { extractLiveH2h } = require('./ingestLiveOdds');
 const elo = require('./lib/elo');
 const { buildLadder } = require('./computeElo');
@@ -94,11 +95,37 @@ test('in-play message has live header + score', () => {
   assert.ok(m.includes('Live: 0-1 40\''), 'live score');
   assert.ok(m.includes('#InPlay'), 'hashtag');
 });
-test('prematch message unchanged (Kickoff line, value header)', () => {
+test('prematch value signal (odds 2.5 / edge 3%) → VALUE header, info-only, not suggested', () => {
   const m = buildMessage(prematchSignal);
   assert.ok(m.includes('VALUE SIGNAL'));
+  assert.ok(m.includes('not a suggested signal'));
   assert.ok(m.includes('Kickoff:'));
   assert.ok(!m.includes('IN-PLAY'));
+  assert.strictEqual(isSuggested(prematchSignal), false);
+});
+
+// Tier classifier + Diamond broadcast policy ------------------------------------
+const diamondSignal  = { ...prematchSignal, detected_odds: 2.2, detected_edge: 0.06 };
+const longshotSignal = { ...prematchSignal, detected_odds: 5.0, detected_edge: 0.07 };
+test('diamond box (odds 2.2 / edge 6%) → DIAMOND header + suggested', () => {
+  assert.strictEqual(classifyTier(diamondSignal).tier, 'diamond');
+  assert.strictEqual(isSuggested(diamondSignal), true);
+  const m = buildMessage(diamondSignal);
+  assert.ok(m.includes('DIAMOND SIGNAL'), 'header');
+  assert.ok(m.includes('highly-suggested'), 'suggested note');
+});
+test('longshot (odds ≥ 3.0) → LONGSHOT header, notable 6–10% flag, never suggested', () => {
+  const c = classifyTier(longshotSignal);
+  assert.strictEqual(c.tier, 'longshot');
+  assert.strictEqual(c.notable, true);
+  assert.strictEqual(isSuggested(longshotSignal), false);
+  assert.ok(buildMessage(longshotSignal).includes('LONGSHOT · NOTABLE EDGE'));
+});
+test('classifier boundaries: 3.00 odds is a longshot, edge <2% hidden, ≥10% not diamond', () => {
+  assert.strictEqual(classifyTier({ odds: 3.0, edge: 0.06 }).tier, 'longshot');
+  assert.strictEqual(classifyTier({ odds: 2.0, edge: 0.015 }).tier, null);
+  assert.strictEqual(classifyTier({ odds: 2.0, edge: 0.12 }).tier, 'value');
+  assert.strictEqual(classifyTier({ odds: 1.4, edge: 0.04 }).tier, 'diamond');
 });
 test('routes in-play to in-play channel', () =>
   assert.strictEqual(chatIdForSignal({ chatId: 'main', inplayChatId: 'live' }, inplaySignal), 'live'));

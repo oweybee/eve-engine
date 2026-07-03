@@ -17,6 +17,7 @@
 'use strict';
 
 const { createClient } = require('@supabase/supabase-js');
+const { classifyTier } = require('./lib/signalTier');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -416,8 +417,14 @@ async function calculatePerformance(supabase) {
   const prematchRows = rows.filter(r => (r.phase ?? 'prematch') !== 'inplay');
   const inplayRows   = rows.filter(r => r.phase === 'inplay');
 
+  // Headline performance reflects DIAMOND signals only — the sole tier we
+  // suggest. Value and longshot picks stay visible on the site as a tool but
+  // must never distort the tracked win-rate / yield / ROI. (see lib/signalTier)
+  const diamondRows = prematchRows.filter(
+    r => classifyTier({ odds: r.detected_odds, edge: r.detected_edge }).tier === 'diamond');
+
   const calculated_at = new Date().toISOString();
-  const prematch = { ...summarisePhase(prematchRows, { includeClv: true }),
+  const prematch = { ...summarisePhase(diamondRows, { includeClv: true }),
                      phase: 'prematch', singleton_key: 'current', calculated_at };
   const inplay   = { ...summarisePhase(inplayRows, { includeClv: false }),
                      phase: 'inplay', singleton_key: 'inplay', calculated_at };
