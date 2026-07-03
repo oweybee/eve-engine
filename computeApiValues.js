@@ -439,7 +439,8 @@ async function main() {
   await upsertComputedValues(supabase, computedRows);
 
   if (valueRows.length) {
-    await insertValueSignals(supabase, valueRows);
+    try { await insertValueSignals(supabase, valueRows); }
+    catch (err) { console.error('[value_signals] signal insert failed:', err.message); }
   }
 }
 
