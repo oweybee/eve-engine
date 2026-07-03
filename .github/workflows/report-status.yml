@@ -7,7 +7,10 @@
 #   • Which fixtures were polled for odds
 #   • Polling interval and runs completed / planned
 #   • Exact API request counts per script vs 75,000 daily quota
-#   • Projected end-of-day usage with quota risk warnings
+#
+# This is an INTERNAL ops report. It is sent to a PRIVATE admin chat
+# (TELEGRAM_ADMIN_CHAT_ID) only — never to the public signals channel — so
+# subscribers never see API usage or polling internals.
 #
 # The report NEVER makes API-Football calls — it is entirely read-only against
 # Supabase and cannot burn quota.
@@ -37,7 +40,9 @@ jobs:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
+      # Internal ops report → PRIVATE admin chat only, never the public signals
+      # channel. Set this secret to your personal/admin chat ID to receive it.
+      TELEGRAM_ADMIN_CHAT_ID:    ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
       # Use dispatch override or the API-Football Ultra plan default
       DAILY_QUOTA:               ${{ inputs.daily_quota || '75000' }}
 

@@ -12,9 +12,15 @@
  * Sends the report to Telegram (same bot as signal alerts).
  * Safe to run any time — read-only against Supabase.
  *
+ * This is an INTERNAL operations report (API usage, quota, fixture IDs,
+ * polling internals). It is sent to a PRIVATE admin chat only — never to the
+ * public signals channel — via TELEGRAM_ADMIN_CHAT_ID. If that is not set the
+ * report prints to stdout and is not sent anywhere, so it can never leak to
+ * subscribers.
+ *
  * Required env vars:
  *   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
- *   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+ *   TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID
  *
  * Optional env vars:
  *   DAILY_QUOTA  — total daily limit for the API plan (default: 75000)
@@ -35,7 +41,8 @@ const { createClient } = require('@supabase/supabase-js');
 const SUPABASE_URL   = process.env.SUPABASE_URL;
 const SUPABASE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const BOT_TOKEN      = process.env.TELEGRAM_BOT_TOKEN;
-const CHAT_ID        = process.env.TELEGRAM_CHAT_ID;
+// Internal report → private admin chat ONLY. Never the public signals channel.
+const CHAT_ID        = process.env.TELEGRAM_ADMIN_CHAT_ID;
 const DAILY_QUOTA    = parseInt(process.env.DAILY_QUOTA ?? '75000', 10);
 
 // ---------------------------------------------------------------------------
@@ -53,7 +60,7 @@ function getSupabase() {
 
 function sendTelegram(text) {
   if (!BOT_TOKEN || !CHAT_ID) {
-    console.log('[report] Telegram not configured — printing to stdout only');
+    console.log('[report] TELEGRAM_ADMIN_CHAT_ID not configured — printing to stdout only, not sending');
     return Promise.resolve();
   }
   const body = JSON.stringify({ chat_id: CHAT_ID, text, parse_mode: 'HTML' });
