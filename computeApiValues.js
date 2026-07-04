@@ -31,6 +31,7 @@
  */
 
 const { getClient } = require('./lib/supabaseClient');
+const { categoryFor } = require('./lib/signalTier');
 
 const MIN_BOOKMAKERS        = parseInt(process.env.MIN_BOOKMAKERS        || '2',  10);
 const COMPUTE_CONCURRENCY   = parseInt(process.env.COMPUTE_CONCURRENCY   || '5',  10);
@@ -345,19 +346,14 @@ async function insertValueSignals(supabase, rows) {
       continue;
     }
 
-    let signal_category;
-    if (lastOdds != null) {
-      signal_category = 'PriceMove';
-    } else if (c._edge >= 0.05 && (c._p_api ?? 0) >= 0.15) {
-      signal_category = 'Prime';
-    } else if (c._edge >= 0.05) {
-      signal_category = 'Longshot Edge';
-    } else {
-      signal_category = 'Standard';
-    }
+    // Conviction tier from the canonical odds+edge ladder (the old prob-based
+    // Prime/Longshot Edge split folds into the odds ≥ 3.00 Longshot bucket); a
+    // re-detection at a shifted price is carried by is_mover.
+    const is_mover = lastOdds != null;
+    const signal_category = categoryFor({ odds: curOdds, edge: c._edge });
 
     const { _edge, _odds, _p_api, ...signalRow } = c;
-    toInsert.push({ ...signalRow, signal_category });
+    toInsert.push({ ...signalRow, signal_category, is_mover });
   }
 
   console.log(
@@ -370,13 +366,13 @@ async function insertValueSignals(supabase, rows) {
   const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
   if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
 
-  const pm = toInsert.filter(r => r.signal_category === 'PriceMove').length;
+  const mv = toInsert.filter(r => r.is_mover).length;
   const pr = toInsert.filter(r => r.signal_category === 'Prime').length;
-  const ls = toInsert.filter(r => r.signal_category === 'Longshot Edge').length;
-  const st = toInsert.filter(r => r.signal_category === 'Standard').length;
+  const va = toInsert.filter(r => r.signal_category === 'Value').length;
+  const ls = toInsert.filter(r => r.signal_category === 'Longshot').length;
   console.log(
     `[api_engine] inserted ${toInsert.length}` +
-    ` (PriceMove=${pm} Prime=${pr} LongshotEdge=${ls} Standard=${st})`
+    ` (Prime=${pr} Value=${va} Longshot=${ls} movers=${mv})`
   );
   return toInsert.length;
 }

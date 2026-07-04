@@ -31,6 +31,7 @@
 
 const { getClient } = require('./lib/supabaseClient');
 const inplay         = require('./lib/inplay');
+const { categoryFor } = require('./lib/signalTier');
 const sm             = require('./lib/secondaryMarkets');
 const { buildHalftimeVector } = require('./lib/halftimeFeatures');
 const { liveWinProb } = require('./lib/inplayWinProb');
@@ -172,7 +173,7 @@ async function modelVsMarket(match, ctx) {
       bookmaker:          live.book ?? null,
       kickoff_at:         match.kickoff_at ?? null,
       model_architecture: 'SUPERMODEL_HALFTIME',
-      signal_category:    'InPlay',
+      signal_category:    categoryFor({ odds: live.odds, edge }),
       phase:              'inplay',
     });
   }
@@ -239,7 +240,7 @@ function winProbCandidates(match, baseline, opts = {}) {
       bookmaker:          live.book ?? null,
       kickoff_at:         match.kickoff_at ?? null,
       model_architecture: 'INPLAY_DIXON_COLES',
-      signal_category:    'InPlay',
+      signal_category:    categoryFor({ odds: live.odds, edge }),
       phase:              'inplay',
     });
   }

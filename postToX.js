@@ -1,13 +1,13 @@
 /**
  * MaxEdge — Automated Signal Posting (Telegram)
  *
- * Broadcast policy (pre-match): we only ever suggest DIAMOND signals — the
+ * Broadcast policy (pre-match): we only ever suggest PRIME signals — the
  * back-tested sweet spot of odds 1.40–3.00 with a 4–10% edge. Value and
  * longshot picks stay visible on the site as a tool, but are never broadcast
  * as a suggested signal and never counted in performance. See lib/signalTier.js.
  *
- *   DIAMOND        — odds 1.40–3.00 AND edge 4–10%. The only broadcast tier.
- *   PRICE MOVEMENT — signal_category='PriceMove' (odds shifted on a value bet)
+ *   PRIME          — odds 1.40–3.00 AND edge 4–10%. The only broadcast tier.
+ *   ODDS MOVEMENT  — is_mover=true (odds shifted on an existing signal)
  *   IN-PLAY        — phase='inplay', routed to the dedicated in-play channel
  */
 'use strict';
@@ -76,7 +76,7 @@ async function fetchRecentSignals(supabase) {
     .from('value_signals')
     .select(`
       id, match_id, market, market_line, outcome, detected_odds, detected_edge, detected_mes, bookmaker,
-      kickoff_at, detected_at, signal_category, phase,
+      kickoff_at, detected_at, signal_category, is_mover, phase,
       match:matches (
         goals_home, goals_away, minute,
         home_team:teams!matches_home_team_id_fkey ( name ),
@@ -91,9 +91,9 @@ async function fetchRecentSignals(supabase) {
   return data ?? [];
 }
 
-function isPriceMove(signal) { return signal.signal_category === 'PriceMove'; }
+function isMover(signal) { return signal.is_mover === true; }
 function isInplay(signal) { return signal.phase === 'inplay'; }
-/** Pre-match signals we actually suggest (and broadcast): the Diamond tier. */
+/** Pre-match signals we actually suggest (and broadcast): the Prime tier. */
 function isSuggested(signal) { return classifyTier(signal).suggested; }
 
 function formatKickoff(isoStr) {
@@ -139,15 +139,15 @@ function buildMessage(signal) {
   }
 
   let header, hashtags, note = null;
-  if (isPriceMove(signal)) {
+  if (isMover(signal)) {
     header   = `>> *ODDS MOVEMENT*`;
     hashtags = `#MaxEdge #OddsMove`;
   } else {
     const { tier, notable } = classifyTier(signal);
-    if (tier === 'diamond') {
-      header   = `💎 *DIAMOND SIGNAL*`;
+    if (tier === 'prime') {
+      header   = `🟢 *PRIME SIGNAL*`;
       note     = `_High conviction — our only highly-suggested tier_`;
-      hashtags = `#MaxEdge #Diamond #ValueBet`;
+      hashtags = `#MaxEdge #Prime #ValueBet`;
     } else if (tier === 'longshot') {
       header   = notable ? `🎯 *LONGSHOT · NOTABLE EDGE*` : `🎯 *LONGSHOT*`;
       note     = `_For information only — not a suggested signal_`;
@@ -233,11 +233,11 @@ async function run() {
   const alreadySeen = signals.length - toPost.length;
   console.log(`[postToX] ${toPost.length} new | ${alreadySeen} already posted`);
 
-  // Conflict guard: among the pre-match Diamonds we'd broadcast this run, keep
+  // Conflict guard: among the pre-match Primes we'd broadcast this run, keep
   // only the highest-edge pick per (match, market, line) so we never push two
   // opposing outcomes on the same match. The rest are suppressed below.
-  const broadcastDiamondIds = new Set(
-    dedupeConflicts(toPost.filter(s => !isInplay(s) && classifyTier(s).tier === 'diamond'))
+  const broadcastPrimeIds = new Set(
+    dedupeConflicts(toPost.filter(s => !isInplay(s) && !isMover(s) && classifyTier(s).tier === 'prime'))
       .map(s => s.id));
 
   if (!toPost.length) { console.log('[postToX] nothing to post'); return { posted: 0, failed: 0, skipped: alreadySeen }; }
@@ -256,7 +256,7 @@ async function run() {
     const signal  = toPost[i];
     const { tier } = classifyTier(signal);
     const label   = isInplay(signal) ? 'IN-PLAY'
-                  : isPriceMove(signal) ? 'PRICE_MOVE'
+                  : isMover(signal) ? 'ODDS_MOVE'
                   : (tier ? tier.toUpperCase() : 'BELOW_FLOOR');
     const home    = signal.match?.home_team?.name ?? '?';
     const away    = signal.match?.away_team?.name ?? '?';
@@ -264,21 +264,21 @@ async function run() {
     const messageHash = hashMessage(message);
     const chatId      = telegram ? chatIdForSignal(telegram, signal) : telegram;
 
-    // Broadcast policy: pre-match, we only suggest DIAMOND signals. Value and
+    // Broadcast policy: pre-match, we only suggest PRIME signals. Value and
     // longshot picks remain visible on the site but are never pushed to the
     // channel. Mark them posted so they aren't reconsidered every run. In-play
-    // signals bypass this — they have their own channel + tier logic.
-    if (!isInplay(signal) && !isPriceMove(signal) && tier !== 'diamond') {
+    // signals and odds-movement alerts bypass this — they have their own logic.
+    if (!isInplay(signal) && !isMover(signal) && tier !== 'prime') {
       console.log(`\n[postToX] skip (${label}, not suggested) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
       await markPosted(supabase, signal.id, messageHash, null);
       skippedInfo++;
       continue;
     }
 
-    // Conflict guard: a Diamond that lost the per-match/market tie-break to a
+    // Conflict guard: a Prime that lost the per-match/market tie-break to a
     // higher-edge opposing pick is suppressed so the two can't cancel out.
-    if (!isInplay(signal) && tier === 'diamond' && !broadcastDiamondIds.has(signal.id)) {
-      console.log(`\n[postToX] skip (DIAMOND conflict, lower edge) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
+    if (!isInplay(signal) && !isMover(signal) && tier === 'prime' && !broadcastPrimeIds.has(signal.id)) {
+      console.log(`\n[postToX] skip (PRIME conflict, lower edge) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
       await markPosted(supabase, signal.id, messageHash, null);
       skippedInfo++;
       continue;
@@ -321,4 +321,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[postToX] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, buildMessage, isSuggested, isPriceMove, isInplay, chatIdForSignal };
+module.exports = { run, buildMessage, isSuggested, isMover, isInplay, chatIdForSignal };

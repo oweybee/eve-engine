@@ -20,7 +20,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
 
 // Clean-slate epoch: performance is tracked ONLY for signals detected on or
-// after this instant — the go-live of the Diamond-only + conflict-deduped
+// after this instant — the go-live of the Prime-only + conflict-deduped
 // structure. Everything before it was generated under the old rules and must
 // not count. Override with PERFORMANCE_EPOCH if the slate is ever reset again.
 const PERFORMANCE_EPOCH = process.env.PERFORMANCE_EPOCH || '2026-07-03T18:30:00Z';
@@ -423,21 +423,21 @@ async function calculatePerformance(supabase) {
   const prematchRows = rows.filter(r => (r.phase ?? 'prematch') !== 'inplay');
   const inplayRows   = rows.filter(r => r.phase === 'inplay');
 
-  // Headline performance reflects DIAMOND signals only — the sole tier we
+  // Headline performance reflects PRIME signals only — the sole tier we
   // suggest — and only those detected on/after the clean-slate epoch. Value and
   // longshot picks stay visible on the site as a tool but must never distort the
   // tracked win-rate / yield / ROI. (see lib/signalTier)
   const epochMs = new Date(PERFORMANCE_EPOCH).getTime();
-  const diamondRows = prematchRows.filter(r =>
-    classifyTier({ odds: r.detected_odds, edge: r.detected_edge }).tier === 'diamond' &&
+  const primeRows = prematchRows.filter(r =>
+    classifyTier({ odds: r.detected_odds, edge: r.detected_edge }).tier === 'prime' &&
     r.detected_at != null && new Date(r.detected_at).getTime() >= epochMs);
 
   // Collapse mutually-exclusive picks (e.g. home + away on the same match) to a
   // single tracked bet so opposing signals can't wash out the numbers.
-  const trackedDiamonds = dedupeConflicts(diamondRows);
+  const trackedPrimes = dedupeConflicts(primeRows);
 
   const calculated_at = new Date().toISOString();
-  const prematch = { ...summarisePhase(trackedDiamonds, { includeClv: true }),
+  const prematch = { ...summarisePhase(trackedPrimes, { includeClv: true }),
                      phase: 'prematch', singleton_key: 'current', calculated_at };
   const inplay   = { ...summarisePhase(inplayRows, { includeClv: false }),
                      phase: 'inplay', singleton_key: 'inplay', calculated_at };
