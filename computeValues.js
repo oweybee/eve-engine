@@ -387,7 +387,20 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
   if (!toInsert.length) return 0;
 
   const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
-  if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+  if (insErr) {
+    // value_signals_selection_price_unique is a permanent unique index on
+    // (match_id, market, outcome, model_architecture, detected_odds) — it has
+    // no time bound, unlike the 60-minute dedup check above. A price that
+    // recurs more than SIGNAL_DEDUP_MINUTES after it was last signalled looks
+    // "new" here but still collides with that older row. Don't let one stale
+    // duplicate crash the whole compute cycle (it was skipping every
+    // downstream step — API values, Telegram posts, results settling).
+    if (insErr.code === '23505') {
+      console.warn(`[value_signals] insert hit unique constraint outside dedup window — skipping: ${insErr.message}`);
+      return 0;
+    }
+    throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+  }
 
   const pm = toInsert.filter(r => r.signal_category === 'PriceMove').length;
   const pr = toInsert.filter(r => r.signal_category === 'Prime').length;
