@@ -15,11 +15,11 @@
 
 name: EVE Status Report
 
+# NOTE: The automatic midnight-UTC schedule was removed on 2026-07-04 at the
+# owner's request — the daily status report was being posted to Telegram and is
+# no longer wanted on a recurring basis. The report can still be generated on
+# demand via the "Run workflow" button (workflow_dispatch) below.
 on:
-  schedule:
-    # Midnight UTC — captures the full day's usage in one shot.
-    - cron: '0 0 * * *'
-
   workflow_dispatch:
     inputs:
       daily_quota:
