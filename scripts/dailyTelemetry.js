@@ -108,7 +108,7 @@ async function runDailyTelemetry() {
   // 3. SIGNAL VELOCITY ENGINE ------------------------------------------------
   const { data: activeSignals, error: sErr } = await supabase
     .from('value_signals')
-    .select('detected_at, signal_category, outcome, bookmaker, detected_edge, model_architecture')
+    .select('detected_at, signal_category, is_mover, outcome, bookmaker, detected_edge, model_architecture')
     .gte('detected_at', dayAgo);
 
   if (sErr) {
@@ -119,12 +119,13 @@ async function runDailyTelemetry() {
     const consensus = sig.filter(s => s.model_architecture === 'MARKET_CONSENSUS').length;
     const apiPred   = sig.filter(s => s.model_architecture === 'API_PREDICTIVE').length;
 
+    const movers = sig.filter(s => s.is_mover).length;
     console.log(`\n🚨 [SIGNALS ENGINE VELOCITY - LAST 24 HOURS]`);
     console.log(`   - Total Value Signals Triggered: ${sig.length}`);
-    console.log(`   - 🔥 Prime Signals:        ${byCat('Prime')}`);
-    console.log(`   - 📊 Standard Signals:     ${byCat('Standard')}`);
-    console.log(`   - 🎯 Longshot Edge:        ${byCat('Longshot Edge')}`);
-    console.log(`   - ⇅  Price Move Signals:   ${byCat('PriceMove')}`);
+    console.log(`   - 🟢 Prime Signals:        ${byCat('Prime')}`);
+    console.log(`   - ⚡ Value Signals:        ${byCat('Value')}`);
+    console.log(`   - 🎯 Longshot Signals:     ${byCat('Longshot')}`);
+    console.log(`   - ⇅  Odds Movement:        ${movers}`);
     console.log(`   - — by model: MARKET_CONSENSUS=${consensus} API_PREDICTIVE=${apiPred}`);
   }
   console.log(`\n${SUB}\n`);

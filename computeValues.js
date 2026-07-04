@@ -15,6 +15,7 @@
 
 const { getClient } = require('./lib/supabaseClient');
 const sm            = require('./lib/secondaryMarkets');
+const { categoryFor } = require('./lib/signalTier');
 
 // Config
 const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '2',    10);
@@ -366,17 +367,13 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
       continue;
     }
 
-    let signal_category;
-    if (lastOdds != null) {
-      signal_category = 'PriceMove';
-    } else if (c._edge >= 0.05) {
-      signal_category = 'Prime';
-    } else {
-      signal_category = 'Standard';
-    }
+    // Conviction tier comes from the canonical odds+edge ladder; a re-detection
+    // at a shifted price is an orthogonal event carried by is_mover.
+    const is_mover = lastOdds != null;
+    const signal_category = categoryFor({ odds: curOdds, edge: c._edge });
 
     const { _edge, _odds, ...signalRow } = c;
-    toInsert.push({ ...signalRow, signal_category });
+    toInsert.push({ ...signalRow, signal_category, is_mover });
   }
 
   console.log(
@@ -389,10 +386,11 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
   const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
   if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
 
-  const pm = toInsert.filter(r => r.signal_category === 'PriceMove').length;
+  const mv = toInsert.filter(r => r.is_mover).length;
   const pr = toInsert.filter(r => r.signal_category === 'Prime').length;
-  const st = toInsert.filter(r => r.signal_category === 'Standard').length;
-  console.log(`[value_signals] inserted ${toInsert.length} (PriceMove=${pm} Prime=${pr} Standard=${st})`);
+  const va = toInsert.filter(r => r.signal_category === 'Value').length;
+  const ls = toInsert.filter(r => r.signal_category === 'Longshot').length;
+  console.log(`[value_signals] inserted ${toInsert.length} (Prime=${pr} Value=${va} Longshot=${ls} movers=${mv})`);
   return toInsert.length;
 }
 
@@ -440,7 +438,7 @@ async function insertSecondarySignals(supabase, candidates, phase = 'prematch') 
       ...rest,
       phase,
       detected_mes:    null,             // frontend computes risk-adjusted MES
-      signal_category: c.detected_edge >= 0.05 ? 'Prime' : 'Standard',
+      signal_category: categoryFor({ odds: c.detected_odds, edge: c.detected_edge }),
     });
   }
 

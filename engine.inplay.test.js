@@ -85,7 +85,7 @@ const inplaySignal = {
 const prematchSignal = {
   phase: 'prematch', outcome: 'away', detected_odds: 2.5, detected_edge: 0.03,
   detected_mes: 60, bookmaker: 'Bet365', kickoff_at: new Date(KO).toISOString(),
-  signal_category: 'Standard',
+  signal_category: 'Value',
   match: { home_team: { name: 'A' }, away_team: { name: 'B' }, league: { name: 'L' } },
 };
 test('isInplay true for inplay phase', () => assert.ok(isInplay(inplaySignal)));
@@ -104,14 +104,14 @@ test('prematch value signal (odds 2.5 / edge 3%) → VALUE header, info-only, no
   assert.strictEqual(isSuggested(prematchSignal), false);
 });
 
-// Tier classifier + Diamond broadcast policy ------------------------------------
-const diamondSignal  = { ...prematchSignal, detected_odds: 2.2, detected_edge: 0.06 };
+// Tier classifier + Prime broadcast policy ------------------------------------
+const primeSignal    = { ...prematchSignal, detected_odds: 2.2, detected_edge: 0.06 };
 const longshotSignal = { ...prematchSignal, detected_odds: 5.0, detected_edge: 0.07 };
-test('diamond box (odds 2.2 / edge 6%) → DIAMOND header + suggested', () => {
-  assert.strictEqual(classifyTier(diamondSignal).tier, 'diamond');
-  assert.strictEqual(isSuggested(diamondSignal), true);
-  const m = buildMessage(diamondSignal);
-  assert.ok(m.includes('DIAMOND SIGNAL'), 'header');
+test('prime box (odds 2.2 / edge 6%) → PRIME header + suggested', () => {
+  assert.strictEqual(classifyTier(primeSignal).tier, 'prime');
+  assert.strictEqual(isSuggested(primeSignal), true);
+  const m = buildMessage(primeSignal);
+  assert.ok(m.includes('PRIME SIGNAL'), 'header');
   assert.ok(m.includes('highly-suggested'), 'suggested note');
 });
 test('longshot (odds ≥ 3.0) → LONGSHOT header, notable 6–10% flag, never suggested', () => {
@@ -121,11 +121,11 @@ test('longshot (odds ≥ 3.0) → LONGSHOT header, notable 6–10% flag, never s
   assert.strictEqual(isSuggested(longshotSignal), false);
   assert.ok(buildMessage(longshotSignal).includes('LONGSHOT · NOTABLE EDGE'));
 });
-test('classifier boundaries: 3.00 odds is a longshot, edge <2% hidden, ≥10% not diamond', () => {
+test('classifier boundaries: 3.00 odds is a longshot, edge <2% hidden, ≥10% not prime', () => {
   assert.strictEqual(classifyTier({ odds: 3.0, edge: 0.06 }).tier, 'longshot');
   assert.strictEqual(classifyTier({ odds: 2.0, edge: 0.015 }).tier, null);
   assert.strictEqual(classifyTier({ odds: 2.0, edge: 0.12 }).tier, 'value');
-  assert.strictEqual(classifyTier({ odds: 1.4, edge: 0.04 }).tier, 'diamond');
+  assert.strictEqual(classifyTier({ odds: 1.4, edge: 0.04 }).tier, 'prime');
 });
 test('dedupeConflicts keeps the highest-edge pick per match/market (no home+away wash)', () => {
   const rows = [
