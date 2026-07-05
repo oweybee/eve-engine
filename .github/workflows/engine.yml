@@ -27,7 +27,11 @@ on:
   schedule:
     # Every 5 minutes — minimum GitHub Actions interval.
     # ingestOdds.js self-gates against engine_plan.next_run_at.
-    - cron: '*/5 * * * *'
+    # Offset off :00/:05 (see #31) — '*/5' shares the same top-of-interval
+    # minute as huge numbers of other repos' crons, so GitHub deprioritizes
+    # or drops it under load; this workflow silently stopped firing for the
+    # 2026-07-05 01:26–04:03 UTC window for exactly that reason.
+    - cron: '1-59/5 * * * *'
 
   workflow_dispatch:
     inputs:
