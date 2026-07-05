@@ -78,15 +78,31 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
 
   const matchIds = matchData.map(m => m.id);
 
-  const { data: oddsData, error: oddsError } = await supabase
-    .from('odds')
-    .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds);
-
-  if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
+  // Fetch odds paginated. `odds` is a snapshot history (thousands of rows across
+  // the slate), and a plain .in() is capped at 1000 rows by PostgREST — which
+  // silently truncated the result so most matches got ZERO odds and were skipped
+  // (only a handful of games ever priced). We (a) restrict to the freshness
+  // window the consensus uses anyway, cutting volume sharply, and (b) page
+  // through in 1000-row chunks so every match's odds are returned.
+  const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
+  const oddsData = [];
+  const ODDS_PAGE = 1000;
+  for (let from = 0; ; from += ODDS_PAGE) {
+    const { data, error: oddsError } = await supabase
+      .from('odds')
+      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
+      .in('match_id', matchIds)
+      .gte('fetched_at', freshCutoff)
+      .order('id', { ascending: true })
+      .range(from, from + ODDS_PAGE - 1);
+    if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
+    if (!data?.length) break;
+    oddsData.push(...data);
+    if (data.length < ODDS_PAGE) break;
+  }
 
   const oddsByMatch = {};
-  for (const o of (oddsData ?? [])) {
+  for (const o of oddsData) {
     if (!oddsByMatch[o.match_id]) oddsByMatch[o.match_id] = [];
     oddsByMatch[o.match_id].push(o);
   }
