@@ -16,10 +16,9 @@
 name: EVE Status Report
 
 on:
-  schedule:
-    # Midnight UTC — captures the full day's usage in one shot.
-    - cron: '0 0 * * *'
-
+  # Automatic daily posting disabled by request — the API-usage/quota report no
+  # longer posts to Telegram on a schedule. Run it by hand from the Actions tab
+  # if you ever want a one-off report.
   workflow_dispatch:
     inputs:
       daily_quota:
