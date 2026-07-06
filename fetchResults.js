@@ -96,21 +96,21 @@ function fixtureOutcome(fx) {
 }
 
 /**
- * Settles a single value signal against a finished fixture, RESPECTING THE
- * MARKET. The old code compared the 1X2 result to sig.outcome directly, so any
- * secondary selection ('btts_yes', 'over', …) could never equal 'home'/'draw'/
- * 'away' and was always marked a loss. This resolves each market from the goals
- * payload:
+ * Resolves a market selection against a FINAL scoreline, RESPECTING THE MARKET.
+ * The old code compared the 1X2 result to sig.outcome directly, so any secondary
+ * selection ('btts_yes', 'over', …) could never equal 'home'/'draw'/'away' and
+ * was always marked a loss. This resolves each market from the goals alone:
  *   h2h     → match result
  *   btts    → did both teams score
  *   totals  → total goals vs the .5 line
- *   corners / bookings → not derivable from goals; returns null (stays pending)
- * Returns 'win' | 'loss' | null (null = not finished, or unsettleable market).
+ *   corners / bookings → not derivable from goals; returns null (unsettleable)
+ * Returns 'win' | 'loss' | null (null = missing goals, or unsettleable market).
+ *
+ * Pure and stateless so it can settle from EITHER the API fixture payload or the
+ * authoritative matches.goals columns, and so reconcileSettledSignals can replay
+ * it over already-settled rows.
  */
-function settleSignal(fx, market, outcome, line) {
-  const status = fx?.fixture?.status?.short;
-  if (!['FT', 'AET', 'PEN'].includes(status)) return null; // not finished
-  const hg = fx?.goals?.home, ag = fx?.goals?.away;
+function resultFromGoals(hg, ag, market, outcome, line) {
   if (hg == null || ag == null) return null;
 
   const oc = (outcome ?? '').toLowerCase();
@@ -127,7 +127,9 @@ function settleSignal(fx, market, outcome, line) {
     return null;
   }
   if (mk === 'totals') {
-    const L = Number(line);
+    // Guard null/'' explicitly — Number(null) is 0, which would silently settle
+    // against a phantom 0.5-style line. A totals signal with no line is unsettleable.
+    const L = (line == null || line === '') ? NaN : Number(line);
     if (!Number.isFinite(L)) return null;
     const total = hg + ag;
     if (oc === 'over')  return total > L ? 'win' : 'loss';
@@ -136,6 +138,17 @@ function settleSignal(fx, market, outcome, line) {
   }
   // corners / bookings — needs the statistics endpoint, not goals. Leave pending.
   return null;
+}
+
+/**
+ * Settles a single value signal against a finished API fixture. Thin wrapper:
+ * gates on the fixture being finished, then defers to resultFromGoals.
+ * Returns 'win' | 'loss' | null (null = not finished, or unsettleable market).
+ */
+function settleSignal(fx, market, outcome, line) {
+  const status = fx?.fixture?.status?.short;
+  if (!['FT', 'AET', 'PEN'].includes(status)) return null; // not finished
+  return resultFromGoals(fx?.goals?.home, fx?.goals?.away, market, outcome, line);
 }
 
 // ---------------------------------------------------------------------------
@@ -282,7 +295,7 @@ async function settlePendingSignals(supabase, cache = new Map()) {
     .select(`
       id, match_id, outcome, detected_odds, kickoff_at, result, market, market_line, phase,
       match:matches (
-        kickoff_at,
+        kickoff_at, status, goals_home, goals_away,
         home_team:teams!matches_home_team_id_fkey ( name ),
         away_team:teams!matches_away_team_id_fkey ( name )
       )
@@ -312,23 +325,37 @@ async function settlePendingSignals(supabase, cache = new Map()) {
     const kickoff = sig.kickoff_at ?? sig.match?.kickoff_at;
     if (!home || !away || !kickoff) { unmatched++; continue; }
 
-    const date = new Date(kickoff).toISOString().slice(0, 10); // UTC YYYY-MM-DD
-    let fixtures;
-    try {
-      fixtures = await fetchFixturesForDate(date, cache);
-    } catch (err) {
-      // Transient API error — leave this signal pending for the next run.
-      console.warn(`  [results] skip ${home} vs ${away}: ${err.message}`);
-      unmatched++;
-      continue;
+    // Prefer the AUTHORITATIVE score. settleFinishedMatches settles matches by
+    // EXACT API-Football fixture id and runs before us, so matches.goals is the
+    // source of truth. Settling from it (rather than a fuzzy name+date re-fetch)
+    // means a signal can never be resolved against the wrong same-day fixture,
+    // and the two passes can never disagree.
+    let result = null;
+    if (sig.match?.status === 'completed') {
+      result = resultFromGoals(sig.match.goals_home, sig.match.goals_away,
+                               sig.market, sig.outcome, sig.market_line);
     }
 
-    const fx = fixtures.find(f =>
-      namesMatch(home, f?.teams?.home?.name) && namesMatch(away, f?.teams?.away?.name)
-    );
-    // Market-aware: 1X2 by result, BTTS by both-scored, totals by goal line.
-    // Corners/cards return null and stay pending (not derivable from goals).
-    const result = fx ? settleSignal(fx, sig.market, sig.outcome, sig.market_line) : null;
+    // Fallback: matches.goals not available (e.g. non-numeric external_id that
+    // settleFinishedMatches skips) — resolve via the dated fixtures fetch.
+    if (result == null && sig.match?.status !== 'completed') {
+      const date = new Date(kickoff).toISOString().slice(0, 10); // UTC YYYY-MM-DD
+      let fixtures;
+      try {
+        fixtures = await fetchFixturesForDate(date, cache);
+      } catch (err) {
+        // Transient API error — leave this signal pending for the next run.
+        console.warn(`  [results] skip ${home} vs ${away}: ${err.message}`);
+        unmatched++;
+        continue;
+      }
+      const fx = fixtures.find(f =>
+        namesMatch(home, f?.teams?.home?.name) && namesMatch(away, f?.teams?.away?.name)
+      );
+      // Market-aware: 1X2 by result, BTTS by both-scored, totals by goal line.
+      // Corners/cards return null and stay pending (not derivable from goals).
+      result = fx ? settleSignal(fx, sig.market, sig.outcome, sig.market_line) : null;
+    }
     if (result == null) { unmatched++; continue; }
 
     // CLV is undefined for in-play signals — the line already closed at kickoff,
@@ -359,6 +386,58 @@ async function settlePendingSignals(supabase, cache = new Map()) {
 
   console.log(`[results] settled ${settled}, unmatched ${unmatched}`);
   return { settled, unmatched };
+}
+
+// ---------------------------------------------------------------------------
+// 2b. Reconcile already-settled signals against the authoritative score
+//
+// Settlement used to be write-once: settlePendingSignals only ever touches
+// result='pending', so any signal settled against a WRONG result stayed wrong
+// forever. That bit us badly — an earlier settleSignal bug marked every
+// secondary-market signal (btts/totals) a loss regardless of the score; the
+// code was fixed but the already-settled rows kept their bogus 'loss',
+// understating tracked performance.
+//
+// This pass replays resultFromGoals over every settled signal whose match has a
+// final score and corrects any mismatch. It settles from matches.goals (exact
+// fixture id), so it is self-healing: whatever caused a wrong settlement — old
+// bug, a provisional in-play score, a fuzzy mismatch — is fixed once the true
+// score is known. Only `result` is rewritten; closing_odds/clv are captured at
+// the close and do not depend on the outcome.
+// ---------------------------------------------------------------------------
+
+async function reconcileSettledSignals(supabase) {
+  const { data: rows, error } = await supabase
+    .from('value_signals')
+    .select(`
+      id, outcome, market, market_line, result,
+      match:matches ( status, goals_home, goals_away )
+    `)
+    .in('result', ['win', 'loss']);
+
+  if (error) throw new Error(`reconcileSettledSignals(select): ${error.message}`);
+  if (!rows?.length) return { corrected: 0 };
+
+  let corrected = 0;
+  for (const sig of rows) {
+    const m = sig.match;
+    if (!m || m.status !== 'completed' || m.goals_home == null || m.goals_away == null) continue;
+
+    const correct = resultFromGoals(m.goals_home, m.goals_away, sig.market, sig.outcome, sig.market_line);
+    if (correct == null || correct === sig.result) continue;
+
+    const { error: upErr } = await supabase
+      .from('value_signals')
+      .update({ result: correct })
+      .eq('id', sig.id);
+    if (upErr) { console.warn(`  [results] reconcile ${sig.id} failed: ${upErr.message}`); continue; }
+
+    corrected++;
+    console.log(`  [results] reconciled ${sig.market}/${sig.outcome}: ${sig.result} → ${correct}`);
+  }
+
+  console.log(`[results] reconciled ${corrected} mis-settled signal(s)`);
+  return { corrected };
 }
 
 // ---------------------------------------------------------------------------
@@ -478,6 +557,12 @@ async function run() {
   }
 
   try {
+    await reconcileSettledSignals(supabase);
+  } catch (err) {
+    console.error('[results] reconcile error:', err.message);
+  }
+
+  try {
     await calculatePerformance(supabase);
   } catch (err) {
     console.error('[results] performance error:', err.message);
@@ -490,4 +575,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[results] unhandled:', err); process.exit(1); });
 }
 
-module.exports = { run, calculatePerformance, settlePendingSignals, settleFinishedMatches, namesMatch, fixtureOutcome, settleSignal };
+module.exports = { run, calculatePerformance, settlePendingSignals, settleFinishedMatches, reconcileSettledSignals, namesMatch, fixtureOutcome, settleSignal, resultFromGoals };
