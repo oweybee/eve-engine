@@ -13,7 +13,11 @@
  *   - EV_THRESHOLD default lowered to 0.005 (0.5%) to surface marginal value
  */
 
-const { getClient } = require('./lib/supabaseClient');
+// NOTE: lib/supabaseClient is required lazily inside main() (see below) rather
+// than at module load. It pulls in @supabase/supabase-js and throws if the
+// SUPABASE_* env vars are absent, which would make the pure pricing functions
+// (computeConsensus/computeMatch) impossible to unit-test without a live DB.
+// The pure exports below have no DB dependency.
 const sm            = require('./lib/secondaryMarkets');
 const { categoryFor } = require('./lib/signalTier');
 
@@ -500,6 +504,7 @@ async function withPool(items, fn, concurrency) {
 }
 
 async function main() {
+  const { getClient } = require('./lib/supabaseClient'); // lazy — see top-of-file note
   const supabase = getClient();
 
   console.log('[engine] computeValues v7 — Market Consensus (Kaunitz) + price-change signals');

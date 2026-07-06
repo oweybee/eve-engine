@@ -1,16 +1,22 @@
 'use strict';
 
+/**
+ * engine.test.js — unit tests for the Market-Consensus value engine.
+ *
+ * Zero deps, no DB / network. Exercises the two pure exports of
+ * computeValues.js:
+ *   • computeConsensus(oddsRows) — dedup → outlier drop → de-vig → edge
+ *   • computeMatch(match)        — the computed_values row builder
+ *
+ * (The previous version of this file imported ./computeValues.v2 and a set of
+ * granular helpers — computeEV/computeEdge/deVig/impliedProb — that no longer
+ * exist: that logic was folded into computeConsensus in the v7 refactor, so the
+ * suite crashed at require() and covered nothing. These tests target the current
+ * API.)
+ */
+
 const assert = require('assert');
-const {
-  computeMatch,
-  strengthToMatchProbabilities,
-  deriveStrengthFromForm,
-  bestOddsFromRows,
-  deVig,
-  computeEdge,
-  computeEV,
-  impliedProb,
-} = require('./computeValues.v2');
+const { computeConsensus, computeMatch } = require('./computeValues');
 
 let passed = 0, failed = 0;
 function test(label, fn) {
@@ -18,211 +24,130 @@ function test(label, fn) {
   catch (err) { console.error(`  ✗ ${label}\n    ${err.message}`); failed++; }
 }
 
-// ---- impliedProb ----
-console.log('\nimpliedProb');
-test('1/2.0 = 0.5', () => assert.ok(Math.abs(impliedProb(2.0) - 0.5) < 1e-9));
-test('odds=1 returns null', () => assert.strictEqual(impliedProb(1), null));
-test('odds=0 returns null', () => assert.strictEqual(impliedProb(0), null));
+// Fresh timestamp so the ODDS_MAX_AGE_HOURS staleness guard never trips.
+const NOW = new Date().toISOString();
+const HOURS_AGO = h => new Date(Date.now() - h * 3_600_000).toISOString();
 
-// ---- deVig ----
-console.log('\ndeVig');
-test('output sums to 1', () => {
-  const r = deVig(0.55, 0.30, 0.25);
-  assert.ok(Math.abs(r.home + r.draw + r.away - 1.0) < 1e-9);
+// Build an h2h odds row. Distinct bookmaker names so the per-book dedup keeps them.
+const row = (bookmaker, home, draw, away, fetched_at = NOW) =>
+  ({ bookmaker, market: 'h2h', home_odds: home, draw_odds: draw, away_odds: away, fetched_at });
+
+// ── computeConsensus: guard conditions ───────────────────────────────────────
+console.log('\ncomputeConsensus — guards');
+test('no h2h rows → null', () => assert.strictEqual(computeConsensus([]), null));
+test('below MIN_BOOKMAKERS (1 book) → null', () =>
+  assert.strictEqual(computeConsensus([row('bet365', 2.0, 3.5, 4.0)]), null));
+test('stale odds (25h old) → null', () =>
+  assert.strictEqual(computeConsensus([
+    row('bet365',   2.0, 3.5, 4.0, HOURS_AGO(25)),
+    row('pinnacle', 2.0, 3.5, 4.0, HOURS_AGO(25)),
+  ]), null));
+
+// ── computeConsensus: de-vig invariant ───────────────────────────────────────
+console.log('\ncomputeConsensus — de-vig');
+test('de-vigged consensus probs sum to 1', () => {
+  const c = computeConsensus([
+    row('bet365',   2.0, 3.6, 4.0),
+    row('pinnacle', 2.05, 3.5, 3.9),
+  ]);
+  const sum = c.home.p_cons + c.draw.p_cons + c.away.p_cons;
+  assert.ok(Math.abs(sum - 1) < 1e-9, `expected ~1, got ${sum}`);
 });
-test('overround preserved', () => {
-  const r = deVig(0.5, 0.3, 0.25);
-  assert.ok(Math.abs(r.overround - 1.05) < 1e-9);
-});
-test('null on zero input', () => assert.strictEqual(deVig(0,0,0), null));
-
-// ---- computeEdge ----
-console.log('\ncomputeEdge');
-test('positive when model > implied', () => assert.ok(computeEdge(0.55, 0.45) > 0));
-test('negative when model < implied', () => assert.ok(computeEdge(0.30, 0.50) < 0));
-test('zero when equal', () => assert.strictEqual(computeEdge(0.45, 0.45), 0));
-test('null when model null', () => assert.strictEqual(computeEdge(null, 0.45), null));
-
-// ---- computeEV ----
-console.log('\ncomputeEV');
-test('EV = model*odds - 1', () => {
-  const ev = computeEV(0.6, 2.0);
-  assert.ok(Math.abs(ev - (0.6*2.0-1)) < 1e-9);
-});
-test('positive at 2.0 with 0.6 prob', () => assert.ok(computeEV(0.6, 2.0) > 0));
-test('negative at 1.5 with 0.4 prob', () => assert.ok(computeEV(0.4, 1.5) < 0));
-test('null inputs', () => assert.strictEqual(computeEV(null, 2.0), null));
-
-// ---- CRITICAL: edge and EV sign consistency ----
-console.log('\nSIGNAL CONSISTENCY (edge ⟺ EV)');
-test('positive edge always means positive EV', () => {
-  // Test 100 random cases
-  for (let i = 0; i < 100; i++) {
-    const bestOdds = 1.2 + Math.random() * 8; // 1.2 to 9.2
-    const implied = 1 / bestOdds;
-    const model = implied + 0.001 + Math.random() * 0.1; // always above implied
-    if (model >= 1) continue;
-    const edge = computeEdge(model, implied);
-    const ev   = computeEV(model, bestOdds);
-    assert.ok(edge > 0, `edge should be positive: ${edge}`);
-    assert.ok(ev > 0,   `ev should be positive: model=${model.toFixed(4)} odds=${bestOdds.toFixed(2)} ev=${ev}`);
-  }
-});
-test('negative edge always means negative EV', () => {
-  for (let i = 0; i < 100; i++) {
-    const bestOdds = 1.2 + Math.random() * 8;
-    const implied = 1 / bestOdds;
-    const model = Math.max(0.01, implied - 0.001 - Math.random() * 0.1);
-    if (model <= 0 || model >= 1) continue;
-    const edge = computeEdge(model, implied);
-    const ev   = computeEV(model, bestOdds);
-    assert.ok(edge < 0, `edge should be negative: ${edge}`);
-    assert.ok(ev < 0,   `ev should be negative: model=${model.toFixed(4)} odds=${bestOdds.toFixed(2)} ev=${ev}`);
-  }
-});
-test('PREVIOUS BUG: edge vs fair-prob vs EV can contradict (documenting fix)', () => {
-  // This is the bug we fixed. Demonstrate old formula was wrong:
-  const overround = 1.10;
-  const raw_implied = 0.50;                          // from best odds = 2.0
-  const fair_prob   = raw_implied / overround;       // 0.4545 (de-vigged)
-  const model_prob  = 0.48;                          // above fair (old edge=+0.025)
-  const best_odds   = 1 / raw_implied;               // 2.0
-
-  const old_edge = model_prob - fair_prob;           // +0.025 → old value flag = TRUE
-  const ev       = computeEV(model_prob, best_odds); // -0.04  → NEGATIVE
-
-  // Old system: value_flag=TRUE but EV<0 — contradiction
-  assert.ok(old_edge > 0,  'old edge was positive (bug)');
-  assert.ok(ev < 0,        'EV is negative — contradiction proven');
-
-  // New system: edge uses implied from best odds
-  const new_edge = computeEdge(model_prob, raw_implied); // -0.02 → value flag = FALSE
-  assert.ok(new_edge < 0, 'new edge correctly negative — consistent with EV');
-  assert.ok(Math.sign(new_edge) === Math.sign(ev), 'new edge and EV signs match');
+test('fair odds are positive and finite on a vigged book', () => {
+  const c = computeConsensus([
+    row('bet365',   2.0, 3.6, 4.0),
+    row('pinnacle', 2.0, 3.6, 4.0),
+  ]);
+  assert.ok(c.home.fair_odds > 0 && c.draw.fair_odds > 0 && c.away.fair_odds > 0);
 });
 
-// ---- bestOddsFromRows ----
-console.log('\nbestOddsFromRows');
-const rows = [
-  { bookmaker: 'A', home_odds: '1.85', draw_odds: '3.40', away_odds: '4.50', fetched_at: '2024-06-11T10:00:00Z' },
-  { bookmaker: 'B', home_odds: '1.80', draw_odds: '3.60', away_odds: '4.40', fetched_at: '2024-06-11T14:00:00Z' },
-];
-test('picks best home odds', () => assert.strictEqual(bestOddsFromRows(rows).home, 1.85));
-test('picks best draw odds', () => assert.strictEqual(bestOddsFromRows(rows).draw, 3.60));
-test('returns null for empty', () => assert.strictEqual(bestOddsFromRows([]), null));
-test('fetchedAt is EARLIEST of best-price sources', () => {
-  // home best comes from A (10:00), draw best from B (14:00), away best from A (10:00)
-  // earliest = 10:00
-  const r = bestOddsFromRows(rows);
-  assert.strictEqual(r.fetchedAt, '2024-06-11T10:00:00Z');
+// ── computeConsensus: edge detection ─────────────────────────────────────────
+console.log('\ncomputeConsensus — edge detection');
+test('a genuinely long best price flags a plausible edge', () => {
+  const c = computeConsensus([
+    row('bet365',        2.10, 3.60, 3.70),
+    row('pinnacle',      2.10, 3.60, 3.70),
+    row('betfair_ex_uk', 2.35, 3.50, 3.60), // best home price
+  ]);
+  assert.strictEqual(c.home.has_edge, true, 'home should have edge');
+  assert.strictEqual(c.home.max_odds, 2.35, 'best home odds should be 2.35');
+  assert.ok(c.home.edge > 0 && c.home.edge < 0.30, `edge out of range: ${c.home.edge}`);
+  // Internal consistency: edge == p_adj * best_odds - 1 (cross-checks two fields)
+  const recomputed = c.home.p_adj * c.home.max_odds - 1;
+  assert.ok(Math.abs(c.home.edge - recomputed) < 1e-6, `edge≠p_adj·odds-1 (${c.home.edge} vs ${recomputed})`);
+  assert.ok(c.home.max_odds > c.home.fair_odds, 'best price must beat fair odds when edge fires');
+  // Outcomes at the consensus price should NOT flag value.
+  assert.strictEqual(c.draw.has_edge, false);
+  assert.strictEqual(c.away.has_edge, false);
+});
+test('efficient market (all books agree) → no edge', () => {
+  const c = computeConsensus([
+    row('bet365',   2.00, 3.60, 4.00),
+    row('pinnacle', 2.00, 3.60, 4.00),
+  ]);
+  assert.strictEqual(c.home.has_edge, false);
+  assert.strictEqual(c.draw.has_edge, false);
+  assert.strictEqual(c.away.has_edge, false);
 });
 
-// ---- strengthToMatchProbabilities ----
-console.log('\nstrengthToMatchProbabilities');
-test('probs sum to 1', () => {
-  const p = strengthToMatchProbabilities(1500, 1500);
-  assert.ok(Math.abs(p.home + p.draw + p.away - 1.0) < 1e-9);
+// ── computeConsensus: palpable-outlier & implausible-edge guards ──────────────
+console.log('\ncomputeConsensus — outlier / implausible guards');
+test('palpable outlier price is dropped from best-odds (>=3 books)', () => {
+  const c = computeConsensus([
+    row('bet365',    3.50, 3.40, 2.10),
+    row('pinnacle',  3.50, 3.40, 2.10),
+    row('rogue_book', 40.0, 3.40, 2.10), // 40.0 is >3× the 3.50 median → dropped
+  ]);
+  assert.notStrictEqual(c.home.max_odds, 40.0, 'the 40.0 outlier must not become the best price');
+  assert.ok(c.home.max_odds <= 3.50 * 3, 'best price should be within the outlier bound');
 });
-test('home advantage: home > away at equal strength', () => {
-  const p = strengthToMatchProbabilities(1500, 1500);
-  assert.ok(p.home > p.away);
-});
-test('stronger home team wins more', () => {
-  const p = strengthToMatchProbabilities(1700, 1300);
-  assert.ok(p.home > 0.5);
-});
-test('draw probability in realistic range', () => {
-  const p = strengthToMatchProbabilities(1500, 1500);
-  assert.ok(p.draw >= 0.15 && p.draw <= 0.35, `draw=${p.draw}`);
-});
-test('all outcomes positive', () => {
-  const p = strengthToMatchProbabilities(1800, 1200);
-  assert.ok(p.home > 0 && p.draw > 0 && p.away > 0);
+test('implausible edge (>MAX_PLAUSIBLE_EDGE) is rejected, not published', () => {
+  // 2 books (outlier filter needs >=3), one absurd home price at 5.0.
+  const c = computeConsensus([
+    row('bet365', 2.00, 3.60, 4.00),
+    row('rogue',  5.00, 3.60, 4.00),
+  ]);
+  assert.strictEqual(c.home.has_edge, false, 'implausible edge must be dropped');
+  assert.strictEqual(c.home.edge, 0);
 });
 
-// ---- deriveStrengthFromForm ----
-console.log('\nderiveStrengthFromForm');
-test('no form returns default', () => assert.strictEqual(deriveStrengthFromForm([]), 1500));
-test('wins increase strength', () => assert.ok(deriveStrengthFromForm(['W','W','W']) > 1500));
-test('losses decrease strength', () => assert.ok(deriveStrengthFromForm(['L','L','L']) < 1500));
-test('stable range (5 results)', () => {
-  const s = deriveStrengthFromForm(['W','W','D','L','W']);
-  assert.ok(s > 1400 && s < 1600, `strength out of range: ${s}`);
+// ── computeMatch: row builder ────────────────────────────────────────────────
+console.log('\ncomputeMatch');
+test('no priceable odds → { skipped: true }', () => {
+  assert.deepStrictEqual(computeMatch({ id: 'm1', odds: [] }), { skipped: true });
+});
+test('builds a MARKET_CONSENSUS row and flags value on a real edge', () => {
+  const match = {
+    id: 'm2',
+    odds: [
+      row('bet365',        2.10, 3.60, 3.70),
+      row('pinnacle',      2.10, 3.60, 3.70),
+      row('betfair_ex_uk', 2.35, 3.50, 3.60),
+    ],
+  };
+  const r = computeMatch(match);
+  assert.strictEqual(r.skipped, false, 'should not be skipped');
+  assert.strictEqual(r.hasValue, true, 'a real home edge means the match has value');
+  assert.strictEqual(r.row.match_id, 'm2');
+  assert.strictEqual(r.row.model_architecture, 'MARKET_CONSENSUS');
+  assert.strictEqual(r.row.best_home_odds, 2.35);
+  assert.strictEqual(r.row.home_value, true, 'home edge ≥ EV_THRESHOLD should be value');
+  assert.ok(r.row.max_edge_score > 0 && r.row.max_edge_score <= 100);
+  assert.strictEqual(r.row.best_outcome, 'home');
+});
+test('efficient market → row with no value flags', () => {
+  const r = computeMatch({
+    id: 'm3',
+    odds: [ row('bet365', 2.00, 3.60, 4.00), row('pinnacle', 2.00, 3.60, 4.00) ],
+  });
+  assert.strictEqual(r.skipped, false);
+  assert.strictEqual(r.hasValue, false);
+  assert.strictEqual(r.row.home_value, false);
+  assert.strictEqual(r.row.draw_value, false);
+  assert.strictEqual(r.row.away_value, false);
+  assert.strictEqual(r.row.best_outcome, null, 'no edge → no best_outcome');
 });
 
-// ---- computeMatch integration ----
-console.log('\ncomputeMatch integration');
-const mockMatch = {
-  id: 'match-001',
-  home_team: { id: 'team-h', name: 'Home FC' },
-  away_team: { id: 'team-a', name: 'Away FC' },
-  league: { id: 'lg-1', name: 'Test League' },
-  odds: [
-    { bookmaker: 'A', home_odds: 1.80, draw_odds: 3.50, away_odds: 4.50, fetched_at: new Date().toISOString() },
-    { bookmaker: 'B', home_odds: 1.85, draw_odds: 3.40, away_odds: 4.60, fetched_at: new Date().toISOString() },
-  ],
-};
-const mockForm = {
-  'team-h': ['W','W','D','W','L'],
-  'team-a': ['L','D','W','L','L'],
-};
-
-test('returns result for valid input', () => assert.ok(computeMatch(mockMatch, mockForm) !== null));
-test('uses best odds across books', () => {
-  const r = computeMatch(mockMatch, mockForm);
-  assert.strictEqual(r.best_home_odds, 1.85);
-  assert.strictEqual(r.best_away_odds, 4.60);
-});
-test('schema fields present, no extra fields written to DB', () => {
-  const r = computeMatch(mockMatch, mockForm);
-  const schemaFields = [
-    'match_id','best_home_odds','best_draw_odds','best_away_odds',
-    'fair_home_odds','fair_draw_odds','fair_away_odds',
-    'home_edge','draw_edge','away_edge',
-    'home_value','draw_value','away_value',
-    'odds_fetched_at','computed_at',
-  ];
-  const internalFields = ['_maxEdge','_homeEV','_drawEV','_awayEV'];
-  // All schema fields present
-  schemaFields.forEach(f => assert.ok(f in r, `missing schema field: ${f}`));
-  // Internal fields present (will be stripped before upsert)
-  internalFields.forEach(f => assert.ok(f in r, `missing internal field: ${f}`));
-  // max_edge NOT a writeable field (generated column)
-  assert.ok(!('max_edge' in r), 'max_edge should not be in output (generated column)');
-  // No EV fields in schema output
-  assert.ok(!('home_ev' in r), 'home_ev should not be in DB row');
-});
-test('value flags are booleans', () => {
-  const r = computeMatch(mockMatch, mockForm);
-  assert.strictEqual(typeof r.home_value, 'boolean');
-  assert.strictEqual(typeof r.draw_value, 'boolean');
-  assert.strictEqual(typeof r.away_value, 'boolean');
-});
-test('edge and value flag always consistent with EV', () => {
-  const r = computeMatch(mockMatch, mockForm);
-  // For each outcome: if value_flag=true then EV must be positive
-  if (r.home_value) assert.ok(r._homeEV > 0, `home_value=true but homeEV=${r._homeEV}`);
-  if (r.draw_value) assert.ok(r._drawEV > 0, `draw_value=true but drawEV=${r._drawEV}`);
-  if (r.away_value) assert.ok(r._awayEV > 0, `away_value=true but awayEV=${r._awayEV}`);
-});
-test('null for no odds', () => assert.strictEqual(computeMatch({...mockMatch, odds: []}, {}), null));
-test('handles missing form (default strength)', () => assert.ok(computeMatch(mockMatch, {}) !== null));
-test('_maxEdge null when no positive edges', () => {
-  // Force model to always be below implied by using extreme short-price odds
-  const shortMatch = { ...mockMatch, odds: [{
-    bookmaker: 'X', home_odds: 1.05, draw_odds: 12.0, away_odds: 25.0,
-    fetched_at: new Date().toISOString()
-  }]};
-  const r = computeMatch(shortMatch, {});
-  // At 1.05 implied=0.952, model can't beat that from default strength
-  if (r && r._maxEdge !== null) {
-    assert.ok(typeof r._maxEdge === 'number');
-  } else if (r) {
-    assert.strictEqual(r._maxEdge, null);
-  }
-  assert.ok(true); // either is valid
-});
-
-// ---- Summary ----
-console.log(`\n${passed+failed} tests: ${passed} passed, ${failed} failed\n`);
-if (failed > 0) process.exit(1);
+// ── summary ──────────────────────────────────────────────────────────────────
+console.log(`\n${passed} passed, ${failed} failed`);
+process.exit(failed ? 1 : 0);
