@@ -140,12 +140,23 @@ test('dedupeConflicts keeps the highest-edge pick per match/market (no home+away
   assert.strictEqual(por.outcome, 'away', 'keeps the higher-edge (away 8%) over home 5%');
   assert.ok(kept.some(r => r.market === 'totals'), 'different market survives (not a conflict)');
 });
+const twoChan = { primeChatId: 'paid', freeChatId: 'free', inplayChatId: 'live' };
 test('routes in-play to in-play channel', () =>
-  assert.strictEqual(chatIdForSignal({ chatId: 'main', inplayChatId: 'live' }, inplaySignal), 'live'));
-test('routes pre-match to main channel', () =>
-  assert.strictEqual(chatIdForSignal({ chatId: 'main', inplayChatId: 'live' }, prematchSignal), 'main'));
+  assert.strictEqual(chatIdForSignal(twoChan, inplaySignal), 'live'));
+test('routes Prime to the paid channel', () =>
+  assert.strictEqual(chatIdForSignal(twoChan, primeSignal), 'paid'));
+test('routes Value to the free channel', () =>
+  assert.strictEqual(chatIdForSignal(twoChan, prematchSignal), 'free'));
+test('routes Longshot to the free channel', () =>
+  assert.strictEqual(chatIdForSignal(twoChan, longshotSignal), 'free'));
+test('below-floor pick → null (never broadcast)', () =>
+  assert.strictEqual(chatIdForSignal(twoChan, { ...prematchSignal, detected_odds: 2.0, detected_edge: 0.01 }), null));
 test('in-play with no live channel → null (skip, no leak)', () =>
-  assert.strictEqual(chatIdForSignal({ chatId: 'main', inplayChatId: null }, inplaySignal), null));
+  assert.strictEqual(chatIdForSignal({ ...twoChan, inplayChatId: null }, inplaySignal), null));
+test('Value with no free channel → null (recorded, not posted)', () =>
+  assert.strictEqual(chatIdForSignal({ primeChatId: 'paid', inplayChatId: 'live' }, prematchSignal), null));
+test('legacy chatId-only config: Prime falls back to it', () =>
+  assert.strictEqual(chatIdForSignal({ chatId: 'main', inplayChatId: 'live' }, primeSignal), 'main'));
 
 console.log('ingestLiveOdds.extractLiveH2h');
 test('extracts 1X2 from live odds bet', () => {

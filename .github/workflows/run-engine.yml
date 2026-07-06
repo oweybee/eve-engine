@@ -24,9 +24,12 @@ jobs:
       BETFAIR_APP_KEY:           ${{ secrets.BETFAIR_APP_KEY }}
       BETFAIR_USERNAME:          ${{ secrets.BETFAIR_USERNAME }}
       BETFAIR_PASSWORD:          ${{ secrets.BETFAIR_PASSWORD }}
-      # Telegram
+      # Telegram — Prime → paid channel, Value/Longshot → free channel (postToX.js).
       TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_PRIME_CHAT_ID:    ${{ secrets.TELEGRAM_PRIME_CHAT_ID }}
+      TELEGRAM_FREE_CHAT_ID:     ${{ secrets.TELEGRAM_FREE_CHAT_ID }}
+      TELEGRAM_PRIME_INVITE_URL: ${{ vars.TELEGRAM_PRIME_INVITE_URL }}
       # X (Twitter)
       X_API_KEY:                 ${{ secrets.X_API_KEY }}
       X_API_SECRET:              ${{ secrets.X_API_SECRET }}

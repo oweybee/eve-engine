@@ -37,10 +37,16 @@ jobs:
       # With TELEGRAM_INPLAY_CHAT_ID unset these are recorded, not posted.
       INPLAY_WINPROB_ENABLED:    'true'
       INPLAY_EV_THRESHOLD:       '0.02'
-      # Telegram — in-play posts route to the dedicated channel. If unset,
+      # Telegram — in-play posts route to the dedicated in-play channel. If unset,
       # in-play signals are recorded but NOT posted (never leak to the main feed).
+      # This job also runs postToX.js, which shares the posted_signals dedup with
+      # the pre-match engine, so it carries the same paid/free channel config to
+      # route (and not accidentally suppress) any pre-match Value/Longshot picks.
       TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_PRIME_CHAT_ID:    ${{ secrets.TELEGRAM_PRIME_CHAT_ID }}
+      TELEGRAM_FREE_CHAT_ID:     ${{ secrets.TELEGRAM_FREE_CHAT_ID }}
+      TELEGRAM_PRIME_INVITE_URL: ${{ vars.TELEGRAM_PRIME_INVITE_URL }}
       TELEGRAM_INPLAY_CHAT_ID:   ${{ secrets.TELEGRAM_INPLAY_CHAT_ID }}
 
     steps:

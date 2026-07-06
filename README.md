@@ -103,6 +103,24 @@ In-play-specific env vars: `INPLAY_MODEL_ENABLED` (default `false`),
 `INPLAY_MIN_ELO_GAMES` (default `5`), `LIVE_WINDOW_MIN` (default `160`),
 `TELEGRAM_INPLAY_CHAT_ID`. ELO tuning: `ELO_K`, `ELO_HOME_ADV`, `ELO_DEFAULT`.
 
+### Telegram channels (two-tier)
+
+`postToX.js` routes every signal by its conviction tier (`lib/signalTier.js`):
+
+| Tier | Destination | Env var |
+| --- | --- | --- |
+| **Prime** (odds 1.40–3.00, edge 4–10%) | **Paid** channel | `TELEGRAM_PRIME_CHAT_ID` |
+| **Value** / **Longshot** | **Free** channel | `TELEGRAM_FREE_CHAT_ID` |
+| **In-play** | In-play channel | `TELEGRAM_INPLAY_CHAT_ID` |
+
+A channel left unset means that tier is recorded (`posted_signals`) but not
+posted. `TELEGRAM_PRIME_CHAT_ID` falls back to the legacy `TELEGRAM_CHAT_ID` if
+unset, so an un-migrated deploy keeps posting Prime where it always did.
+Below-floor edges (< 2%) are never posted. Set `TELEGRAM_PRIME_INVITE_URL` (a
+GitHub Actions *variable*) to add a "Go Prime" upsell footer to free-channel
+posts. Both the pre-match engine and the in-play job run `postToX.js` and share
+the `posted_signals` dedup, so both carry the full channel config.
+
 ---
 
 ## Required secrets

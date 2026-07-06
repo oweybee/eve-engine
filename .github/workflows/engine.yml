@@ -72,7 +72,13 @@ jobs:
       BETFAIR_USERNAME:          ${{ secrets.BETFAIR_USERNAME }}
       BETFAIR_PASSWORD:          ${{ secrets.BETFAIR_PASSWORD }}
       TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      # Legacy single channel — Prime falls back to this if the paid one is unset.
       TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
+      # Paid channel (Prime) + free channel (Value/Longshot). See postToX.js.
+      TELEGRAM_PRIME_CHAT_ID:    ${{ secrets.TELEGRAM_PRIME_CHAT_ID }}
+      TELEGRAM_FREE_CHAT_ID:     ${{ secrets.TELEGRAM_FREE_CHAT_ID }}
+      # Optional upsell link shown on free-channel posts.
+      TELEGRAM_PRIME_INVITE_URL: ${{ vars.TELEGRAM_PRIME_INVITE_URL }}
       ACTIVE_START_HOUR:         '0'
       ACTIVE_END_HOUR:           '24'
       DAILY_REQUEST_BUDGET:      ${{ vars.DAILY_REQUEST_BUDGET || '75000' }}

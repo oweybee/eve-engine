@@ -1,14 +1,21 @@
 /**
  * MaxEdge — Automated Signal Posting (Telegram)
  *
- * Broadcast policy (pre-match): we only ever suggest PRIME signals — the
- * back-tested sweet spot of odds 1.40–3.00 with a 4–10% edge. Value and
- * longshot picks stay visible on the site as a tool, but are never broadcast
- * as a suggested signal and never counted in performance. See lib/signalTier.js.
+ * Two-tier broadcast, routed by conviction (see lib/signalTier.js):
  *
- *   PRIME          — odds 1.40–3.00 AND edge 4–10%. The only broadcast tier.
- *   ODDS MOVEMENT  — is_mover=true (odds shifted on an existing signal)
- *   IN-PLAY        — phase='inplay', routed to the dedicated in-play channel
+ *   PRIME  → PAID channel (TELEGRAM_PRIME_CHAT_ID). The back-tested sweet spot:
+ *            odds 1.40–3.00 AND edge 4–10%. Suggested + tracked.
+ *   VALUE + LONGSHOT → FREE channel (TELEGRAM_FREE_CHAT_ID). Shown for
+ *            information only — never suggested, never tracked — but broadcast
+ *            to the free channel so it always has a live feed.
+ *   ODDS MOVEMENT → follows its underlying tier (a Prime mover → paid, a
+ *            value/longshot mover → free).
+ *   IN-PLAY → dedicated in-play channel (TELEGRAM_INPLAY_CHAT_ID).
+ *
+ * A channel that isn't configured means its tier is recorded but not posted
+ * (below-floor edges are never posted at all). If TELEGRAM_PRIME_CHAT_ID is
+ * unset, Prime falls back to the legacy TELEGRAM_CHAT_ID so an un-migrated
+ * deploy keeps posting Prime exactly where it used to.
  */
 'use strict';
 
@@ -22,6 +29,10 @@ const DRY_RUN = process.env.DRY_RUN === '1';
 const CHANNEL = 'telegram';
 const RUN_ID  = process.env.GITHUB_RUN_ID ?? 'local';
 
+// Optional upsell link shown on FREE-channel (Value/Longshot) posts, pointing
+// subscribers to the paid Prime channel. Unset ⇒ no footer.
+const PRIME_INVITE_URL = process.env.TELEGRAM_PRIME_INVITE_URL || null;
+
 function getSupabase() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -31,20 +42,40 @@ function getSupabase() {
 
 function getTelegramConfig() {
   const token        = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId       = process.env.TELEGRAM_CHAT_ID;
+  // Legacy single-channel id — the fallback destination for Prime if the paid
+  // channel hasn't been provisioned yet.
+  const chatId       = process.env.TELEGRAM_CHAT_ID || null;
+  // Paid channel (Prime). Falls back to the legacy chat so nothing goes dark
+  // before the split is wired up.
+  const primeChatId  = process.env.TELEGRAM_PRIME_CHAT_ID || chatId;
+  // Free channel (Value + Longshot). Unset ⇒ those tiers are recorded, not posted.
+  const freeChatId   = process.env.TELEGRAM_FREE_CHAT_ID || null;
   const inplayChatId = process.env.TELEGRAM_INPLAY_CHAT_ID || null;
-  if (!token || !chatId) return null;
-  return { token, chatId, inplayChatId };
+  if (!token || !primeChatId) return null;
+  return { token, chatId, primeChatId, freeChatId, inplayChatId };
 }
 
 /**
- * Which chat a signal goes to. In-play signals route to the dedicated in-play
- * channel; if that channel isn't configured they are NOT posted (rather than
- * spamming the pre-match channel with live picks). Pre-match → main channel.
+ * Which chat a signal goes to, by tier:
+ *   in-play  → the dedicated in-play channel (null ⇒ not posted, never leaked)
+ *   prime    → the paid channel
+ *   value / longshot → the free channel
+ *   below-floor (tier null) → null (never broadcast)
+ *
+ * A null return means "no destination" — the caller records the signal as
+ * handled but sends nothing. Legacy configs that only carry `chatId` still
+ * work: `primeChatId` falls back to it in getTelegramConfig, and callers may
+ * also pass a bare `{ chatId }` (Prime → chatId, free tiers → null).
  */
 function chatIdForSignal(telegram, signal) {
-  if (signal.phase === 'inplay') return telegram.inplayChatId; // null ⇒ skip
-  return telegram.chatId;
+  if (signal.phase === 'inplay') return telegram.inplayChatId ?? null; // null ⇒ skip
+  const legacy = telegram.chatId ?? null;
+  const prime  = telegram.primeChatId ?? legacy;
+  const free   = telegram.freeChatId ?? null;
+  const { tier } = classifyTier(signal);
+  if (tier === 'prime') return prime ?? null;
+  if (tier === 'value' || tier === 'longshot') return free;
+  return null; // below the visibility floor ⇒ never broadcast
 }
 
 async function loadPostedIds(supabase) {
@@ -139,6 +170,13 @@ function buildMessage(signal) {
   }
 
   let header, hashtags, note = null;
+  // Free-channel tiers (value/longshot) carry an upsell to the paid Prime
+  // channel when a link is configured. Prime and mover posts never do.
+  const { tier: signalTier } = classifyTier(signal);
+  const upsell = (PRIME_INVITE_URL && !isMover(signal) &&
+    (signalTier === 'value' || signalTier === 'longshot'))
+    ? `🔓 _Prime signals are members-only._ [Go Prime →](${PRIME_INVITE_URL})`
+    : null;
   if (isMover(signal)) {
     header   = `>> *ODDS MOVEMENT*`;
     hashtags = `#MaxEdge #OddsMove`;
@@ -170,6 +208,7 @@ function buildMessage(signal) {
     `Kickoff: ${kickoff}`,
     ``,
     `[View on MaxEdge](https://maxedge.live/feed)`,
+    upsell,
     hashtags,
   ].filter(l => l !== null).join('\n');
 }
@@ -233,12 +272,16 @@ async function run() {
   const alreadySeen = signals.length - toPost.length;
   console.log(`[postToX] ${toPost.length} new | ${alreadySeen} already posted`);
 
-  // Conflict guard: among the pre-match Primes we'd broadcast this run, keep
-  // only the highest-edge pick per (match, market, line) so we never push two
-  // opposing outcomes on the same match. The rest are suppressed below.
-  const broadcastPrimeIds = new Set(
-    dedupeConflicts(toPost.filter(s => !isInplay(s) && !isMover(s) && classifyTier(s).tier === 'prime'))
+  // Conflict guard, applied within each broadcast set: keep only the
+  // highest-edge pick per (match, market, line) so we never push two opposing
+  // outcomes on the same match. Prime picks (paid channel) and value/longshot
+  // picks (free channel) are de-duped independently. Losers are suppressed below.
+  const dedupSet = (predTiers) => new Set(
+    dedupeConflicts(toPost.filter(s =>
+      !isInplay(s) && !isMover(s) && predTiers.includes(classifyTier(s).tier)))
       .map(s => s.id));
+  const broadcastPrimeIds = dedupSet(['prime']);
+  const broadcastFreeIds  = dedupSet(['value', 'longshot']);
 
   if (!toPost.length) { console.log('[postToX] nothing to post'); return { posted: 0, failed: 0, skipped: alreadySeen }; }
 
@@ -264,24 +307,20 @@ async function run() {
     const messageHash = hashMessage(message);
     const chatId      = telegram ? chatIdForSignal(telegram, signal) : telegram;
 
-    // Broadcast policy: pre-match, we only suggest PRIME signals. Value and
-    // longshot picks remain visible on the site but are never pushed to the
-    // channel. Mark them posted so they aren't reconsidered every run. In-play
-    // signals and odds-movement alerts bypass this — they have their own logic.
-    if (!isInplay(signal) && !isMover(signal) && tier !== 'prime') {
-      console.log(`\n[postToX] skip (${label}, not suggested) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
-      await markPosted(supabase, signal.id, messageHash, null);
-      skippedInfo++;
-      continue;
-    }
-
-    // Conflict guard: a Prime that lost the per-match/market tie-break to a
-    // higher-edge opposing pick is suppressed so the two can't cancel out.
-    if (!isInplay(signal) && !isMover(signal) && tier === 'prime' && !broadcastPrimeIds.has(signal.id)) {
-      console.log(`\n[postToX] skip (PRIME conflict, lower edge) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
-      await markPosted(supabase, signal.id, messageHash, null);
-      skippedInfo++;
-      continue;
+    // Conflict guard: a pre-match pick that lost the per-(match,market,line)
+    // tie-break to a higher-edge opposing pick is suppressed so the two can't
+    // cancel out — enforced per channel (Prime→paid set, value/longshot→free
+    // set). In-play and odds-movement alerts bypass this (own logic). Below-floor
+    // picks (tier null) fall through to the no-channel skip below.
+    if (!isInplay(signal) && !isMover(signal)) {
+      const lostPrime = tier === 'prime' && !broadcastPrimeIds.has(signal.id);
+      const lostFree  = (tier === 'value' || tier === 'longshot') && !broadcastFreeIds.has(signal.id);
+      if (lostPrime || lostFree) {
+        console.log(`\n[postToX] skip (${label} conflict, lower edge) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
+        await markPosted(supabase, signal.id, messageHash, null);
+        skippedInfo++;
+        continue;
+      }
     }
 
     console.log(`\n[postToX] ${label} — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
@@ -289,11 +328,12 @@ async function run() {
 
     if (DRY_RUN) { await markPosted(supabase, signal.id, messageHash, null); posted++; continue; }
 
-    // In-play signal with no in-play channel configured → skip silently (don't
-    // leak live picks into the pre-match channel). Mark posted so it isn't
+    // No destination for this tier/phase → skip silently. Covers: in-play with
+    // no in-play channel (don't leak live picks), value/longshot with no free
+    // channel provisioned, and below-floor picks. Mark posted so they aren't
     // retried every run.
     if (!chatId) {
-      console.log(`[postToX] no channel for phase=${signal.phase} — skipping`);
+      console.log(`[postToX] no channel for ${label} (phase=${signal.phase}) — skipping`);
       await markPosted(supabase, signal.id, messageHash, null);
       skippedNoChannel++;
       continue;
