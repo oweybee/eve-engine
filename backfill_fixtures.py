@@ -1,12 +1,15 @@
 import os
+import sys
 import pandas as pd
 from datetime import datetime
 from statsbombpy import sb
 from supabase import create_client, Client
 
 # 1. INITIALIZE SUPABASE CLIENT USING MANAGEMENT ENVIRONMENT ROLES
-SUPABASE_URL = os.getenv("NEXT_PUBLIC_SUPABASE_URL", "https://zlbmpeiuhyllxwegtayu.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "your-service-role-key") # Use service role key to pass RLS blocks
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    sys.exit("ERROR: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
