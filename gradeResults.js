@@ -17,10 +17,15 @@
 
 const https = require('https');
 const { createClient } = require('@supabase/supabase-js');
+const { marketQualifies, isEarlyPayout } = require('./lib/earlyPayout');
+const { goalTimelineFromEvents, fetchFixtureEvents } = require('./lib/apiFootballEvents');
 
 const ODDS_API_KEY = process.env.ODDS_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+// Optional: enables "2 goals ahead" early-payout flagging on lost win singles.
+// Grading works without it; only the early_payout column stays NULL when unset.
+const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY;
 const FINISHED_AFTER_MIN = 130; // a match is assumed final ~2h10m after kickoff
 
 // World Cup is the active graded competition; extend as needed.
@@ -40,6 +45,12 @@ function httpGet(url) {
 }
 
 const norm = s => (s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+
+// Fuzzy team-name comparator for matching API-Football event teams to our rows.
+const namesMatch = (a, b) => {
+  const na = norm(a), nb = norm(b);
+  return !!na && !!nb && (na === nb || na.includes(nb) || nb.includes(na));
+};
 
 /** Fetches finished scores from The Odds API and indexes by team-pair + date. */
 async function fetchScores() {
@@ -90,7 +101,7 @@ async function run() {
     .select(`
       id, match_id, selection, recommended_odds, settled,
       match:matches (
-        kickoff_at,
+        kickoff_at, external_id,
         home_team:teams!matches_home_team_id_fkey ( name ),
         away_team:teams!matches_away_team_id_fkey ( name )
       )
@@ -111,7 +122,8 @@ async function run() {
   if (!due.length) return;
 
   const scores = await fetchScores();
-  let settled = 0, unmatched = 0;
+  const eventsCache = new Map();
+  let settled = 0, unmatched = 0, earlyPayouts = 0;
 
   for (const r of due) {
     const home = r.match?.home_team?.name, away = r.match?.away_team?.name;
@@ -127,12 +139,37 @@ async function run() {
     }
     const won = r.selection === result;
 
+    // "2 goals ahead" early payout: a lost win single (home/away) still paid out
+    // if the backed team ever led by two. Recorded separately from `won` so the
+    // model's true accuracy is untouched. Needs the goal timeline, which the
+    // final score can't provide — pull it from API-Football when configured.
+    let earlyPayout = null;
+    if (!won && marketQualifies(undefined, r.selection) && API_FOOTBALL_KEY) {
+      try {
+        const events = await fetchFixtureEvents(r.match?.external_id, API_FOOTBALL_KEY, eventsCache);
+        if (events) {
+          const goals = goalTimelineFromEvents(events, home, away, namesMatch);
+          earlyPayout = isEarlyPayout({ outcome: r.selection, goals });
+        }
+      } catch (err) {
+        console.warn(`  [grade] early-payout events skip ${home} vs ${away}: ${err.message}`);
+      }
+    }
+
+    const update = { settled: true, won };
+    if (earlyPayout != null) update.early_payout = earlyPayout;
+
     const { error: uErr } = await supabase.from('recommendations')
-      .update({ settled: true, won }).eq('id', r.id);
-    if (!uErr) { settled++; console.log(`  ${home} ${score.home}-${score.away} ${away} → ${result} | ${r.selection} ${won ? 'WON' : 'lost'}`); }
+      .update(update).eq('id', r.id);
+    if (!uErr) {
+      settled++;
+      if (earlyPayout) earlyPayouts++;
+      const tag = won ? 'WON' : (earlyPayout ? 'lost (EARLY PAYOUT)' : 'lost');
+      console.log(`  ${home} ${score.home}-${score.away} ${away} → ${result} | ${r.selection} ${tag}`);
+    }
   }
 
-  console.log(`[grade] done: settled=${settled} unmatched=${unmatched}`);
+  console.log(`[grade] done: settled=${settled} unmatched=${unmatched} earlyPayouts=${earlyPayouts}`);
 }
 
 if (require.main === module) {

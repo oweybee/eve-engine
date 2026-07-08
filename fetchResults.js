@@ -18,6 +18,8 @@
 
 const { createClient } = require('@supabase/supabase-js');
 const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
+const { marketQualifies, isEarlyPayout } = require('./lib/earlyPayout');
+const { goalTimelineFromEvents, fetchFixtureEvents } = require('./lib/apiFootballEvents');
 
 // Clean-slate epoch: performance is tracked ONLY for signals detected on or
 // after this instant — the go-live of the Prime-only + conflict-deduped
@@ -441,6 +443,97 @@ async function reconcileSettledSignals(supabase) {
 }
 
 // ---------------------------------------------------------------------------
+// 2c. Early payout (2UP) flagging
+//
+// Bookmakers pay a 1X2 win single as a winner the moment the backed team goes
+// two goals clear, even if it later draws or loses. This pass finds settled
+// LOSSES that could have been early payouts and records the fact on the signal
+// WITHOUT touching `result` — model accuracy stays honest; calculatePerformance
+// reports the adjusted "as paid out" line separately.
+//
+// Bounded + idempotent: it only ever looks at losses with early_payout still
+// NULL, so each loss is evaluated exactly once. Non-qualifying losses (draws,
+// btts, totals) are stamped false so they're never re-scanned. One API-Football
+// events call per qualifying fixture, memoised in the shared cache.
+// ---------------------------------------------------------------------------
+
+async function flagEarlyPayouts(supabase, cache = new Map()) {
+  const { data: losses, error } = await supabase
+    .from('value_signals')
+    .select(`
+      id, outcome, market, market_line,
+      match:matches (
+        external_id,
+        home_team:teams!matches_home_team_id_fkey ( name ),
+        away_team:teams!matches_away_team_id_fkey ( name )
+      )
+    `)
+    .eq('result', 'loss')
+    .is('early_payout', null);
+
+  if (error) throw new Error(`flagEarlyPayouts(select): ${error.message}`);
+  if (!losses?.length) {
+    console.log('[results] no losses awaiting early-payout evaluation');
+    return { flagged: 0, evaluated: 0 };
+  }
+
+  // Non-qualifying markets (draw / btts / totals / …) can never be a 2UP payout.
+  // Stamp them false in one bulk write so they drop out of future scans without
+  // burning an API call each.
+  const nonQualifying = losses.filter(s => !marketQualifies(s.market, s.outcome));
+  if (nonQualifying.length) {
+    const { error: bulkErr } = await supabase
+      .from('value_signals')
+      .update({ early_payout: false })
+      .in('id', nonQualifying.map(s => s.id));
+    if (bulkErr) console.warn(`  [results] early-payout bulk-clear failed: ${bulkErr.message}`);
+  }
+
+  const qualifying = losses.filter(s => marketQualifies(s.market, s.outcome));
+  if (!qualifying.length) {
+    console.log(`[results] early-payout: ${nonQualifying.length} non-qualifying loss(es) cleared, 0 to check`);
+    return { flagged: 0, evaluated: nonQualifying.length };
+  }
+  if (!API_FOOTBALL_KEY) {
+    console.log(`[results] ${qualifying.length} loss(es) to check for early payout but API_FOOTBALL_KEY not set — leaving pending`);
+    return { flagged: 0, evaluated: nonQualifying.length };
+  }
+
+  let flagged = 0;
+  for (const sig of qualifying) {
+    const fixtureId = sig.match?.external_id;
+    const home = sig.match?.home_team?.name;
+    const away = sig.match?.away_team?.name;
+
+    let goals = null;
+    try {
+      const events = await fetchFixtureEvents(fixtureId, API_FOOTBALL_KEY, cache);
+      if (events) goals = goalTimelineFromEvents(events, home, away, namesMatch);
+    } catch (err) {
+      // Transient API error — leave early_payout NULL so the next run retries.
+      console.warn(`  [results] early-payout events skip ${home} vs ${away}: ${err.message}`);
+      continue;
+    }
+
+    const ep = isEarlyPayout({ market: sig.market, outcome: sig.outcome, goals });
+
+    const { error: upErr } = await supabase
+      .from('value_signals')
+      .update({ early_payout: ep })
+      .eq('id', sig.id);
+    if (upErr) { console.warn(`  [results] early-payout update ${sig.id} failed: ${upErr.message}`); continue; }
+
+    if (ep) {
+      flagged++;
+      console.log(`  [results] EARLY PAYOUT ${home} vs ${away} (${sig.outcome}) — backed team led by 2, lost on final score`);
+    }
+  }
+
+  console.log(`[results] early-payout: flagged ${flagged} of ${qualifying.length} qualifying loss(es)`);
+  return { flagged, evaluated: nonQualifying.length + qualifying.length };
+}
+
+// ---------------------------------------------------------------------------
 // 3. Performance summary
 // ---------------------------------------------------------------------------
 
@@ -465,6 +558,16 @@ function summarisePhase(rows, { includeClv }) {
   const profit = settled.reduce(
     (s, r) => s + (r.result === 'win' ? (parseFloat(r.detected_odds) - 1) : -1), 0);
 
+  // Early-payout ADJUSTED view: a 2UP payout counts as a win at the backed odds
+  // even though `result` is a loss. `paidWin` is a win either way (a true win, or
+  // a loss the bookmaker's 2-goals-ahead rule paid out). This never alters the
+  // honest `wins`/`losses`/`yield` above — it's a parallel line.
+  const paidWin = r => r.result === 'win' || r.early_payout === true;
+  const earlyPayouts = settled.filter(r => r.result !== 'win' && r.early_payout === true).length;
+  const adjWins = settled.filter(paidWin).length;
+  const adjProfit = settled.reduce(
+    (s, r) => s + (paidWin(r) ? (parseFloat(r.detected_odds) - 1) : -1), 0);
+
   const clvs   = settled.map(r => r.clv).filter(v => v != null).map(Number);
   const edges  = rows.map(r => r.detected_edge).filter(v => v != null).map(Number);
   const messes = rows.map(r => r.detected_mes).filter(v => v != null).map(Number);
@@ -477,6 +580,12 @@ function summarisePhase(rows, { includeClv }) {
     win_rate: settled.length ? +(wins / settled.length).toFixed(4) : null,
     yield:    settled.length ? +(profit / settled.length).toFixed(4) : null,
     roi:      settled.length ? +(profit / ROI_BANKROLL_UNITS).toFixed(4) : null,
+    // Early-payout adjusted aggregates (2UP wins folded in).
+    early_payouts:     earlyPayouts,
+    adjusted_wins:     adjWins,
+    adjusted_win_rate: settled.length ? +(adjWins / settled.length).toFixed(4) : null,
+    adjusted_yield:    settled.length ? +(adjProfit / settled.length).toFixed(4) : null,
+    adjusted_roi:      settled.length ? +(adjProfit / ROI_BANKROLL_UNITS).toFixed(4) : null,
     // CLV is only meaningful pre-match (the close happens at kickoff). In-play
     // is judged on realised yield/strike-rate alone.
     avg_clv:  includeClv && clvs.length ? +avg(clvs).toFixed(4) : null,
@@ -494,7 +603,7 @@ function summarisePhase(rows, { includeClv }) {
 async function calculatePerformance(supabase) {
   const { data, error } = await supabase
     .from('value_signals')
-    .select('result, detected_odds, detected_edge, detected_mes, clv, phase, detected_at, match_id, market, market_line');
+    .select('result, early_payout, detected_odds, detected_edge, detected_mes, clv, phase, detected_at, match_id, market, market_line');
   if (error) throw new Error(`calculatePerformance(select): ${error.message}`);
 
   const rows = data ?? [];
@@ -563,6 +672,12 @@ async function run() {
   }
 
   try {
+    await flagEarlyPayouts(supabase, cache);
+  } catch (err) {
+    console.error('[results] early-payout flagging error:', err.message);
+  }
+
+  try {
     await calculatePerformance(supabase);
   } catch (err) {
     console.error('[results] performance error:', err.message);
@@ -575,4 +690,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[results] unhandled:', err); process.exit(1); });
 }
 
-module.exports = { run, calculatePerformance, settlePendingSignals, settleFinishedMatches, reconcileSettledSignals, namesMatch, fixtureOutcome, settleSignal, resultFromGoals };
+module.exports = { run, calculatePerformance, settlePendingSignals, settleFinishedMatches, reconcileSettledSignals, flagEarlyPayouts, namesMatch, fixtureOutcome, settleSignal, resultFromGoals };
