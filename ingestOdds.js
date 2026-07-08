@@ -537,8 +537,12 @@ async function ingest() {
       // Resolve match UUID — use pre-fetched Map, create on-demand if missing
       let matchId = fixtureToMatchId.get(extIdStr);
       if (!matchId && !DRY_RUN) {
+        // Degenerate fallback: planDay.js normally upserts every planned fixture
+        // with its real league. If a fixture slips through we don't know its
+        // competition here, so bucket it under a neutral placeholder rather than
+        // mislabelling it as any specific league.
         if (!cachedLeagueId) {
-          cachedLeagueId = await upsertLeague(supabase, 'FIFA World Cup', 'International');
+          cachedLeagueId = await upsertLeague(supabase, 'Unknown League', null);
         }
         const homeTeamId = await upsertTeam(supabase, `team_home_${fixtureId}`);
         const awayTeamId = await upsertTeam(supabase, `team_away_${fixtureId}`);

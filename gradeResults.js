@@ -23,8 +23,19 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FINISHED_AFTER_MIN = 130; // a match is assumed final ~2h10m after kickoff
 
-// World Cup is the active graded competition; extend as needed.
-const SPORT_KEYS = ['soccer_fifa_world_cup'];
+// The Odds API sport keys for every graded competition. Keep in sync with the
+// league coverage in planDay.js (LEAGUE_CATALOG).
+const SPORT_KEYS = [
+  'soccer_epl',                 // Premier League
+  'soccer_spain_la_liga',       // La Liga
+  'soccer_germany_bundesliga',  // Bundesliga
+  'soccer_italy_serie_a',       // Serie A
+  'soccer_france_ligue_one',    // Ligue 1
+  'soccer_efl_champ',           // EFL Championship
+  'soccer_england_league1',     // EFL League One
+  'soccer_england_league2',     // EFL League Two
+  'soccer_fifa_world_cup',      // FIFA World Cup (in-flight 2026 tournament)
+];
 
 function httpGet(url) {
   return new Promise((resolve, reject) => {

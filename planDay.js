@@ -1,9 +1,9 @@
 /**
  * EVE — Daily Planner
  *
- * Runs once per day (05:00 UTC). Fetches today's World Cup fixtures from
- * API-Football, then calculates the optimal polling interval so that the
- * full daily request budget is spread evenly across the active window.
+ * Runs once per day (05:00 UTC). Fetches today's fixtures for every covered
+ * league from API-Football, then calculates the optimal polling interval so
+ * that the full daily request budget is spread evenly across the active window.
  *
  * The plan (fixture IDs, interval, next_run_at) is saved to Supabase so
  * ingestOdds.js can gate its own execution without any fixed cron logic.
@@ -22,8 +22,9 @@
 
  *
  * Optional env vars:
- *   WORLD_CUP_LEAGUE_ID   — API-Football league ID (default: 1)
- *   FOOTBALL_SEASON       — season year, e.g. 2025 (default: current year)
+ *   LEAGUE_IDS            — comma-separated API-Football league IDs to cover
+ *                           (default: top-5 European + EFL tiers + World Cup)
+ *   FOOTBALL_SEASON       — season year, e.g. 2026 (default: current year)
  *   DAILY_REQUEST_BUDGET  — total requests available today (default: 100)
  *   ACTIVE_START_HOUR     — UTC hour active window opens (default: 8)
  *   ACTIVE_END_HOUR       — UTC hour active window closes (default: 24)
@@ -62,9 +63,43 @@ const DAILY_BUDGET        = parseInt(process.env.DAILY_REQUEST_BUDGET || '200', 
 const ACTIVE_START_HOUR   = parseInt(process.env.ACTIVE_START_HOUR    || '8',   10);
 const ACTIVE_END_HOUR     = parseInt(process.env.ACTIVE_END_HOUR      || '24',  10);
 const DAYS_AHEAD          = parseInt(process.env.DAYS_AHEAD || '1', 10);
-const WORLD_CUP_LEAGUE_ID = parseInt(process.env.WORLD_CUP_LEAGUE_ID || '1', 10);
 const FOOTBALL_SEASON     = parseInt(process.env.FOOTBALL_SEASON || String(new Date().getUTCFullYear()), 10);
 const DRY_RUN             = process.argv.includes('--dry-run');
+
+// ---------------------------------------------------------------------------
+// Competition coverage
+//
+// Each API-Football league id maps to the canonical name/country the engine
+// stores in Supabase. We keep an explicit catalog rather than trusting the
+// provider's league name because that name is a join/filter key used by the
+// frontend feed and the in-play model — it must stay stable.
+//
+// Override the active set with LEAGUE_IDS (comma-separated api ids), e.g.
+//   LEAGUE_IDS=39,140   → Premier League + La Liga only
+// Ids not in the catalog still work; they fall back to the provider's own
+// league name/country when the match is upserted.
+// ---------------------------------------------------------------------------
+
+const LEAGUE_CATALOG = {
+  39:  { name: 'Premier League', country: 'England' },
+  140: { name: 'La Liga',        country: 'Spain'   },
+  78:  { name: 'Bundesliga',     country: 'Germany' },
+  135: { name: 'Serie A',        country: 'Italy'   },
+  61:  { name: 'Ligue 1',        country: 'France'  },
+  40:  { name: 'Championship',   country: 'England' },
+  41:  { name: 'League One',     country: 'England' },
+  42:  { name: 'League Two',     country: 'England' },
+  1:   { name: 'FIFA World Cup', country: 'International' },
+};
+
+// Default coverage: top-5 European + English EFL tiers, plus the World Cup
+// (id 1) so the in-flight 2026 tournament keeps producing signals. Drop it by
+// setting LEAGUE_IDS without 1 once the tournament ends.
+const DEFAULT_LEAGUE_IDS = [39, 140, 78, 135, 61, 40, 41, 42, 1];
+
+const LEAGUE_IDS = process.env.LEAGUE_IDS
+  ? process.env.LEAGUE_IDS.split(',').map(s => parseInt(s.trim(), 10)).filter(Number.isInteger)
+  : DEFAULT_LEAGUE_IDS;
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -120,23 +155,36 @@ async function httpGet(path, retries = 3, baseDelayMs = 60_000) {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch World Cup fixtures for a single date
+// Fetch fixtures for a single date across every covered league
 // ---------------------------------------------------------------------------
 
+// Filter out already-finished fixtures (FT = full time, AET = after extra time, PEN = penalties)
+const FINISHED_STATUSES = ['FT', 'AET', 'PEN'];
+
 async function fetchFixturesForDate(date) {
-  const path = `/fixtures?date=${date}&league=${WORLD_CUP_LEAGUE_ID}&season=${FOOTBALL_SEASON}`;
-  console.log(`[plan] GET ${path}`);
-  const json = await httpGet(path);
-  const fixtures = json.response ?? [];
-  // Filter out already-finished fixtures (FT = full time, AET = after extra time, PEN = penalties)
-  const FINISHED_STATUSES = ['FT', 'AET', 'PEN'];
-  const upcoming = fixtures.filter(f => !FINISHED_STATUSES.includes(f.fixture?.status?.short));
-  console.log(`[plan]   ${date}: ${fixtures.length} total, ${upcoming.length} upcoming`);
-  return upcoming;
+  const all = [];
+  for (const leagueId of LEAGUE_IDS) {
+    const path = `/fixtures?date=${date}&league=${leagueId}&season=${FOOTBALL_SEASON}`;
+    console.log(`[plan] GET ${path}`);
+    let json;
+    try {
+      json = await httpGet(path);
+    } catch (err) {
+      // One league failing must not sink the whole plan — log and carry on.
+      console.warn(`[plan]   league ${leagueId} fetch failed: ${err.message}`);
+      continue;
+    }
+    const fixtures = json.response ?? [];
+    const upcoming = fixtures.filter(f => !FINISHED_STATUSES.includes(f.fixture?.status?.short));
+    console.log(`[plan]   ${date} league ${leagueId}: ${fixtures.length} total, ${upcoming.length} upcoming`);
+    all.push(...upcoming);
+    await sleep(300); // gentle pause between per-league requests
+  }
+  return all;
 }
 
 // ---------------------------------------------------------------------------
-// Fetch World Cup fixtures for today + DAYS_AHEAD days
+// Fetch fixtures for today + DAYS_AHEAD days
 // ---------------------------------------------------------------------------
 
 async function fetchUpcomingFixtures(today) {
@@ -162,7 +210,7 @@ function calcPlan(fixtures, today) {
   const fixtureIds = fixtures.map(f => f.fixture.id);
 
   if (fixtureIds.length === 0) {
-    console.log(`[plan] no upcoming World Cup fixtures in the next ${DAYS_AHEAD} days`);
+    console.log(`[plan] no upcoming fixtures in the next ${DAYS_AHEAD} days across ${LEAGUE_IDS.length} league(s)`);
     return {
       date:             today,
       fixture_ids:      [],
@@ -173,8 +221,8 @@ function calcPlan(fixtures, today) {
     };
   }
 
-  // Planner cost = 1 request per day fetched
-  const plannerCost   = DAYS_AHEAD;
+  // Planner cost = 1 /fixtures request per league, per day fetched
+  const plannerCost   = LEAGUE_IDS.length * DAYS_AHEAD;
   // Each run fetches odds for all fixtures in one pass (1 req per fixture).
   const costPerRun    = fixtureIds.length;
   const runBudget     = DAILY_BUDGET - plannerCost;
@@ -210,20 +258,38 @@ function calcPlan(fixtures, today) {
 // Upsert match records so ingestOdds.js can link odds to real team names
 // ---------------------------------------------------------------------------
 
-async function upsertMatches(supabase, fixtures) {
-  // Upsert the FIFA World Cup league row
-  const { data: leagueRow, error: le } = await supabase
-    .from('leagues')
-    .upsert({ name: 'FIFA World Cup', country: 'International' }, { onConflict: 'name' })
-    .select('id').single();
-  if (le) { console.warn(`[plan] upsertLeague: ${le.message}`); return; }
-  const leagueId = leagueRow.id;
+// Resolve a fixture's league to a Supabase leagues.id, upserting on first use.
+// Canonical name/country come from LEAGUE_CATALOG so the stored name is stable
+// regardless of the provider's own wording; anything outside the catalog falls
+// back to the provider's league name/country. Cached per run by API league id.
+async function resolveLeagueId(supabase, apiLeague, cache) {
+  const apiId = apiLeague?.id;
+  if (apiId != null && cache.has(apiId)) return cache.get(apiId);
 
+  const catalog = apiId != null ? LEAGUE_CATALOG[apiId] : null;
+  const name    = catalog?.name    ?? apiLeague?.name    ?? 'Unknown League';
+  const country = catalog?.country ?? apiLeague?.country ?? null;
+
+  const { data, error } = await supabase
+    .from('leagues')
+    .upsert({ name, country }, { onConflict: 'name' })
+    .select('id').single();
+  if (error) { console.warn(`[plan] upsertLeague(${name}): ${error.message}`); return null; }
+
+  if (apiId != null) cache.set(apiId, data.id);
+  return data.id;
+}
+
+async function upsertMatches(supabase, fixtures) {
+  const leagueCache = new Map(); // api league id → Supabase leagues.id
   let upserted = 0;
   for (const f of fixtures) {
     const fixtureId = f.fixture.id;
     const homeName  = f.teams?.home?.name ?? `home_${fixtureId}`;
     const awayName  = f.teams?.away?.name ?? `away_${fixtureId}`;
+
+    const leagueId = await resolveLeagueId(supabase, f.league, leagueCache);
+    if (!leagueId) continue;
 
     // kickoff is an ISO 8601 string e.g. "2026-06-25T20:00:00+00:00"
     const kickoffAt = f.fixture?.date ?? null;
@@ -250,7 +316,7 @@ async function upsertMatches(supabase, fixtures) {
     if (me) console.warn(`[plan] upsertMatch(${fixtureId}): ${me.message}`);
     else upserted++;
   }
-  console.log(`[plan] upserted ${upserted}/${fixtures.length} match records`);
+  console.log(`[plan] upserted ${upserted}/${fixtures.length} match records across ${leagueCache.size} league(s)`);
 }
 
 // ---------------------------------------------------------------------------
