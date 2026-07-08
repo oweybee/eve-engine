@@ -374,8 +374,32 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
     recentOdds.set(`${r.match_id}|${r.outcome}`, parseFloat(r.detected_odds));
   }
 
+  // value_signals_selection_price_unique is a PERMANENT unique index on
+  // (match_id, market, outcome, model_architecture, detected_odds) — unlike the
+  // SIGNAL_DEDUP_MINUTES window above, it never expires. Once a match's odds sit
+  // unchanged for longer than that window, the recentOdds check above no longer
+  // catches the repeat, and re-inserting the same (match, outcome, price) tuple
+  // crashes the whole compute cycle with a duplicate-key error — aborting before
+  // secondary signals / bet-of-day ever run. Pre-filter against full signal
+  // history for these matches, the same pattern insertSecondarySignals uses
+  // just below. The window above still controls is_mover tagging / spam
+  // suppression; this set is what actually has to satisfy the DB constraint.
+  const { data: everSignalled, error: histErr } = await supabase
+    .from('value_signals')
+    .select('match_id, market, outcome, model_architecture, detected_odds')
+    .in('match_id', matchIds);
+  if (histErr) throw new Error(`insertValueSignals(history select): ${histErr.message}`);
+
+  const priceKey = (matchId, market, outcome, modelArch, odds) =>
+    `${matchId}|${market ?? 'h2h'}|${outcome}|${modelArch ?? 'MARKET_CONSENSUS'}|${parseFloat(odds).toFixed(3)}`;
+
+  const seenPrices = new Set(
+    (everSignalled ?? []).map(r => priceKey(r.match_id, r.market, r.outcome, r.model_architecture, r.detected_odds))
+  );
+
   const toInsert = [];
   let skippedSamePrice = 0;
+  let skippedExisting = 0;
 
   for (const c of candidates) {
     const key      = `${c.match_id}|${c.outcome}`;
@@ -386,6 +410,13 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
       skippedSamePrice++;
       continue;
     }
+
+    const candidateKey = priceKey(c.match_id, c.market, c.outcome, c.model_architecture, curOdds);
+    if (seenPrices.has(candidateKey)) {
+      skippedExisting++;
+      continue;
+    }
+    seenPrices.add(candidateKey);
 
     // Conviction tier comes from the canonical odds+edge ladder; a re-detection
     // at a shifted price is an orthogonal event carried by is_mover.
@@ -398,7 +429,7 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
 
   console.log(
     `[value_signals] candidates=${candidates.length}` +
-    ` skipped_same_price=${skippedSamePrice} to_insert=${toInsert.length}`
+    ` skipped_same_price=${skippedSamePrice} skipped_existing=${skippedExisting} to_insert=${toInsert.length}`
   );
 
   if (!toInsert.length) return 0;
