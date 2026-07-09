@@ -1,1 +1,230 @@
-IyDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAojIE1heEVkZ2UgRVZFIEVuZ2luZSAg4oCUICBsaXZlIG9kZHMgcGlwZWxpbmUKIwojIEJ1ZGdldDogNzUsMDAwIEFQSSByZXEvZGF5CiMgICAyODggam9icy9kYXkgw5cgNCBpbmdlc3QgbG9vcHMgw5cgfjEyIGZpeHR1cmVzID0gfjEzLDgyNCByZXEvZGF5ICgxOCUpCiMgICBPZGRzIHJlZnJlc2ggZXZlcnkgfjU1IHNlY29uZHMgZHVyaW5nIGVhY2ggNS1taW51dGUgam9iLgojCiMgUGlwZWxpbmUgcGVyIGpvYjoKIyAgIChCZXRmYWlyIHNlY29uZGFyeSBtYXJrZXRzIOKAlCBjb3JuZXJzL2NhcmRzL08tVS9CVFRTIOKAlCBhcmUgaW5nZXN0ZWQgZnJvbSBhIFVLCiMgICAgaG9zdCwgbm90IGhlcmU7IEJldGZhaXIgZ2VvLWJsb2NrcyBVUyBydW5uZXJzLiBTZWUgc2NyaXB0cy9iZXRmYWlyLXZwcy8uKQojICAgT25jZSBwZXIgam9iIChpZGVtcG90ZW50IGVhcmx5LWV4aXQgaWYgcGxhbiBleGlzdHMpOgojICAgICAwLiBwbGFuRGF5LmpzICAgICAgIOKAlCBidWlsZCAvIHJlZnJlc2ggdG9kYXkrM2RheSBmaXh0dXJlIHBsYW4KIyAgIExvb3Agw5c0ICg1NXMgZ2FwKToKIyAgICAgMS4gaW5nZXN0T2Rkcy5qcyAgICDigJQgcHVsbCBsYXRlc3Qgb2RkczsgcGxhbi1nYXRlZCAob2ZmLWhvdXJzID0gbm8tb3ApCiMgICAgIDIuIGNvbXB1dGVWYWx1ZXMuanMg4oCUIEthdW5pdHogZWRnZSBkZXRlY3Rpb247IHByaWNlLWNoYW5nZSBzaWduYWxzCiMgICAgIDMuIGNhcHR1cmVTbmFwc2hvdC5qcyDigJQgb2RkcyB0aW1lLXNlcmllcyBmb3IgY2hhcnRzCiMgICBPbmNlIHBlciBqb2I6CiMgICAgIDQuIGNvbXB1dGVBcGlWYWx1ZXMuanMg4oCUIFhHL0FQSSBwcmVkaWN0aXZlIG1vZGVsCiMgICAgIDUuIHBvc3RUb1guanMgICAgICAgICAg4oCUIFRlbGVncmFtOiBWQUxVRSAvIFJVQlkgLyBPRERTIE1PVkVNRU5UIGFsZXJ0cwojICAgICA2LiBmZXRjaFJlc3VsdHMuanMgICAgIOKAlCBzZXR0bGUgY29tcGxldGVkIGZpeHR1cmVzCiMgICAgIDcuIGZldGNoTWF0Y2hEZXRhaWxzLmpzIOKAlCBsaW5ldXBzICsgc3RhdHMKIyDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKCm5hbWU6IE1heEVkZ2UgRVZFIEVuZ2luZQoKb246CiAgc2NoZWR1bGU6CiAgICAjIEV2ZXJ5IDUgbWludXRlcywgb2Zmc2V0IGZyb20gOjAwLzowNS86MTAuLi4gLiBHaXRIdWIncyBzY2hlZHVsZXIKICAgICMgZnJlcXVlbnRseSBkZWxheXMgb3IgZHJvcHMgJyovNScgY3JvbnMgdGhhdCBsYW5kIG9uIHJvdW5kIG1pbnV0ZXMKICAgICMgKHF1ZXVlIGNvbnRlbnRpb24g4oCUIG1hbnkgcmVwb3MnIHdvcmtmbG93cyBmaXJlIGF0IDowMCwgOjA1LCBldGMpLgogICAgIyBydW4taW5wbGF5LnltbCBhbHJlYWR5IHdvcmtlZCBhcm91bmQgdGhpcyB3aXRoICcyLTU5LzUnOyBhcHBseSB0aGUKICAgICMgc2FtZSBvZmZzZXQgaGVyZSAob2JzZXJ2ZWQ6IHJlYWwgY2FkZW5jZSB3YXMgfmhvdXJseSBpbnN0ZWFkIG9mIDVtaW4KICAgICMgYmVmb3JlIHRoaXMgY2hhbmdlLCBwZXIgZW5naW5lX3BsYW4ucnVuc19jb21wbGV0ZWQgdnMgcnVuc19wbGFubmVkKS4KICAgICMgaW5nZXN0T2Rkcy5qcyBzZWxmLWdhdGVzIGFnYWluc3QgZW5naW5lX3BsYW4ubmV4dF9ydW5fYXQuCiAgICAtIGNyb246ICcxLTU5LzUgKiAqICogKicKCiAgd29ya2Zsb3dfZGlzcGF0Y2g6CiAgICBpbnB1dHM6CiAgICAgIHNraXBfaW5nZXN0OgogICAgICAgIGRlc2NyaXB0aW9uOiAnU2tpcCBpbmdlc3RPZGRzLmpzJwogICAgICAgIHR5cGU6IGJvb2xlYW4KICAgICAgICBkZWZhdWx0OiBmYWxzZQogICAgICBza2lwX3Bvc3Q6CiAgICAgICAgZGVzY3JpcHRpb246ICdTa2lwIHBvc3RUb1guanMgKHN1cHByZXNzIFRlbGVncmFtIGFsZXJ0cyknCiAgICAgICAgdHlwZTogYm9vbGVhbgogICAgICAgIGRlZmF1bHQ6IGZhbHNlCiAgICAgIHNraXBfcmVzdWx0czoKICAgICAgICBkZXNjcmlwdGlvbjogJ1NraXAgZmV0Y2hSZXN1bHRzLmpzJwogICAgICAgIHR5cGU6IGJvb2xlYW4KICAgICAgICBkZWZhdWx0OiBmYWxzZQogICAgICBsb29wX2NvdW50OgogICAgICAgIGRlc2NyaXB0aW9uOiAnTnVtYmVyIG9mIGluZ2VzdCBsb29wcyAoZGVmYXVsdCA0KScKICAgICAgICB0eXBlOiBzdHJpbmcKICAgICAgICBkZWZhdWx0OiAnNCcKCmNvbmN1cnJlbmN5OgogIGdyb3VwOiBlbmdpbmUtJHt7IGdpdGh1Yi5yZWZfbmFtZSB9fQogIGNhbmNlbC1pbi1wcm9ncmVzczogZmFsc2UKCnBlcm1pc3Npb25zOgogIGNvbnRlbnRzOiByZWFkCgpqb2JzOgogIGVuZ2luZToKICAgIG5hbWU6IEVWRSBFbmdpbmUgVGljawogICAgcnVucy1vbjogdWJ1bnR1LWxhdGVzdAogICAgIyAxMCBtaW4gKHdhcyA1KTogdGhlIDQtbG9vcCBvZGRzIGN5Y2xlIG5lYXJseSBmaWxscyA1IG1pbiwgc28gZmV0Y2hUZWFtU3RhdHMKICAgICMgKHRoZSBsYXN0IHN0ZXApIHdhcyBiZWluZyBraWxsZWQgbWlkLXJ1bi4gSXQgc2VsZi1jYWNoZXMgcGVyIHRlYW0gKDIwaCksIHNvCiAgICAjIG9ubHkgdGhlIGZpcnN0IGZ1bGwgcG9wdWxhdGlvbiBpcyBzbG93OyBsYXRlciBydW5zIHNraXAgZnJlc2ggdGVhbXMuCiAgICB0aW1lb3V0LW1pbnV0ZXM6IDEwCgogICAgZW52OgogICAgICBTVVBBQkFTRV9VUkw6ICAgICAgICAgICAgICAke3sgc2VjcmV0cy5TVVBBQkFTRV9VUkwgfX0KICAgICAgU1VQQUJBU0VfU0VSVklDRV9ST0xFX0tFWTogJHt7IHNlY3JldHMuU1VQQUJBU0VfU0VSVklDRV9ST0xFX0tFWSB9fQogICAgICBBUElfRk9PVEJBTExfS0VZOiAgICAgICAgICAke3sgc2VjcmV0cy5BUElfRk9PVEJBTExfS0VZIH19CiAgICAgIEJFVEZBSVJfQVBQX0tFWTogICAgICAgICAgICR7eyBzZWNyZXRzLkJFVEZBSVJfQVBQX0tFWSB9fQogICAgICBCRVRGQUlSX1VTRVJOQU1FOiAgICAgICAgICAke3sgc2VjcmV0cy5CRVRGQUlSX1VTRVJOQU1FIH19CiAgICAgIEJFVEZBSVJfUEFTU1dPUkQ6ICAgICAgICAgICR7eyBzZWNyZXRzLkJFVEZBSVJfUEFTU1dPUkQgfX0KICAgICAgVEVMRUdSQU1fQk9UX1RPS0VOOiAgICAgICAgJHt7IHNlY3JldHMuVEVMRUdSQU1fQk9UX1RPS0VOIH19CiAgICAgIFRFTEVHUkFNX0NIQVRfSUQ6ICAgICAgICAgICR7eyBzZWNyZXRzLlRFTEVHUkFNX0NIQVRfSUQgfX0KICAgICAgQUNUSVZFX1NUQVJUX0hPVVI6ICAgICAgICAgJzAnCiAgICAgIEFDVElWRV9FTkRfSE9VUjogICAgICAgICAgICcyNCcKICAgICAgREFJTFlfUkVRVUVTVF9CVURHRVQ6ICAgICAgJHt7IHZhcnMuREFJTFlfUkVRVUVTVF9CVURHRVQgfHwgJzc1MDAwJyB9fQogICAgICBTSEFSUE5FU1NfTVVMVElfQk9PSzogICAgICAke3sgdmFycy5TSEFSUE5FU1NfTVVMVElfQk9PSyAgfX0KICAgICAgU0hBUlBORVNTX1NJTkdMRV9CT09LOiAgICAgJHt7IHZhcnMuU0hBUlBORVNTX1NJTkdMRV9CT09LIH19CiAgICAgIE1VTFRJX0JPT0tfVEhSRVNIT0xEOiAgICAgICR7eyB2YXJzLk1VTFRJX0JPT0tfVEhSRVNIT0xEICB9fQogICAgICBDT01QVVRFX0NPTkNVUlJFTkNZOiAgICAgICAke3sgdmFycy5DT01QVVRFX0NPTkNVUlJFTkNZICAgfX0KICAgICAgRVZfVEhSRVNIT0xEOiAgICAgICAgICAgICAgJHt7IHZhcnMuRVZfVEhSRVNIT0xEICAgICAgICAgIH19CiAgICAgIE1JTl9QUk9COiAgICAgICAgICAgICAgICAgICR7eyB2YXJzLk1JTl9QUk9CICAgICAgICAgICAgICB9fQogICAgICBNQVhfT0REUzogICAgICAgICAgICAgICAgICAke3sgdmFycy5NQVhfT0REUyAgICAgICAgICAgICAgfX0KICAgICAgU0lHTkFMX0VER0U6ICAgICAgICAgICAgICAgJHt7IHZhcnMuU0lHTkFMX0VER0UgICAgICAgICAgIH19CiAgICAgIEdJVEhVQl9SVU5fSUQ6ICAgICAgICAgICAgICR7eyBnaXRodWIucnVuX2lkIH19CgogICAgc3RlcHM6CiAgICAgIC0gbmFtZTogQ2hlY2tvdXQKICAgICAgICB1c2VzOiBhY3Rpb25zL2NoZWNrb3V0QHY0CiAgICAgICAgd2l0aDoKICAgICAgICAgIHJlZjogJHt7IGdpdGh1Yi5yZWYgfX0KCiAgICAgIC0gbmFtZTogU2V0dXAgTm9kZS5qcyAyMgogICAgICAgIHVzZXM6IGFjdGlvbnMvc2V0dXAtbm9kZUB2NAogICAgICAgIHdpdGg6CiAgICAgICAgICBub2RlLXZlcnNpb246ICcyMicKICAgICAgICAgIGNhY2hlOiAnbnBtJwoKICAgICAgLSBuYW1lOiBJbnN0YWxsIGRlcGVuZGVuY2llcwogICAgICAgIHJ1bjogbnBtIGluc3RhbGwgLS1uby1hdWRpdCAtLW5vLWZ1bmQKCiAgICAgIC0gbmFtZTogUGxhbiB0b2RheSdzIGZpeHR1cmVzCiAgICAgICAgaWQ6IHBsYW4KICAgICAgICBjb250aW51ZS1vbi1lcnJvcjogdHJ1ZQogICAgICAgIGVudjoKICAgICAgICAgIERBWVNfQUhFQUQ6ICczJwogICAgICAgIHJ1bjogbm9kZSBwbGFuRGF5LmpzCgogICAgICAjIEJldGZhaXIgaW5nZXN0IGRvZXMgTk9UIHJ1biBoZXJlOiBCZXRmYWlyIGdlby1ibG9ja3MgR2l0SHViJ3MgVVMgcnVubmVycwogICAgICAjIChIVFRQIDQwMyAiUmVzdHJpY3RlZCIpLiBJdCBydW5zIG9uIGEgVUsgaG9zdCBpbnN0ZWFkIOKAlCBzZWUKICAgICAgIyBzY3JpcHRzL2JldGZhaXItdnBzL1JFQURNRS5tZCDigJQgd3JpdGluZyBjb3JuZXJzL2NhcmRzL08tVS9CVFRTIHN0cmFpZ2h0CiAgICAgICMgdG8gU3VwYWJhc2UsIHdoaWNoIHRoaXMgcGlwZWxpbmUgdGhlbiBwcmljZXMgb24gdGhlIG5leHQgY29tcHV0ZS4KCiAgICAgIC0gbmFtZTogTGl2ZSBvZGRzIGxvb3AgKGluZ2VzdCAtPiBjb21wdXRlIC0+IHNuYXBzaG90KQogICAgICAgIGlkOiBpbmdlc3RfbG9vcAogICAgICAgIGlmOiAke3sgZ2l0aHViLmV2ZW50X25hbWUgIT0gJ3dvcmtmbG93X2Rpc3BhdGNoJyB8fCBpbnB1dHMuc2tpcF9pbmdlc3QgIT0gJ3RydWUnIH19CiAgICAgICAgc2hlbGw6IGJhc2gKICAgICAgICBydW46IHwKICAgICAgICAgIExPT1BTPSR7eyBnaXRodWIuZXZlbnQuaW5wdXRzLmxvb3BfY291bnQgfHwgJzQnIH19CiAgICAgICAgICBMT09QX0VYSVQ9MAogICAgICAgICAgZm9yIGkgaW4gJChzZXEgMSAkTE9PUFMpOyBkbwogICAgICAgICAgICBlY2hvICItLS0gTG9vcCAkaSAvICRMT09QUyAtLS0iCiAgICAgICAgICAgIG5vZGUgaW5nZXN0T2Rkcy5qcyAgICB8fCBMT09QX0VYSVQ9JD8KICAgICAgICAgICAgbm9kZSBjb21wdXRlVmFsdWVzLmpzIHx8IExPT1BfRVhJVD0kPwogICAgICAgICAgICBub2RlIGNhcHR1cmVTbmFwc2hvdC5qcyAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgICAgICAgICAgIGlmIFsgIiRpIiAtbHQgIiRMT09QUyIgXTsgdGhlbgogICAgICAgICAgICAgIGVjaG8gIlNsZWVwaW5nIDU1cyBiZWZvcmUgbmV4dCBsb29wLi4uIgogICAgICAgICAgICAgIHNsZWVwIDU1CiAgICAgICAgICAgIGZpCiAgICAgICAgICBkb25lCiAgICAgICAgICBleGl0ICRMT09QX0VYSVQKCiAgICAgIC0gbmFtZTogQ29tcHV0ZSBBUEkgcHJlZGljdGl2ZSB2YWx1ZXMKICAgICAgICBpZDogYXBpX2NvbXB1dGUKICAgICAgICBjb250aW51ZS1vbi1lcnJvcjogdHJ1ZQogICAgICAgIHJ1bjogbm9kZSBjb21wdXRlQXBpVmFsdWVzLmpzCgogICAgICAjIFRoZSAiY29uc3RhbnQgZXllIiDigJQgYXNzZXJ0cyB0aGUgcHVibGlzaGVkIG1hdGhzIGlzIGludGVybmFsbHkgY29uc2lzdGVudAogICAgICAjIChwcm9iYWJpbGl0aWVzIGluIHJhbmdlLCBlZGdlIDwtPiBvZGRzIGNvaGVyZW50LCBubyBpbXBsYXVzaWJsZSBlZGdlcywKICAgICAgIyB2YWx1ZSBmbGFncyB2YWxpZCwgc2lnbmFscyBzZWxmLWNvbnNpc3RlbnQpLiBOZXZlciBnYXRlcyB0aGUgcGlwZWxpbmU7CiAgICAgICMgYWxlcnRzIHZpYSBFTkdJTkVfQUxFUlRfV0VCSE9PSyBvbiBhbnkgdmlvbGF0aW9uLgogICAgICAtIG5hbWU6IERhdGEgaW50ZWdyaXR5IGNoZWNrCiAgICAgICAgaWQ6IGludGVncml0eQogICAgICAgIGNvbnRpbnVlLW9uLWVycm9yOiB0cnVlCiAgICAgICAgcnVuOiBub2RlIHZlcmlmeUludGVncml0eS5qcwoKICAgICAgLSBuYW1lOiBQb3N0IHNpZ25hbHMKICAgICAgICBpZDogcG9zdAogICAgICAgIGlmOiAke3sgZ2l0aHViLmV2ZW50X25hbWUgIT0gJ3dvcmtmbG93X2Rpc3BhdGNoJyB8fCBpbnB1dHMuc2tpcF9wb3N0ICE9ICd0cnVlJyB9fQogICAgICAgIHJ1bjogbm9kZSBwb3N0VG9YLmpzCgogICAgICAtIG5hbWU6IFNldHRsZSByZXN1bHRzCiAgICAgICAgaWQ6IHJlc3VsdHMKICAgICAgICBpZjogJHt7IGdpdGh1Yi5ldmVudF9uYW1lICE9ICd3b3JrZmxvd19kaXNwYXRjaCcgfHwgaW5wdXRzLnNraXBfcmVzdWx0cyAhPSAndHJ1ZScgfX0KICAgICAgICBydW46IG5vZGUgZmV0Y2hSZXN1bHRzLmpzCgogICAgICAjIEVMTyBsYWRkZXIgZmVlZHMgdGhlIGluLXBsYXkgaGFsZi10aW1lIHN1cGVybW9kZWwgKGNvbXB1dGVJbnBsYXlWYWx1ZXMKICAgICAgIyBTdGFnZSAyKS4gU2VsZi1nYXRlcyBvbiBFTE9fUkVGUkVTSF9IT1VSUyBzbyBpdCBvbmx5IGZ1bGx5IHJlY29tcHV0ZXMgYQogICAgICAjIGZldyB0aW1lcyBhIGRheSwgbm90IGV2ZXJ5IDUtbWludXRlIHRpY2suCiAgICAgICMgREItb25seSBzdGVwcyDigJQgaW5kZXBlbmRlbnQgb2YgdGhlIGluZ2VzdCBsb29wLiBSdW4gZXZlbiBpZiBhbiBlYXJsaWVyCiAgICAgICMgc3RlcCBmYWlsZWQgKGEgcmF0ZS1saW1pdGVkIGluZ2VzdCBsb29wIG11c3Qgbm90IHNraXAgYmFzZWxpbmUgY2FwdHVyZSwKICAgICAgIyBvciBpbnBsYXlfYmFzZWxpbmUgbmV2ZXIgcG9wdWxhdGVzIGFuZCB0aGUgd2luLXByb2Igc3RhZ2UgaGFzIG5vIGFuY2hvcikuCiAgICAgIC0gbmFtZTogUmVidWlsZCBFTE8gbGFkZGVyCiAgICAgICAgaWQ6IGVsbwogICAgICAgIGlmOiAke3sgIWNhbmNlbGxlZCgpIH19CiAgICAgICAgY29udGludWUtb24tZXJyb3I6IHRydWUKICAgICAgICBydW46IG5vZGUgY29tcHV0ZUVsby5qcwoKICAgICAgIyBGcmVlemUgcHJlLW1hdGNoIGdvYWwgZXhwZWN0YXRpb25zICjOuykgZm9yIHVwY29taW5nIG1hdGNoZXMg4oCUIHRoZSBhbmNob3IKICAgICAgIyBmb3IgdGhlIGluLXBsYXkgd2luLXByb2JhYmlsaXR5IGVuZ2luZSAoY29tcHV0ZUlucGxheVZhbHVlcyBTdGFnZSAzKS4KICAgICAgLSBuYW1lOiBDYXB0dXJlIGluLXBsYXkgYmFzZWxpbmVzCiAgICAgICAgaWQ6IGJhc2VsaW5lCiAgICAgICAgaWY6ICR7eyAhY2FuY2VsbGVkKCkgfX0KICAgICAgICBjb250aW51ZS1vbi1lcnJvcjogdHJ1ZQogICAgICAgIHJ1bjogbm9kZSBjYXB0dXJlQmFzZWxpbmUuanMKCiAgICAgICMgRGFpbHkgZm9yd2FyZC10ZXN0IGxlZGdlciBmb3IgdGhlIHN1Z2dlc3RlZCBhY2N1bXVsYXRvcnMgKGlkZW1wb3RlbnQpLgogICAgICAtIG5hbWU6IFJlY29yZCBzdWdnZXN0ZWQgYWNjYXMKICAgICAgICBpZDogYWNjYXMKICAgICAgICBjb250aW51ZS1vbi1lcnJvcjogdHJ1ZQogICAgICAgIHJ1bjogbm9kZSByZWNvcmRBY2Nhcy5qcwoKICAgICAgLSBuYW1lOiBGZXRjaCBtYXRjaCBkZXRhaWxzIChsaW5ldXBzICsgc3RhdHMpCiAgICAgICAgaWQ6IGRldGFpbHMKICAgICAgICBjb250aW51ZS1vbi1lcnJvcjogdHJ1ZQogICAgICAgIHJ1bjogbm9kZSBmZXRjaE1hdGNoRGV0YWlscy5qcwoKICAgICAgLSBuYW1lOiBUZWFtIHN0YXRpc3RpY3MgJiByZWZlcmVlIHRlbmRlbmNpZXMKICAgICAgICBpZDogdGVhbXN0YXRzCiAgICAgICAgY29udGludWUtb24tZXJyb3I6IHRydWUKICAgICAgICBzaGVsbDogYmFzaAogICAgICAgIHJ1bjogfAogICAgICAgICAgIyBSb2xsaW5nIGxhc3QtTiBmb3JtIC8gY29ybmVycyAvIGNhcmRzIC8geEcgcGVyIHRlYW0uIFJ1biBldmVyeQogICAgICAgICAgIyBpbnZvY2F0aW9uIOKAlCB0aGUgc2NyaXB0IHNlbGYtY2FjaGVzIHBlciB0ZWFtIChURUFNX1NUQVRTX1JFRlJFU0hfSE9VUlMsCiAgICAgICAgICAjIGRlZmF1bHQgMjBoKSwgc28gcmUtcnVubmluZyBpdCBpcyBjaGVhcCBhbmQgaXQgb25seSByZWZldGNoZXMgc3RhbGUKICAgICAgICAgICMgdGVhbXMuIFRoZSBwcmV2aW91cyB3YWxsLWNsb2NrIGdhdGUgbmV2ZXIgYWxpZ25lZCB3aXRoIHRoZSByZWFsCiAgICAgICAgICAjIGRpc3BhdGNoLWRyaXZlbiBjYWRlbmNlLCBzbyBzdGF0cyBuZXZlciBwb3B1bGF0ZWQuCiAgICAgICAgICBub2RlIGZldGNoVGVhbVN0YXRzLmpzCgogICAgICAtIG5hbWU6IEFsZXJ0IG9uIHBpcGVsaW5lIGZhaWx1cmUKICAgICAgICBpZjogZmFpbHVyZSgpCiAgICAgICAgc2hlbGw6IGJhc2gKICAgICAgICBlbnY6CiAgICAgICAgICBXRUJIT09LX1VSTDogJHt7IHNlY3JldHMuRU5HSU5FX0FMRVJUX1dFQkhPT0sgfX0KICAgICAgICBydW46IHwKICAgICAgICAgIFJVTl9VUkw9IiR7eyBnaXRodWIuc2VydmVyX3VybCB9fS8ke3sgZ2l0aHViLnJlcG9zaXRvcnkgfX0vYWN0aW9ucy9ydW5zLyR7eyBnaXRodWIucnVuX2lkIH19IgogICAgICAgICAgVElNRVNUQU1QPSIkKGRhdGUgLXUgKyIlWS0lbS0lZFQlSDolTTolU1oiKSIKCiAgICAgICAgICBGQUlMRURfU1RFUFM9IiIKICAgICAgICAgIFsgIiR7eyBzdGVwcy5wbGFuLm91dGNvbWUgfX0iICAgICAgICA9ICJmYWlsdXJlIiBdICYmIEZBSUxFRF9TVEVQUz0iJHtGQUlMRURfU1RFUFN9XG4tIHBsYW4gKHBsYW5EYXkuanMpIgogICAgICAgICAgWyAiJHt7IHN0ZXBzLmluZ2VzdF9sb29wLm91dGNvbWUgfX0iID0gImZhaWx1cmUiIF0gJiYgRkFJTEVEX1NURVBTPSIke0ZBSUxFRF9TVEVQU31cbi0gaW5nZXN0LWxvb3AgKGluZ2VzdE9kZHMgKyBjb21wdXRlVmFsdWVzICsgY2FwdHVyZVNuYXBzaG90KSIKICAgICAgICAgIFsgIiR7eyBzdGVwcy5hcGlfY29tcHV0ZS5vdXRjb21lIH19IiA9ICJmYWlsdXJlIiBdICYmIEZBSUxFRF9TVEVQUz0iJHtGQUlMRURfU1RFUFN9XG4tIGFwaS1jb21wdXRlIChjb21wdXRlQXBpVmFsdWVzLmpzKSIKICAgICAgICAgIFsgIiR7eyBzdGVwcy5wb3N0Lm91dGNvbWUgfX0iICAgICAgICAgPSAiZmFpbHVyZSIgXSAmJiBGQUlMRURfU1RFUFM9IiR7RkFJTEVEX1NURVBTfVxuLSBwb3N0LXNpZ25hbHMgKHBvc3RUb1guanMpIgogICAgICAgICAgWyAiJHt7IHN0ZXBzLnJlc3VsdHMub3V0Y29tZSB9fSIgICAgICA9ICJmYWlsdXJlIiBdICYmIEZBSUxFRF9TVEVQUz0iJHtGQUlMRURfU1RFUFN9XG4tIHNldHRsZS1yZXN1bHRzIChmZXRjaFJlc3VsdHMuanMpIgogICAgICAgICAgWyAiJHt7IHN0ZXBzLmRldGFpbHMub3V0Y29tZSB9fSIgICAgICA9ICJmYWlsdXJlIiBdICYmIEZBSUxFRF9TVEVQUz0iJHtGQUlMRURfU1RFUFN9XG4tIGZldGNoLWRldGFpbHMgKGZldGNoTWF0Y2hEZXRhaWxzLmpzKSIKICAgICAgICAgIFsgLXogIiRGQUlMRURfU1RFUFMiIF0gJiYgRkFJTEVEX1NURVBTPSJcbi0gc2V0dXAgKGNoZWNrb3V0L25vZGUvbnBtKSIKCiAgICAgICAgICBpZiBbIC1uICIkV0VCSE9PS19VUkwiIF07IHRoZW4KICAgICAgICAgICAgUEFZTE9BRD0kKHByaW50ZiAneyJjb250ZW50IjoiW0ZBSUxdIEVWRSBFbmdpbmUgcGlwZWxpbmUgZmFpbHVyZVxuQnJhbmNoOiAlc1xuUnVuOiAlc1xuRmFpbGVkIHN0ZXBzOiVzIn0nIFwKICAgICAgICAgICAgICAiJHt7IGdpdGh1Yi5yZWZfbmFtZSB9fSIgIiRSVU5fVVJMIiAiJEZBSUxFRF9TVEVQUyIpCiAgICAgICAgICAgIGN1cmwgLXMgLVggUE9TVCAiJFdFQkhPT0tfVVJMIiAtSCAnQ29udGVudC1UeXBlOiBhcHBsaWNhdGlvbi9qc29uJyAtZCAiJFBBWUxPQUQiIHx8IHRydWUKICAgICAgICAgIGZpCiAgICAgICAgICBlY2hvICJQaXBlbGluZSBmYWlsZWQg4oCUIHN0ZXBzOiRGQUlMRURfU1RFUFMiCg==
+# ────────────────────────────────────────────────────────────────────────────
+# MaxEdge EVE Engine  —  live odds pipeline
+#
+# Budget: 75,000 API req/day
+#   288 jobs/day × 4 ingest loops × ~12 fixtures = ~13,824 req/day (18%)
+#   Odds refresh every ~55 seconds during each 5-minute job.
+#
+# Pipeline per job:
+#   (Betfair secondary markets — corners/cards/O-U/BTTS — are ingested from a UK
+#    host, not here; Betfair geo-blocks US runners. See scripts/betfair-vps/.)
+#   Once per job (idempotent early-exit if plan exists):
+#     0. planDay.js       — build / refresh today+3day fixture plan
+#   Loop ×4 (55s gap):
+#     1. ingestOdds.js    — pull latest odds; plan-gated (off-hours = no-op)
+#     2. computeValues.js — Kaunitz edge detection; price-change signals
+#     3. captureSnapshot.js — odds time-series for charts
+#   Once per job:
+#     4. computeApiValues.js — XG/API predictive model
+#     5. postToX.js          — Telegram: VALUE / RUBY / ODDS MOVEMENT alerts
+#     6. fetchResults.js     — settle completed fixtures
+#     7. fetchMatchDetails.js — lineups + stats
+# ────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge EVE Engine
+
+on:
+  schedule:
+    # Every 5 minutes, offset from :00/:05/:10... . GitHub's scheduler
+    # frequently delays or drops '*/5' crons that land on round minutes
+    # (queue contention — many repos' workflows fire at :00, :05, etc).
+    # run-inplay.yml already worked around this with '2-59/5'; apply the
+    # same offset here (observed: real cadence was ~hourly instead of 5min
+    # before this change, per engine_plan.runs_completed vs runs_planned).
+    # ingestOdds.js self-gates against engine_plan.next_run_at.
+    - cron: '1-59/5 * * * *'
+
+  workflow_dispatch:
+    inputs:
+      skip_ingest:
+        description: 'Skip ingestOdds.js'
+        type: boolean
+        default: false
+      skip_post:
+        description: 'Skip postToX.js (suppress Telegram alerts)'
+        type: boolean
+        default: false
+      skip_results:
+        description: 'Skip fetchResults.js'
+        type: boolean
+        default: false
+      loop_count:
+        description: 'Number of ingest loops (default 4)'
+        type: string
+        default: '4'
+
+concurrency:
+  group: engine-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    name: EVE Engine Tick
+    runs-on: ubuntu-latest
+    # 10 min (was 5): the 4-loop odds cycle nearly fills 5 min, so fetchTeamStats
+    # (the last step) was being killed mid-run. It self-caches per team (20h), so
+    # only the first full population is slow; later runs skip fresh teams.
+    timeout-minutes: 10
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+      BETFAIR_APP_KEY:           ${{ secrets.BETFAIR_APP_KEY }}
+      BETFAIR_USERNAME:          ${{ secrets.BETFAIR_USERNAME }}
+      BETFAIR_PASSWORD:          ${{ secrets.BETFAIR_PASSWORD }}
+      TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
+      ACTIVE_START_HOUR:         '0'
+      ACTIVE_END_HOUR:           '24'
+      DAILY_REQUEST_BUDGET:      ${{ vars.DAILY_REQUEST_BUDGET || '75000' }}
+      SHARPNESS_MULTI_BOOK:      ${{ vars.SHARPNESS_MULTI_BOOK  }}
+      SHARPNESS_SINGLE_BOOK:     ${{ vars.SHARPNESS_SINGLE_BOOK }}
+      MULTI_BOOK_THRESHOLD:      ${{ vars.MULTI_BOOK_THRESHOLD  }}
+      COMPUTE_CONCURRENCY:       ${{ vars.COMPUTE_CONCURRENCY   }}
+      EV_THRESHOLD:              ${{ vars.EV_THRESHOLD          }}
+      MIN_PROB:                  ${{ vars.MIN_PROB              }}
+      MAX_ODDS:                  ${{ vars.MAX_ODDS              }}
+      SIGNAL_EDGE:               ${{ vars.SIGNAL_EDGE           }}
+      GITHUB_RUN_ID:             ${{ github.run_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Plan today's fixtures
+        id: plan
+        continue-on-error: true
+        env:
+          DAYS_AHEAD: '3'
+        run: node planDay.js
+
+      # Betfair ingest does NOT run here: Betfair geo-blocks GitHub's US runners
+      # (HTTP 403 "Restricted"). It runs on a UK host instead — see
+      # scripts/betfair-vps/README.md — writing corners/cards/O-U/BTTS straight
+      # to Supabase, which this pipeline then prices on the next compute.
+
+      - name: Live odds loop (ingest -> compute -> snapshot)
+        id: ingest_loop
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_ingest != 'true' }}
+        shell: bash
+        run: |
+          LOOPS=${{ github.event.inputs.loop_count || '4' }}
+          LOOP_EXIT=0
+          for i in $(seq 1 $LOOPS); do
+            echo "--- Loop $i / $LOOPS ---"
+            node ingestOdds.js    || LOOP_EXIT=$?
+            node computeValues.js || LOOP_EXIT=$?
+            node captureSnapshot.js 2>/dev/null || true
+            if [ "$i" -lt "$LOOPS" ]; then
+              echo "Sleeping 55s before next loop..."
+              sleep 55
+            fi
+          done
+          exit $LOOP_EXIT
+
+      - name: Compute API predictive values
+        id: api_compute
+        continue-on-error: true
+        run: node computeApiValues.js
+
+      # The "constant eye" — asserts the published maths is internally consistent
+      # (probabilities in range, edge <-> odds coherent, no implausible edges,
+      # value flags valid, signals self-consistent). Never gates the pipeline;
+      # alerts via ENGINE_ALERT_WEBHOOK on any violation.
+      - name: Data integrity check
+        id: integrity
+        continue-on-error: true
+        run: node verifyIntegrity.js
+
+      - name: Post signals
+        id: post
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_post != 'true' }}
+        run: node postToX.js
+
+      - name: Settle results
+        id: results
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_results != 'true' }}
+        run: node fetchResults.js
+
+      # ELO ladder feeds the in-play half-time supermodel (computeInplayValues
+      # Stage 2). Self-gates on ELO_REFRESH_HOURS so it only fully recomputes a
+      # few times a day, not every 5-minute tick.
+      # DB-only steps — independent of the ingest loop. Run even if an earlier
+      # step failed (a rate-limited ingest loop must not skip baseline capture,
+      # or inplay_baseline never populates and the win-prob stage has no anchor).
+      - name: Rebuild ELO ladder
+        id: elo
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: node computeElo.js
+
+      # Freeze pre-match goal expectations (λ) for upcoming matches — the anchor
+      # for the in-play win-probability engine (computeInplayValues Stage 3).
+      - name: Capture in-play baselines
+        id: baseline
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: node captureBaseline.js
+
+      # Daily forward-test ledger for the suggested accumulators (idempotent).
+      - name: Record suggested accas
+        id: accas
+        continue-on-error: true
+        run: node recordAccas.js
+
+      - name: Fetch match details (lineups + stats)
+        id: details
+        continue-on-error: true
+        run: node fetchMatchDetails.js
+
+      - name: Team statistics & referee tendencies
+        id: teamstats
+        continue-on-error: true
+        shell: bash
+        run: |
+          # Rolling last-N form / corners / cards / xG per team. Run every
+          # invocation — the script self-caches per team (TEAM_STATS_REFRESH_HOURS,
+          # default 20h), so re-running it is cheap and it only refetches stale
+          # teams. The previous wall-clock gate never aligned with the real
+          # dispatch-driven cadence, so stats never populated.
+          node fetchTeamStats.js
+
+      - name: Alert on pipeline failure
+        if: failure()
+        shell: bash
+        env:
+          WEBHOOK_URL: ${{ secrets.ENGINE_ALERT_WEBHOOK }}
+        run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          FAILED_STEPS=""
+          [ "${{ steps.plan.outcome }}"        = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- plan (planDay.js)"
+          [ "${{ steps.ingest_loop.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- ingest-loop (ingestOdds + computeValues + captureSnapshot)"
+          [ "${{ steps.api_compute.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- api-compute (computeApiValues.js)"
+          [ "${{ steps.post.outcome }}"         = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- post-signals (postToX.js)"
+          [ "${{ steps.results.outcome }}"      = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- settle-results (fetchResults.js)"
+          [ "${{ steps.details.outcome }}"      = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- fetch-details (fetchMatchDetails.js)"
+          [ -z "$FAILED_STEPS" ] && FAILED_STEPS="\n- setup (checkout/node/npm)"
+
+          if [ -n "$WEBHOOK_URL" ]; then
+            PAYLOAD=$(printf '{"content":"[FAIL] EVE Engine pipeline failure\nBranch: %s\nRun: %s\nFailed steps:%s"}' \
+              "${{ github.ref_name }}" "$RUN_URL" "$FAILED_STEPS")
+            curl -s -X POST "$WEBHOOK_URL" -H 'Content-Type: application/json' -d "$PAYLOAD" || true
+          fi
+          echo "Pipeline failed — steps:$FAILED_STEPS"
