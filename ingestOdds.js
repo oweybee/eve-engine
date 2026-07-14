@@ -46,6 +46,15 @@ const ACTIVE_START_HOUR = parseInt(process.env.ACTIVE_START_HOUR || '8',  10);
 const ACTIVE_END_HOUR   = parseInt(process.env.ACTIVE_END_HOUR   || '24', 10);
 const DRY_RUN           = process.argv.includes('--dry-run');
 
+// GH Actions' native `schedule:` cron is best-effort and drifts far behind its
+// declared interval under load (observed: */5 declared, ~105min actual gap
+// between schedule-triggered runs). A human (or an on-call agent) rescuing a
+// stale pipeline via workflow_dispatch still hits the ordinary next_run_at
+// gate below and silently no-ops if the plan isn't "due" yet — the rescue
+// looks like it worked (job exits 0) but writes nothing. FORCE_INGEST skips
+// that gate so a manual/rescue run is guaranteed to actually fetch.
+const FORCE_INGEST      = process.env.FORCE_INGEST === 'true' || process.argv.includes('--force');
+
 const MIN_PRICE_MOVEMENT = 0.01;
 
 // How many fixtures' odds to fetch concurrently (audit H6). The daily API budget
@@ -464,10 +473,13 @@ async function ingest() {
   }
 
   const nextRun = new Date(plan.next_run_at);
-  if (now < nextRun) {
+  if (now < nextRun && !FORCE_INGEST) {
     const waitMins = Math.round((nextRun - now) / 60000);
     console.log(`[ingest] not due yet — ${waitMins} min until next run (${plan.next_run_at})`);
     return;
+  }
+  if (now < nextRun && FORCE_INGEST) {
+    console.log(`[ingest] FORCE_INGEST set — running early (was not due until ${plan.next_run_at})`);
   }
 
   // ── It's time to run ──────────────────────────────────────────────────────

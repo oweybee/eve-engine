@@ -256,6 +256,7 @@ async function run() {
           odds:          px,
           snapshot_type: snapType,
           hour_bucket:   hourBucket,
+          captured_at:   new Date(now).toISOString(),
         });
       }
     }
@@ -272,10 +273,18 @@ async function run() {
         odds:          px,
         snapshot_type: snapType,
         hour_bucket:   hourBucket,
+        captured_at:   new Date(now).toISOString(),
       });
     }
 
     if (depthRows.length) {
+      // captured_at is stamped explicitly above: the unique constraint is
+      // (match_id, bookmaker, selection, market_type, hour_bucket), so within
+      // the same UTC hour this upsert repeatedly hits the same row via UPDATE.
+      // captured_at's DB-level `default now()` only fires on INSERT, so without
+      // an explicit value here every same-hour run after the first would leave
+      // captured_at frozen at the hour's first write — making the pipeline look
+      // stalled for up to 59 minutes even while the odds column keeps refreshing.
       const { error: dErr } = await supabase
         .from('odds_snapshots')
         .upsert(depthRows, { onConflict: 'match_id,bookmaker,selection,market_type,hour_bucket' });

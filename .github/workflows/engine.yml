@@ -47,6 +47,10 @@ on:
         description: 'Number of ingest loops (default 4)'
         type: string
         default: '4'
+      force_ingest:
+        description: 'Bypass engine_plan.next_run_at gating (use for a rescue run after a stale-data alert — otherwise a dispatch that lands before the plan''s next_run_at silently no-ops)'
+        type: boolean
+        default: false
 
 concurrency:
   group: engine-${{ github.ref_name }}
@@ -117,6 +121,8 @@ jobs:
         id: ingest_loop
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_ingest != 'true' }}
         shell: bash
+        env:
+          FORCE_INGEST: ${{ github.event.inputs.force_ingest || 'false' }}
         run: |
           LOOPS=${{ github.event.inputs.loop_count || '4' }}
           LOOP_EXIT=0
@@ -124,7 +130,7 @@ jobs:
             echo "--- Loop $i / $LOOPS ---"
             node ingestOdds.js    || LOOP_EXIT=$?
             node computeValues.js || LOOP_EXIT=$?
-            node captureSnapshot.js 2>/dev/null || true
+            node captureSnapshot.js || true
             if [ "$i" -lt "$LOOPS" ]; then
               echo "Sleeping 55s before next loop..."
               sleep 55

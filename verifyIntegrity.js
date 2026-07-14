@@ -131,6 +131,42 @@ async function checkSignals(supabase, violations) {
   return data?.length ?? 0;
 }
 
+// How stale computed_values is allowed to get before we treat the pipeline as
+// silently stuck. GH Actions' native `schedule:` cron is best-effort and can
+// (and does) skip ticks under load, so a run reporting success tells you
+// nothing about whether data actually refreshed — this is the only check in
+// the file that catches that gap.
+const FRESHNESS_ALERT_MINUTES = parseFloat(process.env.FRESHNESS_ALERT_MINUTES || '20');
+
+async function checkFreshness(supabase, violations) {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: plan, error: planErr } = await supabase
+    .from('engine_plan')
+    .select('fixture_ids')
+    .eq('date', today)
+    .maybeSingle();
+  if (planErr) { violations.push(`[query] engine_plan: ${planErr.message}`); return; }
+  if (!plan?.fixture_ids?.length) return; // rest day — nothing expected to be fresh
+
+  const { data, error } = await supabase
+    .from('computed_values')
+    .select('computed_at')
+    .order('computed_at', { ascending: false })
+    .limit(1);
+  if (error) { violations.push(`[query] computed_values freshness: ${error.message}`); return; }
+
+  const lastComputed = data?.[0]?.computed_at ? new Date(data[0].computed_at) : null;
+  if (!lastComputed) return; // nothing computed yet today — too early to judge
+
+  const staleMins = (Date.now() - lastComputed.getTime()) / 60_000;
+  if (staleMins > FRESHNESS_ALERT_MINUTES) {
+    violations.push(
+      `pipeline freshness: computed_values last updated ${staleMins.toFixed(0)} min ago ` +
+      `(> ${FRESHNESS_ALERT_MINUTES} min threshold), last=${lastComputed.toISOString()}`,
+    );
+  }
+}
+
 async function postAlert(violations) {
   const url = process.env.ENGINE_ALERT_WEBHOOK;
   if (!url || !violations.length) return;
@@ -149,6 +185,7 @@ async function run() {
 
   const cvN = await checkComputedValues(supabase, violations);
   const sigN = await checkSignals(supabase, violations);
+  await checkFreshness(supabase, violations);
 
   if (violations.length) {
     console.error(`[integrity] ${violations.length} VIOLATION(S) across ${cvN} computed rows / ${sigN} signals:`);
