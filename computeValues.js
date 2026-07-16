@@ -20,6 +20,7 @@
 // The pure exports below have no DB dependency.
 const sm            = require('./lib/secondaryMarkets');
 const { categoryFor } = require('./lib/signalTier');
+const { buildPrematchVector } = require('./lib/halftimeFeatures');
 
 // Config
 const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '2',    10);
@@ -447,6 +448,15 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
 
 const normTeam = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
+/** team_elo lookup keyed by the SAME normalised name as team_statistics. */
+async function fetchEloLookup(supabase) {
+  const map = new Map();
+  const { data, error } = await supabase.from('team_elo').select('team_name, elo, games');
+  if (error) { console.warn('[ensemble] team_elo read failed:', error.message); return map; }
+  for (const r of data ?? []) map.set(normTeam(r.team_name), r);
+  return map;
+}
+
 /** Load team_statistics (by normalised name) and referee_stats for these matches. */
 async function fetchStatsLookups(supabase, matches) {
   const statsByName = new Map();
@@ -601,6 +611,46 @@ async function main() {
     }
   } catch (err) {
     console.error('[secondary] pricing failed (1X2 unaffected):', err.message);
+  }
+
+  // Independent pre-match model probabilities. The market-consensus block above
+  // is derived FROM the bookmakers; this is a separate opinion held against them,
+  // written to ensemble_*_prob for the feed's Model Certainty. Non-fatal and
+  // gated by lib/halftimeFeatures.buildPrematchVector: it fills a row only where
+  // the retrained supermodel is in distribution (known league incl. Allsvenskan/
+  // MLS, warm ELO, real form) — otherwise the columns stay null, never guessed.
+  try {
+    const infer = require('./ensemble/inference');
+    if (infer.ensembleAvailable?.()) {
+      const live = results.filter(r => r && !r.skipped);
+      const [{ statsByName }, eloByName] = await Promise.all([
+        fetchStatsLookups(supabase, live.map(r => r.match)),
+        fetchEloLookup(supabase),
+      ]);
+      let filled = 0;
+      for (const r of live) {
+        const hKey = normTeam(r.match.home_team?.name);
+        const aKey = normTeam(r.match.away_team?.name);
+        const { vector } = buildPrematchVector({
+          league:    r.match.league?.name,
+          homeStats: statsByName.get(hKey),
+          awayStats: statsByName.get(aKey),
+          homeElo:   eloByName.get(hKey),
+          awayElo:   eloByName.get(aKey),
+          h2hHomeWinRate: undefined, // last-5 H2H not materialised → builder prior
+        });
+        if (!vector) continue;
+        const probs = await infer.supermodelPrematchInference(vector);
+        if (!probs) continue;
+        r.row.ensemble_home_prob = probs.home;
+        r.row.ensemble_draw_prob = probs.draw;
+        r.row.ensemble_away_prob = probs.away;
+        filled++;
+      }
+      console.log(`[ensemble] pre-match model probs written for ${filled}/${live.length} match(es)`);
+    }
+  } catch (err) {
+    console.error('[ensemble] pre-match model failed (1X2 unaffected):', err.message);
   }
 
   await upsertComputedValues(supabase, computedRows);

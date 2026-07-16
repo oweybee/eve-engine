@@ -278,9 +278,11 @@ async function supermodelHalftimeInference(superFeatures) {
 /**
  * Run the supermodel (prematch) using pre-match features only.
  * Label encoding: A=0, D=1, H=2.
- * Prefers v2 (23-dim, with league OHE) over v1 (18-dim).
+ * Prefers v2 (25-dim, 7-league OHE incl. Allsvenskan + MLS) over v1 (18-dim).
+ * Build the vector with lib/halftimeFeatures.buildPrematchVector so the column
+ * order matches models/supermodel_prematch_v2_features.json.
  *
- * @param {number[]} prematchFeatures - 23-dim (v2) or 18-dim (v1) feature vector
+ * @param {number[]} prematchFeatures - 25-dim (v2) or 18-dim (v1) feature vector
  * @returns {object|null}
  */
 async function supermodelPrematchInference(prematchFeatures) {

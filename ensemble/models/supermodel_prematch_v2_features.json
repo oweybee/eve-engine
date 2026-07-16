@@ -22,9 +22,11 @@
     "league_laliga",
     "league_bundesliga",
     "league_seriea",
-    "league_ligue1"
+    "league_ligue1",
+    "league_allsvenskan",
+    "league_mls"
   ],
-  "n": 23,
+  "n": 25,
   "label_order": [
     "away",
     "draw",
