@@ -12,7 +12,8 @@ const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
 const { extractLiveH2h } = require('./ingestLiveOdds');
 const elo = require('./lib/elo');
 const { buildLadder } = require('./computeElo');
-const { buildHalftimeVector, leagueKey, formRates, FEATURE_ORDER } = require('./lib/halftimeFeatures');
+const { buildHalftimeVector, leagueKey, formRates, FEATURE_ORDER,
+        buildPrematchVector, prematchLeagueKey, PREMATCH_FEATURE_ORDER } = require('./lib/halftimeFeatures');
 
 let passed = 0, failed = 0;
 function test(label, fn) {
@@ -251,6 +252,36 @@ test('valid inputs → 32-dim vector in training order', () => {
   assert.strictEqual(at('ht_draw'), 0);
   assert.ok(Math.abs(at('h2h_home_win_rate_5') - 0.6) < 1e-9);
   assert.ok(out.vector.every(Number.isFinite));
+});
+
+console.log('lib/halftimeFeatures pre-match vector (7-league)');
+test('prematchLeagueKey recognises the extra leagues, HT model does not', () => {
+  assert.strictEqual(prematchLeagueKey('Allsvenskan'), 'allsvenskan');
+  assert.strictEqual(prematchLeagueKey('Major League Soccer'), 'mls');
+  assert.strictEqual(prematchLeagueKey('Premier League'), 'epl');
+  assert.strictEqual(prematchLeagueKey('FIFA World Cup'), null);
+  // The half-time gate must STAY 5-league — the extras were not trained for it.
+  assert.strictEqual(leagueKey('Allsvenskan'), null);
+  assert.strictEqual(leagueKey('Major League Soccer'), null);
+});
+test('Allsvenskan → 25-dim pre-match vector with correct one-hot', () => {
+  const out = buildPrematchVector({ league: 'Allsvenskan',
+    homeStats: goodStats, awayStats: { form: 'LLDWD', goals_for_avg: 1.0, goals_against_avg: 1.5, clean_sheet_pct: 20 },
+    homeElo: { elo: 1700, games: 30 }, awayElo: { elo: 1500, games: 30 }, h2hHomeWinRate: 0.6 });
+  assert.strictEqual(out.vector.length, PREMATCH_FEATURE_ORDER.length);
+  assert.strictEqual(out.vector.length, 25);
+  const at = name => out.vector[PREMATCH_FEATURE_ORDER.indexOf(name)];
+  assert.strictEqual(at('elo_differential'), 200);
+  assert.strictEqual(at('league_allsvenskan'), 1);
+  assert.strictEqual(at('league_mls'), 0);
+  assert.strictEqual(at('league_epl'), 0);
+  assert.ok(out.vector.every(Number.isFinite));
+});
+test('pre-match: unsupported league / cold ELO → dormant', () => {
+  assert.strictEqual(buildPrematchVector({ league: 'FIFA World Cup', homeStats: goodStats, awayStats: goodStats,
+    homeElo: goodElo, awayElo: goodElo }).vector, null);
+  assert.strictEqual(buildPrematchVector({ league: 'MLS', homeStats: goodStats, awayStats: goodStats,
+    homeElo: { elo: 1500, games: 1 }, awayElo: goodElo }).vector, null);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

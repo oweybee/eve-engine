@@ -18,3 +18,7 @@ _csv_cache.csv.gz
 
 # Betfair VPS local secrets
 scripts/betfair-vps/.env
+
+# Training corpus cache (rebuild with ensemble/build_training_corpus.py)
+_csv_cache_v3.csv.gz
+__pycache__/

@@ -66,9 +66,18 @@ FEATURE VECTOR — PREMATCH MODEL (23 dims)
 USAGE
 ─────
   cd engine && export $(cat .env | xargs)
+  # Offline corpus (football-data.co.uk is not always reachable): build the
+  # cache from the GitHub mirror + committed extra-league CSVs first, then train.
+  python3 ensemble/build_training_corpus.py             # writes models/_csv_cache_v3.csv.gz
+  python3 ensemble/train_supermodel_v2.py --mode prematch
   python3 ensemble/train_supermodel_v2.py               # both models
-  python3 ensemble/train_supermodel_v2.py --mode halftime
-  python3 ensemble/train_supermodel_v2.py --no-cache    # re-download CSVs
+  python3 ensemble/train_supermodel_v2.py --no-cache    # re-download CSVs (needs football-data.co.uk)
+
+NOTE: the pre-match model now covers SEVEN leagues — the big-5 plus Allsvenskan
+(SWE) and MLS (USA). The extra leagues carry results + closing odds only, so
+sot_rate / red_card_rate fall back to LEAGUE_PRIORS for every league (uniform,
+so the model never leans on a signal one league has and another lacks). The
+half-time model still trains on the big-5 only (no half-time data for the extras).
 """
 
 from __future__ import annotations
@@ -99,11 +108,13 @@ except ImportError:
 # ══════════════════════════════════════════════════════════════════════════════
 
 LEAGUES: Dict[str, str] = {
-    'epl':        'E0',   # football-data.co.uk division codes
-    'laliga':     'SP1',
-    'bundesliga': 'D1',
-    'seriea':     'I1',
-    'ligue1':     'F1',
+    'epl':         'E0',   # football-data.co.uk division codes
+    'laliga':      'SP1',
+    'bundesliga':  'D1',
+    'seriea':      'I1',
+    'ligue1':      'F1',
+    'allsvenskan': 'SWE',  # extra-league (results + closing odds; no shots/HT/cards)
+    'mls':         'USA',
 }
 
 # All seasons with full shot data (2000/01 had gaps; 0506 is the clean start).
@@ -122,6 +133,13 @@ ALL_SEASONS: List[str] = [
 # performance a genuine forward-looking test.
 TRAIN_SEASONS: Set[str] = set(ALL_SEASONS[:14])   # 0506 → 1819
 TEST_SEASONS:  Set[str] = set(ALL_SEASONS[14:])    # 1920 → 2324
+
+# The train/test boundary as a DATE, not a season code. This works uniformly
+# across the big-5 (European seasons, code '0506'…'2324') AND the extra leagues
+# (calendar-year seasons '2012'…'2026'), which don't share the big-5 code space.
+# Matches before this instant train; on/after evaluate out-of-sample. The instant
+# (1 Jul 2019) reproduces the original big-5 1819/1920 split exactly.
+SPLIT_DATE = pd.Timestamp('2019-07-01', tz='UTC')
 
 # ── ELO hyper-parameters ─────────────────────────────────────────────────────
 ELO_K          = 30    # update speed — 20 is FIFA-standard, 30 is common for club
@@ -152,6 +170,15 @@ LEAGUE_PRIORS: Dict[str, Dict[str, float]] = {
                    'red_card_rate': 0.05},
     'ligue1':     {'win_rate': 0.44, 'draw_rate': 0.27, 'goals_scored': 1.50,
                    'goals_conceded': 1.10, 'sot_rate': 4.3, 'clean_sheet_rate': 0.27,
+                   'red_card_rate': 0.04},
+    # Extra leagues — calibrated from the uploaded football-data 'extra' history
+    # (results + closing odds only). sot_rate / red_card_rate default to the
+    # cross-league norm since shots/cards aren't in that dataset.
+    'allsvenskan':{'win_rate': 0.43, 'draw_rate': 0.25, 'goals_scored': 1.40,
+                   'goals_conceded': 1.40, 'sot_rate': 4.3, 'clean_sheet_rate': 0.26,
+                   'red_card_rate': 0.04},
+    'mls':        {'win_rate': 0.50, 'draw_rate': 0.25, 'goals_scored': 1.45,
+                   'goals_conceded': 1.45, 'sot_rate': 4.3, 'clean_sheet_rate': 0.24,
                    'red_card_rate': 0.04},
 }
 
@@ -813,11 +840,11 @@ def build_feature_matrices(df: pd.DataFrame, mode: str) -> Tuple[
         else:
             features = prematch
 
-        # ── Step 4: assign to correct split ───────────────────────────────
-        if season in TRAIN_SEASONS:
+        # ── Step 4: assign to correct split (date-based, league-agnostic) ──
+        if m['date'] < SPLIT_DATE:
             train_rows.append(features)
             train_labels.append(ftr)
-        elif season in TEST_SEASONS:
+        else:
             test_rows.append(features)
             test_labels.append(ftr)
             # Capture odds metadata parallel to the feature row.
@@ -857,10 +884,8 @@ def build_feature_matrices(df: pd.DataFrame, mode: str) -> Tuple[
     y_test    = np.array(test_labels)
     test_meta = pd.DataFrame(test_meta_rows).reset_index(drop=True)
 
-    print(f'  Train rows: {len(X_train):,}  '
-          f'(seasons {min(TRAIN_SEASONS)} → {max(TRAIN_SEASONS)})')
-    print(f'  Test  rows: {len(X_test):,}   '
-          f'(seasons {min(TEST_SEASONS)} → {max(TEST_SEASONS)})')
+    print(f'  Train rows: {len(X_train):,}  (before {SPLIT_DATE.date()})')
+    print(f'  Test  rows: {len(X_test):,}   (on/after {SPLIT_DATE.date()})')
 
     # Report odds coverage for the test set
     b365_cov = test_meta['b365h'].notna().mean() * 100
@@ -887,8 +912,10 @@ XGBOOST_PARAMS: Dict = {
     'reg_alpha':         0.3,
     'reg_lambda':        1.5,
     'min_child_weight':  5,
-    'use_label_encoder': False,
     'eval_metric':       'mlogloss',
+    # early stopping moved to the constructor (xgboost ≥ 2.0 removed the fit()
+    # kwarg; use_label_encoder was likewise dropped).
+    'early_stopping_rounds': 50,
     'random_state':      42,
     'n_jobs':            -1,
 }
@@ -1357,8 +1384,7 @@ def main() -> None:
     print('━' * 60)
     print('MaxEdge Supermodel v2  —  Time-Series Integrity Edition')
     print('━' * 60)
-    print(f'Train seasons: {sorted(TRAIN_SEASONS)[0]} → {sorted(TRAIN_SEASONS)[-1]}')
-    print(f'Test  seasons: {sorted(TEST_SEASONS)[0]} → {sorted(TEST_SEASONS)[-1]}')
+    print(f'Train/test boundary: {SPLIT_DATE.date()} (before → train, on/after → test)')
 
     print('\nLoading data...')
     df = load_all_csvs(use_cache=not args.no_cache)
@@ -1370,8 +1396,8 @@ def main() -> None:
 
     if args.dry_run:
         # Show what the split would look like without training
-        train_df = df[df['season'].isin(TRAIN_SEASONS)]
-        test_df  = df[df['season'].isin(TEST_SEASONS)]
+        train_df = df[df['date'] < SPLIT_DATE]
+        test_df  = df[df['date'] >= SPLIT_DATE]
         print(f'\nTrain split: {len(train_df):,} matches')
         print(f'Test  split: {len(test_df):,} matches')
         print('\nDry run — not training.')
@@ -1402,7 +1428,6 @@ def main() -> None:
         model.fit(
             X_train, y_train_enc,
             eval_set=[(X_test, y_test_enc)],
-            early_stopping_rounds=50,
             verbose=100,
         )
 
