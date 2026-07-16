@@ -35,6 +35,7 @@ const { categoryFor } = require('./lib/signalTier');
 const sm             = require('./lib/secondaryMarkets');
 const { buildHalftimeVector } = require('./lib/halftimeFeatures');
 const { liveWinProb } = require('./lib/inplayWinProb');
+const { sniperCandidates } = require('./lib/secondHalfSniper');
 const {
   fetchMatchesForComputation,
   computeMatch,
@@ -56,6 +57,9 @@ const INPLAY_MAX_EDGE = parseFloat(process.env.INPLAY_MAX_EDGE || '0.20');
 // internationals. Independent flag so it can roll out separately from the
 // (top-5-league) supermodel stage.
 const INPLAY_WINPROB_ENABLED = (process.env.INPLAY_WINPROB_ENABLED || '').toLowerCase() === 'true';
+// Second Half Sniper (Stage 4) — half-time Over 1.5/2.5 on a hot scoreline.
+// Independent flag; reuses the same inplay_baseline anchor as the win-prob stage.
+const SECOND_HALF_SNIPER_ENABLED = (process.env.SECOND_HALF_SNIPER_ENABLED || '').toLowerCase() === 'true';
 // Skip the chaotic closing minutes: thin liquidity + stoppage-time noise, and
 // the model's constant-λ assumption is weakest there.
 const INPLAY_WINPROB_MINUTE_CAP = parseInt(process.env.INPLAY_WINPROB_MINUTE_CAP || '85', 10);
@@ -265,12 +269,44 @@ async function winProbStage(supabase, matches) {
   return insertModelSignals(supabase, candidates);
 }
 
+// ── STAGE 4: Second Half Sniper (half-time Over 1.5/2.5 on a hot scoreline) ────
+
+/**
+ * Build + persist Second Half Sniper signals for the live matches at their
+ * half-time break. Holds the frozen pre-match goal expectation (inplay_baseline)
+ * against the live Over price via lib/secondHalfSniper. Inserts through the
+ * secondary-market path (market='totals', outcome='over') so the dedup guard
+ * gives us the once-per-fixture entry for free.
+ *
+ * @returns {number} signals inserted
+ */
+async function sniperStage(supabase, matches) {
+  const ids = matches.map(m => m.id);
+  const { data, error } = await supabase
+    .from('inplay_baseline')
+    .select('match_id, lambda_home, lambda_away')
+    .in('match_id', ids);
+  if (error) { console.warn('[inplay] sniper baseline read failed:', error.message); return 0; }
+
+  const baseByMatch = new Map((data ?? []).map(r => [r.match_id, r]));
+  const candidates = [];
+  for (const m of matches) {
+    candidates.push(...sniperCandidates(m, baseByMatch.get(m.id), {
+      evThreshold: INPLAY_EV_THRESHOLD,
+      maxEdge:     INPLAY_MAX_EDGE,
+    }));
+  }
+  console.log(`[inplay] second-half sniper: ${candidates.length} candidate(s) from ${matches.length} live match(es)`);
+  if (!candidates.length) return 0;
+  return insertSecondarySignals(supabase, candidates, 'inplay');
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
   const supabase = getClient();
   console.log('[inplay] computeInplayValues — book-lag + model-vs-market + win-prob');
-  console.log(`[inplay] model_stage=${INPLAY_MODEL_ENABLED ? 'on' : 'off'} winprob_stage=${INPLAY_WINPROB_ENABLED ? 'on' : 'off'} ev_threshold=${INPLAY_EV_THRESHOLD}`);
+  console.log(`[inplay] model_stage=${INPLAY_MODEL_ENABLED ? 'on' : 'off'} winprob_stage=${INPLAY_WINPROB_ENABLED ? 'on' : 'off'} sniper_stage=${SECOND_HALF_SNIPER_ENABLED ? 'on' : 'off'} ev_threshold=${INPLAY_EV_THRESHOLD}`);
 
   const matches = await fetchLiveMatches(supabase);
   if (!matches.length) {
@@ -339,6 +375,16 @@ async function main() {
     }
   }
 
+  // STAGE 4 — Second Half Sniper (gated; half-time Over 1.5/2.5 on a hot scoreline)
+  if (SECOND_HALF_SNIPER_ENABLED) {
+    try {
+      const n = await sniperStage(supabase, matches);
+      console.log(`[inplay] second-half sniper signals: ${n}`);
+    } catch (err) {
+      console.error('[inplay] second-half sniper stage failed:', err.message);
+    }
+  }
+
   console.log('[inplay] done');
 }
 
@@ -346,4 +392,4 @@ if (require.main === module) {
   main().catch(err => { console.error('[inplay] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { fetchLiveMatches, modelVsMarket, buildHalftimeFeatures, insertModelSignals, winProbCandidates, winProbStage };
+module.exports = { fetchLiveMatches, modelVsMarket, buildHalftimeFeatures, insertModelSignals, winProbCandidates, winProbStage, sniperStage };

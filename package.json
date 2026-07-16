@@ -5,7 +5,7 @@
   "main": "computeValues.js",
   "scripts": {
     "start": "node computeValues.js",
-    "test": "node engine.test.js && node engine.inplay.test.js && node engine.results.test.js && node engine.winprob.test.js && node engine.dixoncoles.test.js",
+    "test": "node engine.test.js && node engine.inplay.test.js && node engine.results.test.js && node engine.winprob.test.js && node engine.sniper.test.js && node engine.dixoncoles.test.js",
     "post-to-x": "node postToX.js",
     "post-to-x:dry": "DRY_RUN=1 node postToX.js"
   },
