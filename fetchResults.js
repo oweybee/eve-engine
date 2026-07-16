@@ -158,23 +158,58 @@ function settleSignal(fx, market, outcome, line) {
 // matches.status. Once a match kicked off it stayed 'scheduled' forever, so
 // computeValues/computeApiValues (WHERE status IN ('scheduled','live')) kept
 // recomputing dead fixtures indefinitely, polluting Market Pulse with games
-// that already finished. This routine flips finished matches to 'completed'.
+// that already finished. This routine flips finished matches to 'completed'
+// AND writes the final scoreline (goals + result: home/draw/away).
 //
-// Settles by EXACT API-Football fixture id (matches.external_id), so no fuzzy
-// name matching is needed.
+// INVARIANT: a match is only ever set to 'completed' TOGETHER with a non-null
+// scoreline. A completed match with no goals is meaningless — it silently
+// vanishes from Recent Form (fetchTeamForm filters null goals), team stats and
+// ELO — so we never create one. A draw is a first-class result here: 0-0 / 1-1
+// settle exactly like any other score (result='draw'), never dropped.
+//
+// Two failure modes this heals, on top of the normal scheduled→completed flow:
+//   1. STRANDED rows — a match left 'completed' with NULL goals by some earlier
+//      path. The old query only looked at scheduled/live, so such a row was
+//      invisible to settlement forever. We now re-select and re-settle them.
+//   2. NON-NUMERIC ids — Betfair/Odds-API fixtures carry a hash external_id, so
+//      the old exact-fixture-id lookup skipped them entirely. We fall back to
+//      matching API-Football's fixtures for that date by team name.
+//
+// Duplicate guard: the same fixture can exist twice (API-Football numeric id +
+// Betfair/Odds-API hash id). We never settle a row whose (home, away, date) is
+// already completed-with-a-score on another row, so a match is never
+// double-counted in form / ELO / training.
 // ---------------------------------------------------------------------------
+
+const MATCH_SELECT_COLS =
+  'id, external_id, kickoff_at, status, home_team_id, away_team_id, ' +
+  'home_team:teams!matches_home_team_id_fkey ( name ), ' +
+  'away_team:teams!matches_away_team_id_fkey ( name )';
+
+const dayKey = (homeId, awayId, iso) => `${homeId}|${awayId}|${(iso ?? '').slice(0, 10)}`;
 
 async function settleFinishedMatches(supabase, cache) {
   const cutoff = new Date(Date.now() - SETTLE_DELAY_MS).toISOString();
+
+  // (a) scheduled/live past kickoff — the normal settlement queue.
   const { data: stale, error } = await supabase
     .from('matches')
-    .select('id, external_id, kickoff_at, status')
+    .select(MATCH_SELECT_COLS)
     .in('status', ['scheduled', 'live'])
     .lt('kickoff_at', cutoff);
+  if (error) throw new Error(`settleFinishedMatches(select scheduled): ${error.message}`);
 
-  if (error) throw new Error(`settleFinishedMatches(select): ${error.message}`);
+  // (b) stranded — 'completed' but missing a scoreline. Re-settle so they get a
+  // real result (incl. draws) instead of being dropped everywhere downstream.
+  const { data: stranded, error: strErr } = await supabase
+    .from('matches')
+    .select(MATCH_SELECT_COLS)
+    .eq('status', 'completed')
+    .or('goals_home.is.null,goals_away.is.null')
+    .lt('kickoff_at', cutoff);
+  if (strErr) throw new Error(`settleFinishedMatches(select stranded): ${strErr.message}`);
 
-  const matches = (stale ?? []).filter(m => /^\d+$/.test(m.external_id ?? ''));
+  const matches = [...(stale ?? []), ...(stranded ?? [])];
   if (!matches.length) {
     console.log('[results] no past-kickoff matches awaiting status settlement');
     return { completed: 0, pending: 0 };
@@ -184,8 +219,26 @@ async function settleFinishedMatches(supabase, cache) {
     return { completed: 0, pending: matches.length };
   }
 
-  let completed = 0, stillPending = 0;
+  // Seed the duplicate guard with fixtures ALREADY completed-with-a-score, so a
+  // hash twin is never settled into a second copy of a match we already have.
+  const settledKeys = new Set();
+  const teamIds = [...new Set(matches.flatMap(m => [m.home_team_id, m.away_team_id]).filter(Boolean))];
+  if (teamIds.length) {
+    const { data: done } = await supabase
+      .from('matches')
+      .select('home_team_id, away_team_id, kickoff_at')
+      .eq('status', 'completed')
+      .not('goals_home', 'is', null)
+      .not('goals_away', 'is', null)
+      .or(`home_team_id.in.(${teamIds.join(',')}),away_team_id.in.(${teamIds.join(',')})`);
+    for (const d of done ?? []) settledKeys.add(dayKey(d.home_team_id, d.away_team_id, d.kickoff_at));
+  }
+
+  let completed = 0, stillPending = 0, skippedDup = 0;
   for (const m of matches) {
+    const key = dayKey(m.home_team_id, m.away_team_id, m.kickoff_at);
+    if (settledKeys.has(key)) { skippedDup++; continue; } // twin already scored
+
     const date = new Date(m.kickoff_at).toISOString().slice(0, 10); // UTC YYYY-MM-DD
     let fixtures;
     try {
@@ -197,16 +250,27 @@ async function settleFinishedMatches(supabase, cache) {
       continue;
     }
 
-    const fx      = fixtures.find(f => String(f?.fixture?.id) === m.external_id);
+    // Numeric external_id → exact API-Football fixture id (authoritative).
+    // Otherwise (Betfair/Odds-API hash id) → match by team name on that date.
+    const numeric = /^\d+$/.test(m.external_id ?? '');
+    const fx = numeric
+      ? fixtures.find(f => String(f?.fixture?.id) === m.external_id)
+      : fixtures.find(f =>
+          namesMatch(m.home_team?.name, f?.teams?.home?.name) &&
+          namesMatch(m.away_team?.name, f?.teams?.away?.name));
+
     const outcome = fx ? fixtureOutcome(fx) : null;
-    if (!outcome) { stillPending++; continue; } // not finished yet (or not found)
+    // fixtureOutcome only returns non-null when the fixture is FT/AET/PEN AND
+    // both goals are present — so reaching here guarantees a real scoreline.
+    // Never write 'completed' without one (the whole point of this fix).
+    if (!outcome) { stillPending++; continue; }
 
     const { error: upErr } = await supabase
       .from('matches')
       .update({
         status:     'completed',
-        goals_home: fx?.goals?.home ?? null,
-        goals_away: fx?.goals?.away ?? null,
+        goals_home: fx.goals.home,
+        goals_away: fx.goals.away,
         result:     outcome,
       })
       .eq('id', m.id);
@@ -215,11 +279,12 @@ async function settleFinishedMatches(supabase, cache) {
       stillPending++;
       continue;
     }
+    settledKeys.add(key); // block any twin later in this batch
     completed++;
   }
 
-  console.log(`[results] match status: completed ${completed}, still pending ${stillPending}`);
-  return { completed, pending: stillPending };
+  console.log(`[results] match status: completed ${completed}, still pending ${stillPending}, dup-skipped ${skippedDup}`);
+  return { completed, pending: stillPending, skippedDup };
 }
 
 // ---------------------------------------------------------------------------
