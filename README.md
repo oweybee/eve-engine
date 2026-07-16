@@ -78,13 +78,27 @@ row still says `scheduled`, closing the leak at the source.
    miscalibration. The stage is still behind `INPLAY_MODEL_ENABLED` (default
    `false`) for rollout control; flip it on once `team_elo` has accumulated
    enough top-5-league history.
+3. **Second Half Sniper** (`SECOND_HALF_SNIPER`, gated `SECOND_HALF_SNIPER_ENABLED`) —
+   a **half-time trigger**. At the break (elapsed `SNIPER_MIN_MINUTE`–`SNIPER_MAX_MINUTE`),
+   on a still-*hot* scoreline (≤ `SNIPER_HOT_MAX_GOALS`) in a match where goals
+   were expected pre-match (`λ_home + λ_away ≥ SNIPER_MIN_MATCH_XG`), it prices
+   `P(final total > line)` for each `SNIPER_LINES` entry (Over 1.5 / 2.5) from the
+   current score and the frozen `inplay_baseline` λ (`lib/inplayWinProb.goalsOverProb`),
+   and holds it against the **live Over price**: `edge = p_model × live_over − 1`.
+   Competition-agnostic (same Poisson family as the win-prob stage — no trained
+   model), it emits **one** Over entry per fixture (the highest-EV line; the dedup
+   index is keyed on `(match, market, outcome, model)`, not the line). The
+   downstream first-goal exit / no-goal stop-loss is trade management, not
+   detection. Behind `SECOND_HALF_SNIPER_ENABLED` (default `false`) for rollout;
+   `lib/secondHalfSniper.js`, tested in `engine.sniper.test.js`.
 
 **In-play run order** (`run-inplay.yml`):
 
 1. `node ingestLiveOdds.js` — `/fixtures?live=all` updates `matches`
    (`status='live'`, current `goals_home/away`, `minute`); `/odds/live` writes
-   the current 1X2 price under the synthetic bookmaker `apifootball_live`.
-2. `node computeInplayValues.js` — Stage 1 then Stage 2, writing `phase='inplay'`.
+   the current 1X2 **and Over/Under goals** prices under the synthetic bookmaker
+   `apifootball_live` (the totals rows feed the Second Half Sniper at the break).
+2. `node computeInplayValues.js` — Stages 1–4, writing `phase='inplay'`.
 3. `node postToX.js` — routes `phase='inplay'` to the dedicated Telegram
    channel (`TELEGRAM_INPLAY_CHAT_ID`). If that channel is unset, in-play
    signals are recorded but **not** posted — they never leak into the main feed.
