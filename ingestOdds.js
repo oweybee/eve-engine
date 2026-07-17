@@ -49,9 +49,11 @@ const DRY_RUN           = process.argv.includes('--dry-run');
 const MIN_PRICE_MOVEMENT = 0.01;
 
 // How many fixtures' odds to fetch concurrently (audit H6). The daily API budget
-// is large; the only real limit is per-minute rate, which httpClient's
-// Retry-After/backoff absorbs. Tune down if the plan's per-minute cap is tight.
-const FETCH_CONCURRENCY = parseInt(process.env.INGEST_FETCH_CONCURRENCY || '6', 10);
+// is large; the real constraint is per-minute rate. httpGet's own 429/rateLimit
+// backoff absorbs occasional hits; INTER_BATCH_DELAY_MS below spaces batches out
+// so a 13-fixture run doesn't fire as one burst. Tune down if still rate-limited.
+const FETCH_CONCURRENCY   = parseInt(process.env.INGEST_FETCH_CONCURRENCY   || '6',   10);
+const INTER_BATCH_DELAY_MS = parseInt(process.env.INGEST_INTER_BATCH_DELAY_MS || '1000', 10);
 
 // ---------------------------------------------------------------------------
 // HTTP — API-Football v3
@@ -75,8 +77,18 @@ function httpGetOnce(path) {
         res.on('end', () => {
           if (res.statusCode === 429) { reject(Object.assign(new Error('Rate limit hit'), { is429: true })); return; }
           if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`)); return; }
-          try { resolve(JSON.parse(body)); }
-          catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
+          let json;
+          try { json = JSON.parse(body); }
+          catch (e) { reject(new Error(`JSON parse: ${e.message}`)); return; }
+          // api-sports.io returns rate-limit errors as HTTP 200 with an
+          // `errors.rateLimit` body field, not a 429 — without this check
+          // every rate-limited request was silently treated as "no odds
+          // returned" instead of retried, so bursts could wipe out a whole run.
+          if (json?.errors?.rateLimit) {
+            reject(Object.assign(new Error(`Rate limit: ${json.errors.rateLimit}`), { is429: true }));
+            return;
+          }
+          resolve(json);
         });
       },
     ).on('error', reject).end();
@@ -494,8 +506,9 @@ async function ingest() {
   // ── Phase 1: fetch every fixture's odds in parallel (bounded) ──────────────
   // Was a serial fetch + sleep(200) between fixtures, so the network round-trips
   // dominated the run and capped odds freshness. Fetching is pure (no shared
-  // state), so it parallelises safely; httpClient's Retry-After/backoff handles
-  // any per-minute rate limit. (audit H6)
+  // state), so it parallelises safely. Batches are spaced INTER_BATCH_DELAY_MS
+  // apart so a 13-fixture run doesn't fire as one burst; httpGet's rateLimit
+  // detection backs off and retries any batch that still gets throttled. (audit H6)
   const fetched = await withPool(
     plan.fixture_ids,
     async (fixtureId) => {
@@ -508,6 +521,7 @@ async function ingest() {
       }
     },
     FETCH_CONCURRENCY,
+    INTER_BATCH_DELAY_MS,
   );
 
   // ── Phase 2: process results SERIALLY — the shared match/odds Maps and
@@ -623,12 +637,15 @@ async function ingest() {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // Bounded-concurrency map: runs `fn` over `items` at most `concurrency` at a
-// time. Mirrors the helper in computeValues.js. `fn` should handle its own
-// errors; a rejection yields null for that item.
-async function withPool(items, fn, concurrency) {
+// time, waiting `delayMs` between batches. Mirrors the helper in
+// computeValues.js (which has no inter-batch delay — this is the odds-fetch
+// variant). `fn` should handle its own errors; a rejection yields null for
+// that item.
+async function withPool(items, fn, concurrency, delayMs = 0) {
   const n = Number.isFinite(concurrency) && concurrency >= 1 ? concurrency : 1;
   const results = [];
   for (let start = 0; start < items.length; start += n) {
+    if (start > 0 && delayMs > 0) await sleep(delayMs);
     const batch   = items.slice(start, start + n);
     const settled = await Promise.allSettled(batch.map(fn));
     for (const s of settled) results.push(s.status === 'fulfilled' ? s.value : null);
