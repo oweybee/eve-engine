@@ -1,8 +1,10 @@
 -- 034_tiered_premium_access.sql
 --
--- ⚠️  STAGED FOR REVIEW — NOT YET APPLIED TO PRODUCTION.  ⚠️
---     Apply with the Supabase SQL editor / CLI once you're happy with the
---     preview size (see free_preview_limit() below). See FULL_SITE_AUDIT §C1.
+-- APPLIED to production. Verified live: the tiered_read_* policies below are
+-- active and the pre-fix `USING (true)` anon-read policies are gone (audit
+-- 2026-07-19). Do NOT run the rollback block at the bottom of this file
+-- unless you intend to reopen the paywall-bypass vulnerability it describes.
+-- See FULL_SITE_AUDIT §C1.
 --
 -- PROBLEM (Critical): the premium prediction tables were readable in full by
 -- anyone. Their SELECT policies were `USING (true)` granted to anon/public, and
