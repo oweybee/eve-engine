@@ -75,8 +75,17 @@ function httpGetOnce(path) {
         res.on('end', () => {
           if (res.statusCode === 429) { reject(Object.assign(new Error('Rate limit hit'), { is429: true })); return; }
           if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`)); return; }
-          try { resolve(JSON.parse(body)); }
-          catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
+          let parsed;
+          try { parsed = JSON.parse(body); }
+          catch (e) { reject(new Error(`JSON parse: ${e.message}`)); return; }
+          // API-Football signals per-minute throttling with HTTP 200 and an
+          // errors.rateLimit field rather than a 429 status — route it through
+          // the same retry/backoff path or it silently resolves as "no odds".
+          if (parsed.errors && !Array.isArray(parsed.errors) && parsed.errors.rateLimit) {
+            reject(Object.assign(new Error(parsed.errors.rateLimit), { is429: true }));
+            return;
+          }
+          resolve(parsed);
         });
       },
     ).on('error', reject).end();
