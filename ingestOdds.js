@@ -75,8 +75,20 @@ function httpGetOnce(path) {
         res.on('end', () => {
           if (res.statusCode === 429) { reject(Object.assign(new Error('Rate limit hit'), { is429: true })); return; }
           if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`)); return; }
-          try { resolve(JSON.parse(body)); }
-          catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
+          let json;
+          try { json = JSON.parse(body); }
+          catch (e) { reject(new Error(`JSON parse: ${e.message}`)); return; }
+          // API-Football signals rate-limiting inside a 200 OK body instead of
+          // an HTTP 429 status, e.g. {"errors":{"rateLimit":"Too many
+          // requests..."},"response":[]}. Without this check it's
+          // indistinguishable from a legitimate empty result, so the
+          // retry/backoff below never fires and the fixture is silently
+          // treated as "no odds available" every run.
+          if (json?.errors?.rateLimit) {
+            reject(Object.assign(new Error(`Rate limit hit (body): ${json.errors.rateLimit}`), { is429: true }));
+            return;
+          }
+          resolve(json);
         });
       },
     ).on('error', reject).end();
