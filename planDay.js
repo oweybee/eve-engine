@@ -147,6 +147,13 @@ async function fetchFixturesForDate(date, league) {
   const path = `/fixtures?date=${date}&league=${league.id}&season=${FOOTBALL_SEASON}`;
   console.log(`[plan] GET ${path}`);
   const json = await httpGet(path);
+  // API-Football returns HTTP 200 even when a request fails (bad key, daily
+  // quota exceeded, invalid params), putting the failure in json.errors with
+  // an empty json.response. Without this check that looks identical to a
+  // genuine "zero fixtures today" and the whole pipeline silently starves.
+  if (json.errors && (Array.isArray(json.errors) ? json.errors.length : Object.keys(json.errors).length)) {
+    throw new Error(`API-Football error for ${league.name} ${date}: ${JSON.stringify(json.errors)}`);
+  }
   const fixtures = json.response ?? [];
   // Filter out already-finished fixtures (FT = full time, AET = after extra time, PEN = penalties)
   const FINISHED_STATUSES = ['FT', 'AET', 'PEN'];
@@ -306,9 +313,14 @@ async function main() {
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
   console.log(`\n[planDay] ${DRY_RUN ? '(DRY RUN) ' : ''}${today} — budget ${DAILY_BUDGET} req, window ${ACTIVE_START_HOUR}:00–${ACTIVE_END_HOUR}:00 UTC\n`);
 
-  // P1-3 fix: early-exit if a plan for today already exists.
-  // Without this, every accidental re-run (or workflow retry) burns DAYS_AHEAD
-  // API credits re-fetching the same fixtures and overwrites runs_completed → 0.
+  // P1-3 fix: early-exit only if a plan for today already exists AND it
+  // actually has fixtures. A previously-saved empty plan (0 fixtures) is not
+  // trusted as final — it may have been a genuine no-matches day or a
+  // swallowed API error, so we retry the fetch rather than permanently
+  // starving ingestOdds.js for the rest of the day. Without this, every
+  // accidental re-run (or workflow retry) that lands on a *populated* plan
+  // still burns DAYS_AHEAD API credits re-fetching the same fixtures and
+  // overwrites runs_completed → 0, which is what the original guard prevented.
   if (!DRY_RUN) {
     const supabaseEarly = getSupabase();
     const { data: existing } = await supabaseEarly
@@ -316,9 +328,12 @@ async function main() {
       .select('date, fixture_ids, runs_planned, runs_completed')
       .eq('date', today)
       .single();
-    if (existing) {
-      console.log(`[planDay] plan for ${today} already exists (${existing.fixture_ids?.length ?? 0} fixtures, ${existing.runs_completed}/${existing.runs_planned} runs) — skipping`);
+    if (existing && (existing.fixture_ids?.length ?? 0) > 0) {
+      console.log(`[planDay] plan for ${today} already exists (${existing.fixture_ids.length} fixtures, ${existing.runs_completed}/${existing.runs_planned} runs) — skipping`);
       return;
+    }
+    if (existing) {
+      console.log(`[planDay] existing plan for ${today} has 0 fixtures — retrying fetch`);
     }
   }
 
