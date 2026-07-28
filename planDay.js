@@ -115,8 +115,25 @@ function httpGetOnce(path) {
         res.on('end', () => {
           if (res.statusCode === 429) { reject(Object.assign(new Error('Rate limit hit'), { is429: true })); return; }
           if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`)); return; }
-          try { resolve(JSON.parse(body)); }
-          catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
+          let json;
+          try { json = JSON.parse(body); }
+          catch (e) { reject(new Error(`JSON parse: ${e.message}`)); return; }
+          // API-Football returns HTTP 200 even when the request itself failed
+          // (daily/subscription quota exhausted, invalid key, disallowed
+          // league/season, etc.) — the failure only shows up in the `errors`
+          // field of an otherwise-200 body, with `response` left empty. That
+          // used to be indistinguishable from "genuinely no fixtures today",
+          // so a quota-exhausted key silently looked like a quiet day instead
+          // of surfacing as a loud, alertable failure. Treat any non-empty
+          // `errors` as a hard failure so the caller sees it.
+          const hasApiErrors = json && json.errors &&
+            (Array.isArray(json.errors) ? json.errors.length > 0 : Object.keys(json.errors).length > 0);
+          if (hasApiErrors) {
+            const msg = typeof json.errors === 'string' ? json.errors : JSON.stringify(json.errors);
+            reject(Object.assign(new Error(`API-Football error: ${msg}`), { isApiError: true }));
+            return;
+          }
+          resolve(json);
         });
       },
     ).on('error', reject).end();
