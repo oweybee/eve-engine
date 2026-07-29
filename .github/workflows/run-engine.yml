@@ -17,10 +17,6 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       RAPIDAPI_KEY:              ${{ secrets.RAPIDAPI_KEY }}
       ODDS_COUNTRY:              'GB'
-      # λ "model vs market" board (computeModelBoard.js)
-      LAMBDA_BOARD_ENABLED:      'true'
-      # onnxruntime-node postinstall tries to fetch CUDA extras; CPU is all we need
-      ONNXRUNTIME_NODE_INSTALL_CUDA: 'skip'
       # Active window must match plan-day.yml.
       ACTIVE_START_HOUR:         '8'
       ACTIVE_END_HOUR:           '24'
@@ -56,9 +52,6 @@ jobs:
 
       - name: Compute values
         run: node computeValues.js
-
-      - name: Model vs market board (λ Monte Carlo)
-        run: node computeModelBoard.js
 
       - name: Settle results & refresh performance summary
         run: node fetchResults.js

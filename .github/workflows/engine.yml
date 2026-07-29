@@ -76,6 +76,10 @@ jobs:
       ACTIVE_START_HOUR:         '0'
       ACTIVE_END_HOUR:           '24'
       DAILY_REQUEST_BUDGET:      ${{ vars.DAILY_REQUEST_BUDGET || '75000' }}
+      # λ "model vs market" board (computeModelBoard.js)
+      LAMBDA_BOARD_ENABLED:      ${{ vars.LAMBDA_BOARD_ENABLED || 'true' }}
+      # onnxruntime-node postinstall fetches CUDA extras we don't need
+      ONNXRUNTIME_NODE_INSTALL_CUDA: 'skip'
       SHARPNESS_MULTI_BOOK:      ${{ vars.SHARPNESS_MULTI_BOOK  }}
       SHARPNESS_SINGLE_BOOK:     ${{ vars.SHARPNESS_SINGLE_BOOK }}
       MULTI_BOOK_THRESHOLD:      ${{ vars.MULTI_BOOK_THRESHOLD  }}
@@ -136,6 +140,14 @@ jobs:
         id: api_compute
         continue-on-error: true
         run: node computeApiValues.js
+
+      # λ "model vs market" board — prices every scheduled fixture with fresh
+      # odds against the goals-model and records credible disagreements to
+      # value_signals (model_architecture='LAMBDA_MC') for /model-board.
+      - name: Model vs market board (λ Monte Carlo)
+        id: model_board
+        continue-on-error: true
+        run: node computeModelBoard.js
 
       # The "constant eye" — asserts the published maths is internally consistent
       # (probabilities in range, edge <-> odds coherent, no implausible edges,
