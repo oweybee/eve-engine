@@ -36,8 +36,10 @@ import xgboost as xgb
 
 from expected_goals import fit_weights
 from monte_carlo import score_matrix, markets_from_matrix
+from scrapers.names import key as club_key
 
 CACHE = Path(__file__).parent / "models" / "_csv_cache_v3.csv.gz"
+SQUAD_CSV = Path(__file__).parent / "data" / "external" / "squad_values.csv"
 SPLIT = pd.Timestamp("2019-07-01", tz="UTC")
 ELO_K, ELO_HOME_ADV, ELO_DEFAULT = 20.0, 60.0, 1500.0
 FORM_N = 10
@@ -48,7 +50,55 @@ FEATURES = [
     "h_gf", "h_ga", "a_gf", "a_ga",        # rolling goals for/against (prior-N)
     "h_xg", "a_xg", "has_xg",              # rolling proxy-xG (fallback to goals)
     "lg_home_gf", "lg_away_gf", "lg_draw", # league target-stats (train-only)
+    "sv_home", "sv_away", "sv_diff", "sv_has",  # Transfermarkt squad value (log €)
 ]
+
+
+def _season_start(ts) -> int:
+    """European season start year for a match date (Aug→next May)."""
+    return ts.year if ts.month >= 7 else ts.year - 1
+
+
+def load_squad_values(path=SQUAD_CSV):
+    """(league, season_start, tm_club_key) → log10(squad value €), and the set
+    of Transfermarkt club keys per league (for name resolution)."""
+    if not path.exists():
+        return {}, {}
+    sv = pd.read_csv(path)
+    out, tm_keys = {}, defaultdict(set)
+    for r in sv.itertuples(index=False):
+        v = float(r.squad_value_eur)
+        if v > 0:
+            k = club_key(r.club)
+            out[(r.league, int(r.season_start), k)] = np.log10(v)
+            tm_keys[r.league].add(k)
+    return out, dict(tm_keys)
+
+
+def resolve_names(corpus_keys_by_league, tm_keys, floor=0.84):
+    """Map each corpus club key → best Transfermarkt key in the same league.
+
+    Exact match wins; otherwise difflib fuzzy above `floor` (else unmatched).
+    Done once per league (~40×40 comparisons), not per row.
+    """
+    from difflib import SequenceMatcher
+    resolve = {}
+    for lg, cset in corpus_keys_by_league.items():
+        tmset = tm_keys.get(lg, set())
+        if not tmset:
+            continue
+        for ck in cset:
+            if ck in tmset:
+                resolve[(lg, ck)] = ck
+                continue
+            best, bs = None, 0.0
+            for tk in tmset:
+                s = SequenceMatcher(None, ck, tk).ratio()
+                if s > bs:
+                    best, bs = tk, s
+            if bs >= floor:
+                resolve[(lg, ck)] = best
+    return resolve
 
 
 def _implied(psh, psd, psa):
@@ -56,8 +106,11 @@ def _implied(psh, psd, psa):
     return inv / inv.sum()
 
 
-def build_features(df: pd.DataFrame, xw) -> pd.DataFrame:
+def build_features(df: pd.DataFrame, xw, squad=None, resolve=None) -> pd.DataFrame:
     """Chronological walk-forward → one pre-match feature row per odds match."""
+    squad = squad or {}
+    resolve = resolve or {}
+    sv_fallback = float(np.median(list(squad.values()))) if squad else 7.5
     df = df.sort_values("date").reset_index(drop=True)
     elo = defaultdict(lambda: ELO_DEFAULT)
     gf = defaultdict(lambda: deque(maxlen=FORM_N))
@@ -84,6 +137,12 @@ def build_features(df: pd.DataFrame, xw) -> pd.DataFrame:
             h_gf, a_gf = mean(gf[h], 1.35), mean(gf[a], 1.15)
             h_xg = mean(xgf[h], h_gf)
             a_xg = mean(xgf[a], a_gf)
+            ss = _season_start(m.date)
+            hk = resolve.get((m.league, club_key(h)), club_key(h))
+            ak = resolve.get((m.league, club_key(a)), club_key(a))
+            svh = squad.get((m.league, ss, hk))
+            sva = squad.get((m.league, ss, ak))
+            has_sv = 1.0 if (svh is not None and sva is not None) else 0.0
             rows.append({
                 "date": m.date, "league": m.league, "home": h, "away": a,
                 "fthg": m.fthg, "ftag": m.ftag, "ftr": m.ftr,
@@ -96,6 +155,10 @@ def build_features(df: pd.DataFrame, xw) -> pd.DataFrame:
                 "a_gf": a_gf, "a_ga": mean(ga[a], 1.35),
                 "h_xg": h_xg, "a_xg": a_xg,
                 "has_xg": 1.0 if len(xgf[h]) and len(xgf[a]) else 0.0,
+                "sv_home": svh if svh is not None else sv_fallback,
+                "sv_away": sva if sva is not None else sv_fallback,
+                "sv_diff": (svh - sva) if has_sv else 0.0,
+                "sv_has": has_sv,
             })
 
         # ── update state AFTER emitting (no leakage) ──
@@ -136,9 +199,18 @@ def train_and_eval():
     xw = fit_weights(df)                        # needs the original 'as' column
     print(f"proxy-xG weights: sot={xw.sot:.3f} off={xw.off:.3f} corner={xw.corner:.3f}")
 
+    squad, tm_keys = load_squad_values()
+    print(f"squad-value rows: {len(squad):,} across {len(tm_keys)} leagues"
+          if squad else "squad-value file absent")
+    corpus_keys = (df.assign(k=df["home"].map(club_key))
+                     .groupby("league")["k"].apply(set).to_dict()) if squad else {}
+    resolve = resolve_names(corpus_keys, tm_keys) if squad else {}
+
     print("Walk-forward feature build …")
     # 'as' is a Python keyword → unusable via itertuples attribute access; rename now.
-    feat = build_features(df.rename(columns={"as": "ashots"}), xw)
+    feat = build_features(df.rename(columns={"as": "ashots"}), xw, squad, resolve)
+    cov = feat["sv_has"].mean()
+    print(f"  squad-value coverage on odds matches: {100*cov:.0f}%")
     train_mask = feat["date"] < SPLIT
     feat = add_league_stats(feat, train_mask)
     tr, te = feat[train_mask], feat[~train_mask]
