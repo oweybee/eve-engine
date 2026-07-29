@@ -176,8 +176,38 @@ def fetch_big5(item):
 
 # ── Uploaded CSVs in ensemble/data/ (auto-discovered) ──────────────────────────
 
-def _parse_extra(df):
-    """football-data 'extra league' wide layout (SWE.csv / USA.csv)."""
+# Established extra-league slugs that production / LEAGUE_PRIORS already depend
+# on — keyed by (country, league) so they survive the country-qualified scheme.
+EXTRA_PRESERVE = {
+    ("sweden", "allsvenskan"): "allsvenskan",
+    ("usa", "mls"): "mls",
+    ("unitedstates", "mls"): "mls",
+}
+
+
+def extra_slug(country: str, league: str) -> str:
+    """Collision-safe slug for the extra-league format.
+
+    The extra files carry generic league NAMES ("Bundesliga", "Serie A",
+    "Premier League") that would otherwise alias onto the big-5 first-class
+    slugs and silently merge foreign leagues into them. In this format a
+    "Bundesliga" is Austria's, never Germany's, so we country-qualify:
+    "austria_bundesliga", "brazil_seriea", etc. — except the two established
+    extra leagues (Allsvenskan, MLS), which keep their bare slug.
+    """
+    c = re.sub(r"[^a-z0-9]+", "", str(country).strip().lower())
+    l = re.sub(r"[^a-z0-9]+", "", str(league).strip().lower())
+    if (c, l) in EXTRA_PRESERVE:
+        return EXTRA_PRESERVE[(c, l)]
+    if not l:
+        return c or "unknown"
+    if not c:
+        return l
+    return f"{c}_{l}"
+
+
+def _parse_extra(df, fallback_country=""):
+    """football-data 'extra league' wide layout (SWE.csv / USA.csv / Other_leagues)."""
     rows = []
     for _, m in df.iterrows():
         try: fthg, ftag = int(m["HG"]), int(m["AG"])
@@ -186,7 +216,7 @@ def _parse_extra(df):
         if ftr not in ("H", "D", "A"): continue
         try: ts = pd.to_datetime(str(m["Date"]).strip(), dayfirst=True, utc=True)
         except Exception: continue
-        league = league_slug(_txt(m.get("League")) or _txt(m.get("Country")))
+        league = extra_slug(_txt(m.get("Country")) or fallback_country, _txt(m.get("League")))
         season = _txt(m.get("Season")) or _season_from_date(ts)
         rows.append(_blank({
             "date": ts, "league": league, "season": season,
@@ -256,7 +286,7 @@ def load_upload(path: Path):
         return []
     cols = set(df.columns)
     if {"Home", "Away", "HG", "AG", "Res"}.issubset(cols):
-        rows = _parse_extra(df)
+        rows = _parse_extra(df, fallback_country=path.stem)
         layout = "extra"
     elif {"HomeTeam", "AwayTeam", "FTHG", "FTAG", "FTR"}.issubset(cols):
         rows = _parse_main(df, fallback_league=league_slug(path.stem))
