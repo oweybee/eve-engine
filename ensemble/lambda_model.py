@@ -78,8 +78,14 @@ def load_squad_values(path=SQUAD_CSV):
 def resolve_names(corpus_keys_by_league, tm_keys, floor=0.84):
     """Map each corpus club key → best Transfermarkt key in the same league.
 
-    Exact match wins; otherwise difflib fuzzy above `floor` (else unmatched).
-    Done once per league (~40×40 comparisons), not per row.
+    football-data uses SHORT names ("Newcastle", "West Ham") where Transfermarkt
+    uses FULL names ("Newcastle United", "West Ham United"), so the corpus key is
+    a PREFIX of the TM key and scores low on pure fuzzy. Resolution order:
+      1. exact key
+      2. prefix/containment (one side startswith the other) — unique → take it,
+         several → best fuzzy among them
+      3. difflib fuzzy over the whole league above `floor`
+    Done once per league, not per row.
     """
     from difflib import SequenceMatcher
     resolve = {}
@@ -91,12 +97,18 @@ def resolve_names(corpus_keys_by_league, tm_keys, floor=0.84):
             if ck in tmset:
                 resolve[(lg, ck)] = ck
                 continue
+            cands = [tk for tk in tmset
+                     if len(ck) >= 4 and (tk.startswith(ck) or ck.startswith(tk))]
+            if len(cands) == 1:
+                resolve[(lg, ck)] = cands[0]
+                continue
+            pool = cands if cands else tmset
             best, bs = None, 0.0
-            for tk in tmset:
+            for tk in pool:
                 s = SequenceMatcher(None, ck, tk).ratio()
                 if s > bs:
                     best, bs = tk, s
-            if bs >= floor:
+            if cands or bs >= floor:
                 resolve[(lg, ck)] = best
     return resolve
 
