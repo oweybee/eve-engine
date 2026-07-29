@@ -71,40 +71,47 @@ jobs:
       - name: Retrain supermodels (halftime + prematch)
         run: python3 ensemble/train_supermodel_v2.py --mode both
 
-      - name: Guard — feature contract must not drift
+      # Per-model contract gate: a model whose feature count is UNCHANGED is
+      # contract-safe and ships; a model whose count changed (a league-OHE
+      # width change vs the hardcoded vector in lib/halftimeFeatures.js) is HELD
+      # with a warning — it must not ship until the JS is updated to match. This
+      # is per-model so a safe model (e.g. prematch) still ships even when the
+      # other (halftime) drifts.
+      - name: Select contract-safe models
+        id: select
         run: |
           python3 - "${{ steps.contract_before.outputs.halftime }}" "${{ steps.contract_before.outputs.prematch }}" <<'PY'
-          import json, pathlib, sys
+          import json, os, pathlib, sys
           before = {"halftime": int(sys.argv[1]), "prematch": int(sys.argv[2])}
-          drift = []
+          safe, held = [], []
           for mode, prev in before.items():
               n = json.loads(pathlib.Path(f"ensemble/models/supermodel_{mode}_v2_features.json").read_text())["n"]
-              print(f"{mode}: {prev} -> {n}")
-              if prev and n != prev:
-                  drift.append(f"{mode} {prev}->{n}")
-          if drift:
-              sys.exit(
-                  "FEATURE CONTRACT DRIFT: " + ", ".join(drift) + ".\n"
-                  "A new first-class league column changed the model input size. "
-                  "Update the hardcoded league lists in lib/halftimeFeatures.js to "
-                  "match the new *_features.json BEFORE this model can ship, then "
-                  "re-run. Refusing to commit a model production cannot feed correctly."
-              )
-          print("OK — feature contract unchanged; safe to ship.")
+              if not prev or n == prev:
+                  print(f"{mode}: {prev} -> {n}  OK (shippable)")
+                  safe.append(mode)
+              else:
+                  print(f"::warning::{mode} feature count {prev} -> {n}: contract changed "
+                        f"(league-OHE width). HELD — update lib/halftimeFeatures.js to the "
+                        f"new *_features.json, then re-run to ship {mode}.")
+                  held.append(mode)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("safe=" + ",".join(safe) + "\n")
+              f.write("held=" + ",".join(held) + "\n")
           PY
 
-      - name: Commit refreshed corpus + models
+      - name: Commit contract-safe models
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # NB: _csv_cache_v3.csv.gz is intentionally gitignored (a rebuildable
-          # artifact) — we commit the trained models, not the corpus cache.
-          git add ensemble/models/supermodel_halftime_v2.onnx \
-                  ensemble/models/supermodel_prematch_v2.onnx \
-                  ensemble/models/supermodel_halftime_v2_features.json \
-                  ensemble/models/supermodel_prematch_v2_features.json
+          # artifact) — we commit the trained models, not the corpus cache. Only
+          # contract-safe models are staged; held models are left uncommitted.
+          for m in $(echo "${{ steps.select.outputs.safe }}" | tr ',' ' '); do
+            [ -n "$m" ] && git add "ensemble/models/supermodel_${m}_v2.onnx" \
+                                    "ensemble/models/supermodel_${m}_v2_features.json"
+          done
           if git diff --cached --quiet; then
-            echo "No model changes to commit."
+            echo "No contract-safe model changes to commit."
             exit 0
           fi
           git commit -m "chore: retrain supermodels from updated historical corpus [skip ci]"
