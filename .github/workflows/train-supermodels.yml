@@ -1,0 +1,112 @@
+name: Train Supermodels (historical corpus)
+
+# Teaches the ELO/form supermodels from the historical football-data.co.uk
+# corpus. Fires automatically whenever a season CSV is added/updated under
+# ensemble/data/ (the "drop a CSV, push" workflow), and on demand.
+#
+#   git add ensemble/data/GER2_2023.csv && git commit && git push
+#     → this workflow rebuilds the corpus, retrains the supermodels,
+#       and commits the refreshed .onnx + *_features.json back to the branch.
+#
+# The separate weekly train-models.yml retrains the Supabase-fed ensemble
+# (match_odds / btts / over_under); the two are independent.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ensemble/data/**'
+
+# Never run two retrains on the same branch at once, and let the latest win.
+concurrency:
+  group: train-supermodels-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  train:
+    name: Rebuild corpus + retrain supermodels
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install ML dependencies
+        run: |
+          pip install --upgrade pip
+          pip install xgboost scikit-learn numpy pandas requests onnx onnxmltools
+
+      # Record the current feature-vector contract so we can refuse to ship a
+      # model whose dimensions drifted from what lib/halftimeFeatures.js builds
+      # by hand. Adding DATA never changes these counts; adding a brand-new
+      # first-class LEAGUE does, and that needs a matching JS edit first.
+      - name: Snapshot feature contract (before)
+        id: contract_before
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, pathlib
+          for mode in ("halftime", "prematch"):
+              p = pathlib.Path(f"ensemble/models/supermodel_{mode}_v2_features.json")
+              n = json.loads(p.read_text())["n"] if p.exists() else 0
+              print(f"{mode}={n}")
+          PY
+
+      - name: Rebuild training corpus from ensemble/data/ + big-5 mirror
+        run: python3 ensemble/build_training_corpus.py
+
+      - name: Retrain supermodels (halftime + prematch)
+        run: python3 ensemble/train_supermodel_v2.py --mode both
+
+      - name: Guard — feature contract must not drift
+        run: |
+          python3 - "${{ steps.contract_before.outputs.halftime }}" "${{ steps.contract_before.outputs.prematch }}" <<'PY'
+          import json, pathlib, sys
+          before = {"halftime": int(sys.argv[1]), "prematch": int(sys.argv[2])}
+          drift = []
+          for mode, prev in before.items():
+              n = json.loads(pathlib.Path(f"ensemble/models/supermodel_{mode}_v2_features.json").read_text())["n"]
+              print(f"{mode}: {prev} -> {n}")
+              if prev and n != prev:
+                  drift.append(f"{mode} {prev}->{n}")
+          if drift:
+              sys.exit(
+                  "FEATURE CONTRACT DRIFT: " + ", ".join(drift) + ".\n"
+                  "A new first-class league column changed the model input size. "
+                  "Update the hardcoded league lists in lib/halftimeFeatures.js to "
+                  "match the new *_features.json BEFORE this model can ship, then "
+                  "re-run. Refusing to commit a model production cannot feed correctly."
+              )
+          print("OK — feature contract unchanged; safe to ship.")
+          PY
+
+      - name: Commit refreshed corpus + models
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ensemble/models/_csv_cache_v3.csv.gz \
+                  ensemble/models/supermodel_halftime_v2.onnx \
+                  ensemble/models/supermodel_prematch_v2.onnx \
+                  ensemble/models/supermodel_halftime_v2_features.json \
+                  ensemble/models/supermodel_prematch_v2_features.json
+          if git diff --cached --quiet; then
+            echo "No model changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: retrain supermodels from updated historical corpus [skip ci]"
+          for i in 1 2 3 4; do
+            if git push origin "HEAD:${{ github.ref_name }}"; then exit 0; fi
+            echo "push failed, retrying in $((2**i))s..."; sleep $((2**i))
+          done
+          git push origin "HEAD:${{ github.ref_name }}"
