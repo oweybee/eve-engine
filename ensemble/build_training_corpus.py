@@ -67,7 +67,10 @@ DATA_DIR = Path(__file__).parent / "data"
 OUT = Path(__file__).parent / "models" / "_csv_cache_v3.csv.gz"
 
 COLS = ["date","league","season","home","away","fthg","ftag","ftr","hthg","htag",
-        "hst","ast","hr","ar","b365h","b365d","b365a","psh","psd","psa","maxh","maxd","maxa"]
+        "hst","ast","hr","ar",
+        # total shots + corners — feed the proxy-xG / conversion / set-piece features
+        "hs","as","hc","ac",
+        "b365h","b365d","b365a","psh","psd","psa","maxh","maxd","maxa"]
 
 # ── League-name / division-code → canonical slug ────────────────────────────────
 # Preserves the exact keys production (lib/halftimeFeatures.js) and the trainer's
@@ -253,6 +256,8 @@ def _parse_main(df, fallback_league):
             "hthg": hthg, "htag": htag,
             "hst": _pick(m, "HST"), "ast": _pick(m, "AST"),
             "hr": _pick(m, "HR"), "ar": _pick(m, "AR"),
+            "hs": _pick(m, "HS"), "as": _pick(m, "AS"),
+            "hc": _pick(m, "HC"), "ac": _pick(m, "AC"),
             "b365h": _pick(m, "B365CH", "B365H"), "b365d": _pick(m, "B365CD", "B365D"), "b365a": _pick(m, "B365CA", "B365A"),
             "psh": _pick(m, "PSCH", "PSH", "PH"), "psd": _pick(m, "PSCD", "PSD", "PD"), "psa": _pick(m, "PSCA", "PSA", "PA"),
             "maxh": _pick(m, "MaxCH", "MaxH"), "maxd": _pick(m, "MaxCD", "MaxD"), "maxa": _pick(m, "MaxCA", "MaxA")}))
