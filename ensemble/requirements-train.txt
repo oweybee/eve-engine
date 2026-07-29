@@ -14,6 +14,10 @@ skl2onnx==1.20.0
 onnx==1.22.0
 onnxmltools==1.16.0
 protobuf==7.35.1
+# onnxmltools does `import packaging` but does NOT declare it as a dependency,
+# so on a clean runner the import fails with ModuleNotFoundError: packaging.
+# (It's present locally by chance — which masked this as a version problem.)
+packaging>=23
 numpy==2.4.6
 pandas==3.0.5
 scipy==1.17.1
