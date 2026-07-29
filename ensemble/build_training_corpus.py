@@ -306,12 +306,14 @@ def load_upload(path: Path):
 
 
 def discover_uploads(data_dir: Path):
-    """Every *.csv under data_dir, recursively (sorted for determinism).
+    """Every football-data *.csv under data_dir, recursively (sorted).
 
-    Recursive so files can be organised into subfolders (e.g. data/england/)
-    without changing the pipeline.
+    Recursive so files can be organised into subfolders (e.g. data/england/).
+    The reserved `external/` subtree (ClubElo, Transfermarkt exports) is NOT
+    match data and is skipped here — it is joined in later as features.
     """
-    return sorted(p for p in data_dir.rglob("*.csv") if p.is_file())
+    return sorted(p for p in data_dir.rglob("*.csv")
+                  if p.is_file() and "external" not in p.parts)
 
 
 # ── Orchestration ───────────────────────────────────────────────────────────────
