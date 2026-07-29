@@ -1,0 +1,3066 @@
+league,season_start,club,squad_value_eur
+epl,2005,Chelsea FC,363080000
+epl,2005,Manchester United,254580000
+epl,2005,Arsenal FC,231830000
+epl,2005,Liverpool FC,204050000
+epl,2005,Tottenham Hotspur,150330000
+epl,2005,Newcastle United,129080000
+epl,2005,Middlesbrough FC,94380000
+epl,2005,Everton FC,92820000
+epl,2005,Manchester City,91780000
+epl,2005,Portsmouth FC,86130000
+epl,2005,Aston Villa,83400000
+epl,2005,Charlton Athletic,82430000
+epl,2005,Birmingham City,81830000
+epl,2005,Fulham FC,70530000
+epl,2005,West Bromwich Albion,65500000
+epl,2005,Blackburn Rovers,63800000
+epl,2005,West Ham United,57250000
+epl,2005,Bolton Wanderers,56180000
+epl,2005,Wigan Athletic,51870000
+epl,2005,Sunderland AFC,29150000
+epl,2006,Chelsea FC,416760000
+epl,2006,Arsenal FC,261380000
+epl,2006,Manchester United,259149999
+epl,2006,Liverpool FC,239570000
+epl,2006,Tottenham Hotspur,165730000
+epl,2006,Newcastle United,143300000
+epl,2006,West Ham United,108050000
+epl,2006,Aston Villa,102850000
+epl,2006,Everton FC,100100000
+epl,2006,Middlesbrough FC,89270000
+epl,2006,Manchester City,82850000
+epl,2006,Portsmouth FC,82030000
+epl,2006,Fulham FC,79350000
+epl,2006,Blackburn Rovers,75200000
+epl,2006,Bolton Wanderers,72380000
+epl,2006,Charlton Athletic,68270000
+epl,2006,Wigan Athletic,58530000
+epl,2006,Sheffield United,34710000
+epl,2006,Watford FC,32869999
+epl,2006,Reading FC,32650000
+epl,2007,Chelsea FC,434350000
+epl,2007,Manchester United,354500000
+epl,2007,Liverpool FC,305650000
+epl,2007,Arsenal FC,259700000
+epl,2007,Tottenham Hotspur,218650000
+epl,2007,Everton FC,146150000
+epl,2007,Portsmouth FC,141300000
+epl,2007,Manchester City,135600000
+epl,2007,Newcastle United,129550000
+epl,2007,West Ham United,119200000
+epl,2007,Aston Villa,107600000
+epl,2007,Middlesbrough FC,93550000
+epl,2007,Blackburn Rovers,88600000
+epl,2007,Fulham FC,84050000
+epl,2007,Sunderland AFC,81800000
+epl,2007,Bolton Wanderers,71850000
+epl,2007,Birmingham City,71400000
+epl,2007,Reading FC,65930000
+epl,2007,Wigan Athletic,61600000
+epl,2007,Derby County,50400000
+epl,2008,Chelsea FC,448550000
+epl,2008,Manchester United,422700000
+epl,2008,Liverpool FC,312100000
+epl,2008,Arsenal FC,309450000
+epl,2008,Tottenham Hotspur,239900000
+epl,2008,Manchester City,219750000
+epl,2008,Everton FC,189300000
+epl,2008,Portsmouth FC,152600000
+epl,2008,Aston Villa,148650000
+epl,2008,Newcastle United,121100000
+epl,2008,West Ham United,102700000
+epl,2008,Blackburn Rovers,89050000
+epl,2008,Sunderland AFC,88850000
+epl,2008,Middlesbrough FC,80750000
+epl,2008,Wigan Athletic,76600000
+epl,2008,Bolton Wanderers,75100000
+epl,2008,Fulham FC,73700000
+epl,2008,West Bromwich Albion,64750000
+epl,2008,Hull City,64700000
+epl,2008,Stoke City,55650000
+epl,2009,Chelsea FC,451750000
+epl,2009,Manchester United,383150000
+epl,2009,Liverpool FC,331500000
+epl,2009,Arsenal FC,314300000
+epl,2009,Manchester City,312500000
+epl,2009,Tottenham Hotspur,263529999
+epl,2009,Everton FC,218930000
+epl,2009,Aston Villa,167380000
+epl,2009,Sunderland AFC,131580000
+epl,2009,West Ham United,123750000
+epl,2009,Fulham FC,101180000
+epl,2009,Portsmouth FC,96650000
+epl,2009,Blackburn Rovers,91630000
+epl,2009,Bolton Wanderers,85800000
+epl,2009,Stoke City,80700000
+epl,2009,Wigan Athletic,77600000
+epl,2009,Hull City,73200000
+epl,2009,Birmingham City,69650000
+epl,2009,Wolverhampton Wanderers,65480000
+epl,2009,Burnley FC,48150000
+epl,2010,Chelsea FC,424100000
+epl,2010,Manchester City,404180000
+epl,2010,Manchester United,388000000
+epl,2010,Liverpool FC,339200000
+epl,2010,Arsenal FC,324000000
+epl,2010,Tottenham Hotspur,307080000
+epl,2010,Aston Villa,202800000
+epl,2010,Everton FC,184480000
+epl,2010,Sunderland AFC,149330000
+epl,2010,West Ham United,138850000
+epl,2010,Newcastle United,119480000
+epl,2010,Fulham FC,109550000
+epl,2010,Bolton Wanderers,100150000
+epl,2010,Birmingham City,95380000
+epl,2010,Stoke City,94450000
+epl,2010,Blackburn Rovers,91530000
+epl,2010,West Bromwich Albion,86880000
+epl,2010,Wolverhampton Wanderers,83550000
+epl,2010,Wigan Athletic,80500000
+epl,2010,Blackpool FC,50030000
+epl,2011,Manchester City,498350000
+epl,2011,Manchester United,404100000
+epl,2011,Chelsea FC,375500000
+epl,2011,Arsenal FC,360930000
+epl,2011,Tottenham Hotspur,323300000
+epl,2011,Liverpool FC,233900000
+epl,2011,Everton FC,168850000
+epl,2011,Newcastle United,161700000
+epl,2011,Sunderland AFC,126500000
+epl,2011,Aston Villa,123500000
+epl,2011,Fulham FC,100000000
+epl,2011,Bolton Wanderers,90050000
+epl,2011,Stoke City,81650000
+epl,2011,Queens Park Rangers,81250000
+epl,2011,Blackburn Rovers,80000000
+epl,2011,Wolverhampton Wanderers,77050000
+epl,2011,Swansea City,75600000
+epl,2011,Wigan Athletic,74250000
+epl,2011,West Bromwich Albion,69550000
+epl,2011,Norwich City,58750000
+epl,2012,Manchester City,487000000
+epl,2012,Manchester United,450500000
+epl,2012,Chelsea FC,444250000
+epl,2012,Arsenal FC,296600000
+epl,2012,Tottenham Hotspur,295750000
+epl,2012,Liverpool FC,276100000
+epl,2012,Newcastle United,199750000
+epl,2012,Everton FC,139750000
+epl,2012,Sunderland AFC,131400000
+epl,2012,Queens Park Rangers,111550000
+epl,2012,Aston Villa,110500000
+epl,2012,Fulham FC,108800000
+epl,2012,Stoke City,104050000
+epl,2012,Swansea City,102000000
+epl,2012,West Ham United,102000000
+epl,2012,West Bromwich Albion,93500000
+epl,2012,Wigan Athletic,91550000
+epl,2012,Southampton FC,83050000
+epl,2012,Norwich City,73250000
+epl,2012,Reading FC,46000000
+epl,2013,Chelsea FC,584000000
+epl,2013,Manchester City,451300000
+epl,2013,Manchester United,400800000
+epl,2013,Arsenal FC,378950000
+epl,2013,Liverpool FC,307250000
+epl,2013,Tottenham Hotspur,288950000
+epl,2013,Everton FC,210000000
+epl,2013,Newcastle United,172300000
+epl,2013,Southampton FC,131500000
+epl,2013,Swansea City,128699999
+epl,2013,Sunderland AFC,122000000
+epl,2013,Fulham FC,112450000
+epl,2013,West Ham United,109750000
+epl,2013,Aston Villa,109500000
+epl,2013,Stoke City,101500000
+epl,2013,West Bromwich Albion,90000000
+epl,2013,Norwich City,88100000
+epl,2013,Cardiff City,87500000
+epl,2013,Crystal Palace,68450000
+epl,2013,Hull City,68150000
+epl,2014,Chelsea FC,557250000
+epl,2014,Manchester United,505400000
+epl,2014,Manchester City,448250000
+epl,2014,Arsenal FC,414750000
+epl,2014,Liverpool FC,324850000
+epl,2014,Tottenham Hotspur,304150000
+epl,2014,Southampton FC,210250000
+epl,2014,Everton FC,182850000
+epl,2014,Newcastle United,140000000
+epl,2014,West Ham United,135900000
+epl,2014,Swansea City,130750000
+epl,2014,Hull City,117100000
+epl,2014,Aston Villa,114250000
+epl,2014,Queens Park Rangers,112250000
+epl,2014,Stoke City,110500000
+epl,2014,Crystal Palace,97250000
+epl,2014,West Bromwich Albion,95950000
+epl,2014,Sunderland AFC,91000000
+epl,2014,Leicester City,66700000
+epl,2014,Burnley FC,52550000
+epl,2015,Chelsea FC,553500000
+epl,2015,Manchester City,499350000
+epl,2015,Arsenal FC,457850000
+epl,2015,Manchester United,439850000
+epl,2015,Liverpool FC,375250000
+epl,2015,Tottenham Hotspur,371850000
+epl,2015,Everton FC,249850000
+epl,2015,Southampton FC,225500000
+epl,2015,West Ham United,201330000
+epl,2015,Newcastle United,198000000
+epl,2015,Leicester City,161100000
+epl,2015,Stoke City,147000000
+epl,2015,Swansea City,145800000
+epl,2015,Watford FC,137000000
+epl,2015,Crystal Palace,135700000
+epl,2015,Aston Villa,117950000
+epl,2015,Norwich City,116900000
+epl,2015,West Bromwich Albion,113100000
+epl,2015,Sunderland AFC,111250000
+epl,2015,AFC Bournemouth,99900000
+epl,2016,Chelsea FC,686700000
+epl,2016,Manchester City,576500000
+epl,2016,Tottenham Hotspur,543650000
+epl,2016,Arsenal FC,542000000
+epl,2016,Manchester United,531450000
+epl,2016,Liverpool FC,425650000
+epl,2016,Everton FC,311250000
+epl,2016,West Ham United,273050000
+epl,2016,Southampton FC,263750000
+epl,2016,Crystal Palace,228430000
+epl,2016,Leicester City,218650000
+epl,2016,Stoke City,186000000
+epl,2016,Watford FC,175650000
+epl,2016,Swansea City,157100000
+epl,2016,Hull City,135850000
+epl,2016,Sunderland AFC,132000000
+epl,2016,AFC Bournemouth,131600000
+epl,2016,Middlesbrough FC,128800000
+epl,2016,West Bromwich Albion,123200000
+epl,2016,Burnley FC,107180000
+epl,2017,Manchester City,1010000000
+epl,2017,Chelsea FC,884250000
+epl,2017,Liverpool FC,857500000
+epl,2017,Manchester United,849500000
+epl,2017,Tottenham Hotspur,829600000
+epl,2017,Arsenal FC,694000000
+epl,2017,Everton FC,381250000
+epl,2017,Leicester City,304250000
+epl,2017,Southampton FC,297000000
+epl,2017,West Ham United,268100000
+epl,2017,Crystal Palace,220730000
+epl,2017,Newcastle United,208280000
+epl,2017,Watford FC,196000000
+epl,2017,Stoke City,192450000
+epl,2017,Burnley FC,169300000
+epl,2017,West Bromwich Albion,165950000
+epl,2017,Swansea City,165490000
+epl,2017,Brighton & Hove Albion,148200000
+epl,2017,AFC Bournemouth,144500000
+epl,2017,Huddersfield Town,106050000
+epl,2018,Manchester City,1200000000
+epl,2018,Liverpool FC,1170000000
+epl,2018,Chelsea FC,1170000000
+epl,2018,Tottenham Hotspur,898600000
+epl,2018,Manchester United,797600000
+epl,2018,Arsenal FC,659050000
+epl,2018,Everton FC,529100000
+epl,2018,Leicester City,434100000
+epl,2018,West Ham United,359000000
+epl,2018,AFC Bournemouth,310000000
+epl,2018,Southampton FC,305400000
+epl,2018,Wolverhampton Wanderers,302900000
+epl,2018,Crystal Palace,289000000
+epl,2018,Fulham FC,254250000
+epl,2018,Newcastle United,244650000
+epl,2018,Watford FC,239100000
+epl,2018,Burnley FC,197250000
+epl,2018,Brighton & Hove Albion,194350000
+epl,2018,Huddersfield Town,137450000
+epl,2018,Cardiff City,113000000
+epl,2019,Manchester City,1050000000
+epl,2019,Liverpool FC,1000000000
+epl,2019,Tottenham Hotspur,806800000
+epl,2019,Chelsea FC,705850000
+epl,2019,Manchester United,670450000
+epl,2019,Arsenal FC,607650000
+epl,2019,Everton FC,420550000
+epl,2019,Leicester City,411100000
+epl,2019,Wolverhampton Wanderers,320330000
+epl,2019,West Ham United,303600000
+epl,2019,AFC Bournemouth,272180000
+epl,2019,Newcastle United,252480000
+epl,2019,Aston Villa,231700000
+epl,2019,Southampton FC,210750000
+epl,2019,Brighton & Hove Albion,200780000
+epl,2019,Watford FC,199600000
+epl,2019,Crystal Palace,189330000
+epl,2019,Burnley FC,163880000
+epl,2019,Norwich City,145330000
+epl,2019,Sheffield United,138600000
+epl,2020,Manchester City,1040000000
+epl,2020,Liverpool FC,969650000
+epl,2020,Chelsea FC,889200000
+epl,2020,Manchester United,770050000
+epl,2020,Tottenham Hotspur,703500000
+epl,2020,Arsenal FC,619250000
+epl,2020,Everton FC,511200000
+epl,2020,Leicester City,510600000
+epl,2020,Wolverhampton Wanderers,450300000
+epl,2020,Aston Villa,430700000
+epl,2020,West Ham United,336400000
+epl,2020,Brighton & Hove Albion,290400000
+epl,2020,Southampton FC,282800000
+epl,2020,Newcastle United,255350000
+epl,2020,Fulham FC,239750000
+epl,2020,Leeds United,238100000
+epl,2020,Crystal Palace,193850000
+epl,2020,Sheffield United,149850000
+epl,2020,West Bromwich Albion,141150000
+epl,2020,Burnley FC,132300000
+epl,2021,Manchester City,1000000000
+epl,2021,Liverpool FC,918900000
+epl,2021,Chelsea FC,914500000
+epl,2021,Manchester United,769150000
+epl,2021,Tottenham Hotspur,689350000
+epl,2021,Arsenal FC,613050000
+epl,2021,Leicester City,526549999
+epl,2021,Aston Villa,487750000
+epl,2021,Everton FC,479050000
+epl,2021,Wolverhampton Wanderers,376950000
+epl,2021,West Ham United,354900000
+epl,2021,Brighton & Hove Albion,318000000
+epl,2021,Newcastle United,313900000
+epl,2021,Leeds United,299450000
+epl,2021,Southampton FC,274300000
+epl,2021,Brentford FC,273300000
+epl,2021,Crystal Palace,271050000
+epl,2021,Norwich City,163200000
+epl,2021,Watford FC,156200000
+epl,2021,Burnley FC,137850000
+epl,2022,Manchester City,1150000000
+epl,2022,Arsenal FC,1000000000
+epl,2022,Chelsea FC,994950000
+epl,2022,Manchester United,847750000
+epl,2022,Liverpool FC,811850000
+epl,2022,Tottenham Hotspur,649100000
+epl,2022,Newcastle United,541600000
+epl,2022,Brighton & Hove Albion,529799999
+epl,2022,Aston Villa,509550000
+epl,2022,Wolverhampton Wanderers,497650000
+epl,2022,Leicester City,490700000
+epl,2022,West Ham United,465600000
+epl,2022,Southampton FC,419950000
+epl,2022,Everton FC,413150000
+epl,2022,Nottingham Forest,376250000
+epl,2022,Brentford FC,371200000
+epl,2022,Leeds United,345150000
+epl,2022,Crystal Palace,323050000
+epl,2022,Fulham FC,295100000
+epl,2022,AFC Bournemouth,287200000
+epl,2023,Manchester City,1360000000
+epl,2023,Arsenal FC,1200000000
+epl,2023,Chelsea FC,1010000000
+epl,2023,Liverpool FC,955650000
+epl,2023,Tottenham Hotspur,838500000
+epl,2023,Manchester United,808350000
+epl,2023,Aston Villa,709650000
+epl,2023,Newcastle United,652250000
+epl,2023,Brighton & Hove Albion,524400000
+epl,2023,Nottingham Forest,501350000
+epl,2023,West Ham United,487500000
+epl,2023,Crystal Palace,446580000
+epl,2023,Wolverhampton Wanderers,442730000
+epl,2023,Brentford FC,428780000
+epl,2023,AFC Bournemouth,401750000
+epl,2023,Everton FC,391750000
+epl,2023,Fulham FC,384350000
+epl,2023,Burnley FC,273480000
+epl,2023,Sheffield United,152350000
+epl,2023,Luton Town,140900000
+epl,2024,Manchester City,1340000000
+epl,2024,Chelsea FC,1190000000
+epl,2024,Arsenal FC,1110000000
+epl,2024,Liverpool FC,872000000
+epl,2024,Tottenham Hotspur,769600000
+epl,2024,Manchester United,695200000
+epl,2024,Newcastle United,651530000
+epl,2024,Aston Villa,617000000
+epl,2024,Brighton & Hove Albion,597700000
+epl,2024,Nottingham Forest,462650000
+epl,2024,Crystal Palace,448200000
+epl,2024,AFC Bournemouth,416600000
+epl,2024,Brentford FC,414730000
+epl,2024,West Ham United,400300000
+epl,2024,Wolverhampton Wanderers,378900000
+epl,2024,Fulham FC,351350000
+epl,2024,Everton FC,350350000
+epl,2024,Southampton FC,279800000
+epl,2024,Leicester City,242800000
+epl,2024,Ipswich Town,229300000
+epl,2025,Manchester City,1320000000
+epl,2025,Arsenal FC,1280000000
+epl,2025,Chelsea FC,1110000000
+epl,2025,Liverpool FC,959500000
+epl,2025,Manchester United,760100000
+epl,2025,Tottenham Hotspur,713000000
+epl,2025,Newcastle United,697350000
+epl,2025,AFC Bournemouth,659180000
+epl,2025,Nottingham Forest,638600000
+epl,2025,Brighton & Hove Albion,613000000
+epl,2025,Aston Villa,608000000
+epl,2025,Crystal Palace,553000000
+epl,2025,Brentford FC,498680000
+epl,2025,West Ham United,454430000
+epl,2025,Everton FC,443550000
+epl,2025,Sunderland AFC,424930000
+epl,2025,Leeds United,366800000
+epl,2025,Fulham FC,356200000
+epl,2025,Wolverhampton Wanderers,318350000
+epl,2025,Burnley FC,233400000
+e1,2005,Southampton FC,61630000
+e1,2005,Wolverhampton Wanderers,57600000
+e1,2005,Norwich City,46700000
+e1,2005,Crystal Palace,40030000
+e1,2005,Leeds United,32049999
+e1,2005,Sheffield United,31400000
+e1,2005,Cardiff City,25680000
+e1,2005,Derby County,25380000
+e1,2005,Leicester City,23800000
+e1,2005,Stoke City,21500000
+e1,2005,Preston North End,20630000
+e1,2005,Millwall FC,19450000
+e1,2005,Coventry City,17530000
+e1,2005,Watford FC,17280000
+e1,2005,Sheffield Wednesday,16930000
+e1,2005,Reading FC,16730000
+e1,2005,Ipswich Town,16050000
+e1,2005,Burnley FC,14600000
+e1,2005,Plymouth Argyle,13730000
+e1,2005,Queens Park Rangers,13430000
+e1,2005,Luton Town,11130000
+e1,2005,Hull City,8980000
+e1,2005,Crewe Alexandra,7880000
+e1,2005,Brighton & Hove Albion,5500000
+e1,2006,Birmingham City,49800000
+e1,2006,West Bromwich Albion,49200000
+e1,2006,Southampton FC,40480000
+e1,2006,Sunderland AFC,31230000
+e1,2006,Crystal Palace,30430000
+e1,2006,Derby County,30170000
+e1,2006,Wolverhampton Wanderers,29900000
+e1,2006,Coventry City,27150000
+e1,2006,Leeds United,25930000
+e1,2006,Burnley FC,24380000
+e1,2006,Cardiff City,23520000
+e1,2006,Stoke City,23150000
+e1,2006,Preston North End,20780000
+e1,2006,Norwich City,19980000
+e1,2006,Queens Park Rangers,18630000
+e1,2006,Ipswich Town,18500000
+e1,2006,Leicester City,17120000
+e1,2006,Sheffield Wednesday,13750000
+e1,2006,Barnsley FC,10550000
+e1,2006,Plymouth Argyle,9950000
+e1,2006,Hull City,9550000
+e1,2006,Southend United,6180000
+e1,2006,Colchester United,6130000
+e1,2006,Luton Town,5200000
+e1,2007,Sheffield United,55560000
+e1,2007,West Bromwich Albion,48600000
+e1,2007,Charlton Athletic,30180000
+e1,2007,Wolverhampton Wanderers,29630000
+e1,2007,Cardiff City,28830000
+e1,2007,Preston North End,27650000
+e1,2007,Burnley FC,26950000
+e1,2007,Southampton FC,26850000
+e1,2007,Watford FC,26780000
+e1,2007,Leicester City,25000000
+e1,2007,Queens Park Rangers,24150000
+e1,2007,Ipswich Town,23950000
+e1,2007,Stoke City,23650000
+e1,2007,Crystal Palace,20780000
+e1,2007,Hull City,16329999
+e1,2007,Norwich City,16250000
+e1,2007,Barnsley FC,15730000
+e1,2007,Sheffield Wednesday,15430000
+e1,2007,Coventry City,14230000
+e1,2007,Plymouth Argyle,11410000
+e1,2007,Bristol City,11150000
+e1,2007,Colchester United,9280000
+e1,2007,Blackpool FC,7600000
+e1,2007,Scunthorpe United,6830000
+e1,2008,Wolverhampton Wanderers,39500000
+e1,2008,Reading FC,38800000
+e1,2008,Birmingham City,37300000
+e1,2008,Cardiff City,31600000
+e1,2008,Ipswich Town,30950000
+e1,2008,Derby County,27050000
+e1,2008,Queens Park Rangers,24900000
+e1,2008,Blackpool FC,23700000
+e1,2008,Charlton Athletic,22400000
+e1,2008,Sheffield United,22200000
+e1,2008,Burnley FC,21800000
+e1,2008,Sheffield Wednesday,21800000
+e1,2008,Crystal Palace,21250000
+e1,2008,Plymouth Argyle,21080000
+e1,2008,Nottingham Forest,20300000
+e1,2008,Norwich City,20250000
+e1,2008,Preston North End,19780000
+e1,2008,Barnsley FC,19450000
+e1,2008,Watford FC,19330000
+e1,2008,Bristol City,18650000
+e1,2008,Swansea City,18400000
+e1,2008,Southampton FC,17550000
+e1,2008,Coventry City,16880000
+e1,2008,Doncaster Rovers,14780000
+e1,2009,Middlesbrough FC,86180000
+e1,2009,Newcastle United,82080000
+e1,2009,West Bromwich Albion,70730000
+e1,2009,Sheffield United,43150000
+e1,2009,Queens Park Rangers,39800000
+e1,2009,Reading FC,38030000
+e1,2009,Nottingham Forest,35700000
+e1,2009,Ipswich Town,30200000
+e1,2009,Derby County,30050000
+e1,2009,Preston North End,29650000
+e1,2009,Cardiff City,29350000
+e1,2009,Leicester City,27080000
+e1,2009,Bristol City,27050000
+e1,2009,Blackpool FC,25850000
+e1,2009,Swansea City,24850000
+e1,2009,Sheffield Wednesday,24600000
+e1,2009,Plymouth Argyle,24330000
+e1,2009,Coventry City,23150000
+e1,2009,Watford FC,23050000
+e1,2009,Barnsley FC,20530000
+e1,2009,Crystal Palace,20430000
+e1,2009,Doncaster Rovers,19530000
+e1,2009,Peterborough United,12030000
+e1,2009,Scunthorpe United,9530000
+e1,2010,Leicester City,60480000
+e1,2010,Middlesbrough FC,49800000
+e1,2010,Queens Park Rangers,46800000
+e1,2010,Cardiff City,46600000
+e1,2010,Hull City,44800000
+e1,2010,Nottingham Forest,42200000
+e1,2010,Burnley FC,41800000
+e1,2010,Ipswich Town,40800000
+e1,2010,Portsmouth FC,36750000
+e1,2010,Sheffield United,34230000
+e1,2010,Leeds United,33479999
+e1,2010,Preston North End,30950000
+e1,2010,Reading FC,30330000
+e1,2010,Swansea City,27300000
+e1,2010,Derby County,26550000
+e1,2010,Barnsley FC,25300000
+e1,2010,Bristol City,24600000
+e1,2010,Crystal Palace,23130000
+e1,2010,Norwich City,21300000
+e1,2010,Millwall FC,18250000
+e1,2010,Coventry City,17580000
+e1,2010,Scunthorpe United,17400000
+e1,2010,Doncaster Rovers,17300000
+e1,2010,Watford FC,16399999
+e1,2011,West Ham United,82800000
+e1,2011,Birmingham City,51330000
+e1,2011,Southampton FC,48780000
+e1,2011,Leicester City,42050000
+e1,2011,Leeds United,32880000
+e1,2011,Middlesbrough FC,31450000
+e1,2011,Burnley FC,31030000
+e1,2011,Blackpool FC,28780000
+e1,2011,Reading FC,27650000
+e1,2011,Bristol City,26650000
+e1,2011,Crystal Palace,26130000
+e1,2011,Nottingham Forest,25580000
+e1,2011,Cardiff City,23650000
+e1,2011,Ipswich Town,23600000
+e1,2011,Watford FC,22330000
+e1,2011,Doncaster Rovers,21850000
+e1,2011,Brighton & Hove Albion,20100000
+e1,2011,Hull City,19950000
+e1,2011,Barnsley FC,18550000
+e1,2011,Millwall FC,18450000
+e1,2011,Portsmouth FC,16000000
+e1,2011,Peterborough United,15950000
+e1,2011,Derby County,15450000
+e1,2011,Coventry City,13550000
+e1,2012,Wolverhampton Wanderers,82300000
+e1,2012,Blackburn Rovers,73450000
+e1,2012,Bolton Wanderers,53100000
+e1,2012,Cardiff City,39950000
+e1,2012,Hull City,39250000
+e1,2012,Middlesbrough FC,37450000
+e1,2012,Nottingham Forest,37050000
+e1,2012,Crystal Palace,36350000
+e1,2012,Sheffield Wednesday,33130000
+e1,2012,Blackpool FC,32950000
+e1,2012,Leeds United,32630000
+e1,2012,Birmingham City,30750000
+e1,2012,Watford FC,30430000
+e1,2012,Leicester City,30050000
+e1,2012,Brighton & Hove Albion,28350000
+e1,2012,Ipswich Town,27400000
+e1,2012,Huddersfield Town,26750000
+e1,2012,Bristol City,25900000
+e1,2012,Burnley FC,24400000
+e1,2012,Millwall FC,18100000
+e1,2012,Derby County,17750000
+e1,2012,Barnsley FC,15850000
+e1,2012,Charlton Athletic,15150000
+e1,2012,Peterborough United,12580000
+e1,2013,Queens Park Rangers,88280000
+e1,2013,Wigan Athletic,77000000
+e1,2013,Nottingham Forest,45550000
+e1,2013,Bolton Wanderers,43400000
+e1,2013,Watford FC,42550000
+e1,2013,Blackburn Rovers,41800000
+e1,2013,Reading FC,40500000
+e1,2013,Leicester City,34850000
+e1,2013,Derby County,34850000
+e1,2013,Middlesbrough FC,34130000
+e1,2013,Leeds United,33600000
+e1,2013,Blackpool FC,31630000
+e1,2013,Brighton & Hove Albion,30850000
+e1,2013,Burnley FC,25230000
+e1,2013,Sheffield Wednesday,25150000
+e1,2013,Barnsley FC,24950000
+e1,2013,Millwall FC,22700000
+e1,2013,Birmingham City,20100000
+e1,2013,Huddersfield Town,19450000
+e1,2013,AFC Bournemouth,18600000
+e1,2013,Charlton Athletic,18250000
+e1,2013,Ipswich Town,17180000
+e1,2013,Yeovil Town,14950000
+e1,2013,Doncaster Rovers,14800000
+e1,2014,Norwich City,76600000
+e1,2014,Cardiff City,64330000
+e1,2014,Wigan Athletic,61150000
+e1,2014,Nottingham Forest,53800000
+e1,2014,Derby County,48650000
+e1,2014,Watford FC,44330000
+e1,2014,Middlesbrough FC,43880000
+e1,2014,Blackburn Rovers,43000000
+e1,2014,Reading FC,42980000
+e1,2014,Fulham FC,42400000
+e1,2014,Bolton Wanderers,39380000
+e1,2014,Brighton & Hove Albion,34100000
+e1,2014,Charlton Athletic,30950000
+e1,2014,Leeds United,29680000
+e1,2014,Ipswich Town,29500000
+e1,2014,Wolverhampton Wanderers,27450000
+e1,2014,AFC Bournemouth,25530000
+e1,2014,Rotherham United,23350000
+e1,2014,Huddersfield Town,22600000
+e1,2014,Sheffield Wednesday,20400000
+e1,2014,Brentford FC,20230000
+e1,2014,Blackpool FC,19630000
+e1,2014,Birmingham City,19600000
+e1,2014,Millwall FC,19400000
+e1,2015,Queens Park Rangers,78500000
+e1,2015,Middlesbrough FC,70950000
+e1,2015,Hull City,69980000
+e1,2015,Derby County,60400000
+e1,2015,Burnley FC,56500000
+e1,2015,Cardiff City,52500000
+e1,2015,Nottingham Forest,47600000
+e1,2015,Sheffield Wednesday,47350000
+e1,2015,Fulham FC,46200000
+e1,2015,Reading FC,44800000
+e1,2015,Blackburn Rovers,42930000
+e1,2015,Brighton & Hove Albion,40850000
+e1,2015,Wolverhampton Wanderers,39230000
+e1,2015,Brentford FC,39000000
+e1,2015,Leeds United,34250000
+e1,2015,Charlton Athletic,29250000
+e1,2015,Birmingham City,28300000
+e1,2015,Huddersfield Town,27350000
+e1,2015,Bristol City,26900000
+e1,2015,Ipswich Town,24380000
+e1,2015,Rotherham United,19930000
+e1,2015,Bolton Wanderers,18530000
+e1,2015,Preston North End,15400000
+e1,2015,Milton Keynes Dons,12580000
+e1,2016,Newcastle United,172680000
+e1,2016,Aston Villa,144750000
+e1,2016,Norwich City,89700000
+e1,2016,Derby County,79530000
+e1,2016,Sheffield Wednesday,67130000
+e1,2016,Fulham FC,65849999
+e1,2016,Nottingham Forest,63400000
+e1,2016,Wolverhampton Wanderers,59630000
+e1,2016,Brighton & Hove Albion,56600000
+e1,2016,Leeds United,50450000
+e1,2016,Queens Park Rangers,47400000
+e1,2016,Cardiff City,44300000
+e1,2016,Reading FC,43500000
+e1,2016,Bristol City,41900000
+e1,2016,Huddersfield Town,39350000
+e1,2016,Brentford FC,33750000
+e1,2016,Birmingham City,33330000
+e1,2016,Blackburn Rovers,30400000
+e1,2016,Wigan Athletic,30230000
+e1,2016,Ipswich Town,25950000
+e1,2016,Barnsley FC,24550000
+e1,2016,Rotherham United,19300000
+e1,2016,Preston North End,19150000
+e1,2016,Burton Albion,15250000
+e1,2017,Fulham FC,125550000
+e1,2017,Middlesbrough FC,118700000
+e1,2017,Wolverhampton Wanderers,109450000
+e1,2017,Aston Villa,96900000
+e1,2017,Leeds United,82900000
+e1,2017,Sunderland AFC,78580000
+e1,2017,Hull City,70450000
+e1,2017,Norwich City,68730000
+e1,2017,Derby County,65230000
+e1,2017,Sheffield Wednesday,62180000
+e1,2017,Cardiff City,62150000
+e1,2017,Nottingham Forest,58500000
+e1,2017,Bristol City,49250000
+e1,2017,Brentford FC,47950000
+e1,2017,Birmingham City,47800000
+e1,2017,Reading FC,47550000
+e1,2017,Queens Park Rangers,38900000
+e1,2017,Bolton Wanderers,30550000
+e1,2017,Ipswich Town,25500000
+e1,2017,Preston North End,24750000
+e1,2017,Sheffield United,23750000
+e1,2017,Barnsley FC,21700000
+e1,2017,Millwall FC,15130000
+e1,2017,Burton Albion,14400000
+e1,2018,Aston Villa,164450000
+e1,2018,West Bromwich Albion,145650000
+e1,2018,Stoke City,129300000
+e1,2018,Middlesbrough FC,101330000
+e1,2018,Leeds United,94450000
+e1,2018,Derby County,94300000
+e1,2018,Swansea City,92540000
+e1,2018,Norwich City,86300000
+e1,2018,Nottingham Forest,83100000
+e1,2018,Brentford FC,76350000
+e1,2018,Bristol City,72550000
+e1,2018,Reading FC,66250000
+e1,2018,Sheffield United,61750000
+e1,2018,Hull City,55400000
+e1,2018,Sheffield Wednesday,47400000
+e1,2018,Birmingham City,42500000
+e1,2018,Wigan Athletic,41050000
+e1,2018,Queens Park Rangers,39730000
+e1,2018,Blackburn Rovers,34750000
+e1,2018,Preston North End,33299999
+e1,2018,Millwall FC,28450000
+e1,2018,Ipswich Town,26850000
+e1,2018,Bolton Wanderers,21800000
+e1,2018,Rotherham United,11580000
+e1,2019,Fulham FC,116600000
+e1,2019,Leeds United,100750000
+e1,2019,West Bromwich Albion,90930000
+e1,2019,Huddersfield Town,88080000
+e1,2019,Bristol City,82950000
+e1,2019,Stoke City,82930000
+e1,2019,Brentford FC,70380000
+e1,2019,Nottingham Forest,65000000
+e1,2019,Cardiff City,63380000
+e1,2019,Swansea City,62100000
+e1,2019,Middlesbrough FC,60130000
+e1,2019,Birmingham City,52030000
+e1,2019,Derby County,51450000
+e1,2019,Hull City,49880000
+e1,2019,Reading FC,46680000
+e1,2019,Queens Park Rangers,44900000
+e1,2019,Sheffield Wednesday,37700000
+e1,2019,Blackburn Rovers,32750000
+e1,2019,Preston North End,32500000
+e1,2019,Wigan Athletic,28230000
+e1,2019,Charlton Athletic,26700000
+e1,2019,Millwall FC,23200000
+e1,2019,Luton Town,20250000
+e1,2019,Barnsley FC,17400000
+e1,2020,Norwich City,182400000
+e1,2020,Brentford FC,168900000
+e1,2020,AFC Bournemouth,139550000
+e1,2020,Watford FC,113300000
+e1,2020,Swansea City,94950000
+e1,2020,Blackburn Rovers,79750000
+e1,2020,Stoke City,75700000
+e1,2020,Cardiff City,74250000
+e1,2020,Reading FC,68900000
+e1,2020,Derby County,59950000
+e1,2020,Middlesbrough FC,59050000
+e1,2020,Bristol City,57500000
+e1,2020,Nottingham Forest,55450000
+e1,2020,Barnsley FC,48180000
+e1,2020,Preston North End,47900000
+e1,2020,Huddersfield Town,46600000
+e1,2020,Birmingham City,46300000
+e1,2020,Millwall FC,39180000
+e1,2020,Queens Park Rangers,36950000
+e1,2020,Sheffield Wednesday,31100000
+e1,2020,Luton Town,24950000
+e1,2020,Coventry City,21850000
+e1,2020,Rotherham United,16050000
+e1,2020,Wycombe Wanderers,9450000
+e1,2021,Fulham FC,188900000
+e1,2021,AFC Bournemouth,180400000
+e1,2021,Sheffield United,136400000
+e1,2021,West Bromwich Albion,87400000
+e1,2021,Nottingham Forest,82950000
+e1,2021,Stoke City,75400000
+e1,2021,Middlesbrough FC,74150000
+e1,2021,Swansea City,63750000
+e1,2021,Blackburn Rovers,63100000
+e1,2021,Birmingham City,47130000
+e1,2021,Preston North End,47100000
+e1,2021,Cardiff City,45800000
+e1,2021,Reading FC,45700000
+e1,2021,Millwall FC,42750000
+e1,2021,Queens Park Rangers,42250000
+e1,2021,Huddersfield Town,41780000
+e1,2021,Derby County,40550000
+e1,2021,Hull City,40350000
+e1,2021,Bristol City,36200000
+e1,2021,Coventry City,30780000
+e1,2021,Luton Town,30250000
+e1,2021,Barnsley FC,29980000
+e1,2021,Blackpool FC,17780000
+e1,2021,Peterborough United,16850000
+e1,2022,Burnley FC,193350000
+e1,2022,Watford FC,155400000
+e1,2022,Norwich City,126550000
+e1,2022,Sheffield United,118550000
+e1,2022,Middlesbrough FC,94480000
+e1,2022,Sunderland AFC,84450000
+e1,2022,Blackburn Rovers,83950000
+e1,2022,Stoke City,77350000
+e1,2022,West Bromwich Albion,69350000
+e1,2022,Coventry City,66650000
+e1,2022,Hull City,65950000
+e1,2022,Bristol City,65580000
+e1,2022,Swansea City,65430000
+e1,2022,Birmingham City,59150000
+e1,2022,Queens Park Rangers,57430000
+e1,2022,Preston North End,56900000
+e1,2022,Cardiff City,50200000
+e1,2022,Luton Town,46830000
+e1,2022,Blackpool FC,43330000
+e1,2022,Millwall FC,43300000
+e1,2022,Reading FC,39450000
+e1,2022,Huddersfield Town,38080000
+e1,2022,Rotherham United,32400000
+e1,2022,Wigan Athletic,20580000
+e1,2023,Southampton FC,332480000
+e1,2023,Leeds United,244500000
+e1,2023,Leicester City,242850000
+e1,2023,Hull City,126730000
+e1,2023,Middlesbrough FC,107580000
+e1,2023,Sunderland AFC,96450000
+e1,2023,Norwich City,94130000
+e1,2023,Blackburn Rovers,91700000
+e1,2023,Coventry City,87330000
+e1,2023,Swansea City,78830000
+e1,2023,Stoke City,74100000
+e1,2023,Watford FC,72600000
+e1,2023,Ipswich Town,69100000
+e1,2023,West Bromwich Albion,64849999
+e1,2023,Cardiff City,58750000
+e1,2023,Plymouth Argyle,53150000
+e1,2023,Birmingham City,50050000
+e1,2023,Bristol City,46900000
+e1,2023,Preston North End,42130000
+e1,2023,Millwall FC,41350000
+e1,2023,Queens Park Rangers,34950000
+e1,2023,Huddersfield Town,34580000
+e1,2023,Sheffield Wednesday,26430000
+e1,2023,Rotherham United,20830000
+e1,2024,Burnley FC,215100000
+e1,2024,Leeds United,214350000
+e1,2024,Sheffield United,159500000
+e1,2024,Sunderland AFC,153750000
+e1,2024,Norwich City,149830000
+e1,2024,Middlesbrough FC,114430000
+e1,2024,Coventry City,97730000
+e1,2024,Luton Town,72250000
+e1,2024,Hull City,69600000
+e1,2024,West Bromwich Albion,63200000
+e1,2024,Watford FC,54800000
+e1,2024,Bristol City,54250000
+e1,2024,Queens Park Rangers,53430000
+e1,2024,Stoke City,50700000
+e1,2024,Cardiff City,44980000
+e1,2024,Blackburn Rovers,44550000
+e1,2024,Swansea City,44300000
+e1,2024,Preston North End,41150000
+e1,2024,Millwall FC,36850000
+e1,2024,Plymouth Argyle,26380000
+e1,2024,Sheffield Wednesday,23650000
+e1,2024,Oxford United,23550000
+e1,2024,Derby County,23080000
+e1,2024,Portsmouth FC,20300000
+e1,2025,Ipswich Town,217950000
+e1,2025,Coventry City,202250000
+e1,2025,Southampton FC,194550000
+e1,2025,Middlesbrough FC,155050000
+e1,2025,Sheffield United,123050000
+e1,2025,Leicester City,118050000
+e1,2025,Birmingham City,108600000
+e1,2025,Norwich City,105200000
+e1,2025,Hull City,100400000
+e1,2025,Millwall FC,99950000
+e1,2025,Watford FC,89800000
+e1,2025,Swansea City,89300000
+e1,2025,Stoke City,78550000
+e1,2025,Wrexham AFC,78500000
+e1,2025,Bristol City,72350000
+e1,2025,Queens Park Rangers,69250000
+e1,2025,West Bromwich Albion,60350000
+e1,2025,Derby County,55250000
+e1,2025,Preston North End,54430000
+e1,2025,Blackburn Rovers,39800000
+e1,2025,Portsmouth FC,36350000
+e1,2025,Oxford United,29330000
+e1,2025,Charlton Athletic,28450000
+e1,2025,Sheffield Wednesday,15950000
+e2,2005,Nottingham Forest,11900000
+e2,2005,Bristol City,8550000
+e2,2005,Walsall FC,6380000
+e2,2005,Swindon Town,6030000
+e2,2005,Rotherham United,5930000
+e2,2005,Doncaster Rovers,5530000
+e2,2005,Bradford City,5500000
+e2,2005,Gillingham FC,5250000
+e2,2005,Brentford FC,5150000
+e2,2005,Tranmere Rovers,4880000
+e2,2005,Barnsley FC,4550000
+e2,2005,Swansea City,4030000
+e2,2005,Colchester United,3750000
+e2,2005,Blackpool FC,3600000
+e2,2005,Huddersfield Town,2700000
+e2,2005,Milton Keynes Dons,2700000
+e2,2005,Hartlepool United,2400000
+e2,2005,Oldham Athletic,2250000
+e2,2005,Southend United,2180000
+e2,2005,Port Vale FC,2150000
+e2,2005,AFC Bournemouth,1580000
+e2,2005,Yeovil Town,1550000
+e2,2005,Chesterfield FC,875000
+e2,2005,Scunthorpe United,700000
+e2,2006,Nottingham Forest,9630000
+e2,2006,Millwall FC,8150000
+e2,2006,Brighton & Hove Albion,7800000
+e2,2006,Doncaster Rovers,7200000
+e2,2006,Bristol City,6900000
+e2,2006,Oldham Athletic,6680000
+e2,2006,Bradford City,6640000
+e2,2006,Crewe Alexandra,5960000
+e2,2006,Swansea City,5850000
+e2,2006,Blackpool FC,5700000
+e2,2006,Yeovil Town,5500000
+e2,2006,Northampton Town,5200000
+e2,2006,Rotherham United,5040000
+e2,2006,Tranmere Rovers,4750000
+e2,2006,Carlisle United,4730000
+e2,2006,Gillingham FC,4380000
+e2,2006,Brentford FC,4179999
+e2,2006,Leyton Orient,3930000
+e2,2006,Huddersfield Town,3450000
+e2,2006,AFC Bournemouth,3180000
+e2,2006,Scunthorpe United,2250000
+e2,2006,Cheltenham Town,2230000
+e2,2006,Port Vale FC,2180000
+e2,2006,Chesterfield FC,2100000
+e2,2007,Leeds United,24750000
+e2,2007,Luton Town,11130000
+e2,2007,Millwall FC,10650000
+e2,2007,Nottingham Forest,9050000
+e2,2007,Yeovil Town,8650000
+e2,2007,Oldham Athletic,8300000
+e2,2007,Swansea City,7180000
+e2,2007,Southend United,7100000
+e2,2007,Doncaster Rovers,7100000
+e2,2007,Brighton & Hove Albion,6430000
+e2,2007,Northampton Town,6050000
+e2,2007,Swindon Town,6050000
+e2,2007,Walsall FC,5900000
+e2,2007,Tranmere Rovers,5680000
+e2,2007,Crewe Alexandra,5100000
+e2,2007,Carlisle United,4750000
+e2,2007,Gillingham FC,4600000
+e2,2007,AFC Bournemouth,3650000
+e2,2007,Huddersfield Town,3480000
+e2,2007,Hartlepool United,3450000
+e2,2007,Leyton Orient,2750000
+e2,2007,Port Vale FC,2600000
+e2,2007,Bristol Rovers,2280000
+e2,2007,Cheltenham Town,1150000
+e2,2008,Leicester City,16550000
+e2,2008,Leeds United,15000000
+e2,2008,Millwall FC,10130000
+e2,2008,Brighton & Hove Albion,9200000
+e2,2008,Carlisle United,7630000
+e2,2008,Colchester United,6580000
+e2,2008,Oldham Athletic,6000000
+e2,2008,Southend United,5730000
+e2,2008,Scunthorpe United,5550000
+e2,2008,Swindon Town,5330000
+e2,2008,Huddersfield Town,5000000
+e2,2008,Hereford United (- 2014),4830000
+e2,2008,Leyton Orient,4550000
+e2,2008,Crewe Alexandra,4000000
+e2,2008,Milton Keynes Dons,3830000
+e2,2008,Stockport County,2950000
+e2,2008,Yeovil Town,2850000
+e2,2008,Walsall FC,2750000
+e2,2008,Tranmere Rovers,2730000
+e2,2008,Cheltenham Town,2430000
+e2,2008,Hartlepool United,2300000
+e2,2008,Bristol Rovers,2200000
+e2,2008,Northampton Town,2200000
+e2,2008,Peterborough United,1780000
+e2,2009,Leeds United,22850000
+e2,2009,Norwich City,20130000
+e2,2009,Charlton Athletic,19880000
+e2,2009,Southampton FC,18230000
+e2,2009,Colchester United,13250000
+e2,2009,Brighton & Hove Albion,12130000
+e2,2009,Bristol Rovers,10730000
+e2,2009,Milton Keynes Dons,10430000
+e2,2009,Leyton Orient,10050000
+e2,2009,Wycombe Wanderers,9700000
+e2,2009,Oldham Athletic,9380000
+e2,2009,Millwall FC,9300000
+e2,2009,Southend United,7480000
+e2,2009,Brentford FC,7450000
+e2,2009,Swindon Town,7430000
+e2,2009,Huddersfield Town,6950000
+e2,2009,Carlisle United,6950000
+e2,2009,Gillingham FC,6830000
+e2,2009,Yeovil Town,6680000
+e2,2009,Tranmere Rovers,6380000
+e2,2009,Walsall FC,6350000
+e2,2009,Exeter City,6150000
+e2,2009,Stockport County,5380000
+e2,2009,Hartlepool United,5050000
+e2,2010,Sheffield Wednesday,20880000
+e2,2010,Southampton FC,18200000
+e2,2010,Huddersfield Town,16350000
+e2,2010,Charlton Athletic,14950000
+e2,2010,Notts County,14850000
+e2,2010,Plymouth Argyle,13430000
+e2,2010,Peterborough United,11950000
+e2,2010,Milton Keynes Dons,10200000
+e2,2010,Brentford FC,9980000
+e2,2010,Yeovil Town,9030000
+e2,2010,Colchester United,8780000
+e2,2010,Carlisle United,8500000
+e2,2010,Bristol Rovers,8350000
+e2,2010,Swindon Town,8300000
+e2,2010,Walsall FC,8150000
+e2,2010,Brighton & Hove Albion,7650000
+e2,2010,Leyton Orient,7330000
+e2,2010,Oldham Athletic,6750000
+e2,2010,AFC Bournemouth,5550000
+e2,2010,Rochdale AFC,5200000
+e2,2010,Exeter City,4800000
+e2,2010,Dagenham & Redbridge FC,4680000
+e2,2010,Hartlepool United,4650000
+e2,2010,Tranmere Rovers,4400000
+e2,2011,Sheffield United,18400000
+e2,2011,Sheffield Wednesday,17780000
+e2,2011,Huddersfield Town,14900000
+e2,2011,Charlton Athletic,12530000
+e2,2011,Preston North End,11930000
+e2,2011,Milton Keynes Dons,10080000
+e2,2011,Leyton Orient,9830000
+e2,2011,Yeovil Town,9350000
+e2,2011,Wycombe Wanderers,8650000
+e2,2011,Notts County,8230000
+e2,2011,Colchester United,7850000
+e2,2011,AFC Bournemouth,7580000
+e2,2011,Exeter City,7430000
+e2,2011,Brentford FC,7430000
+e2,2011,Chesterfield FC,7150000
+e2,2011,Scunthorpe United,6430000
+e2,2011,Rochdale AFC,6280000
+e2,2011,Stevenage FC,5780000
+e2,2011,Carlisle United,5600000
+e2,2011,Walsall FC,4630000
+e2,2011,Bury FC,4580000
+e2,2011,Hartlepool United,4450000
+e2,2011,Oldham Athletic,4400000
+e2,2011,Tranmere Rovers,3250000
+e2,2012,Sheffield United,14630000
+e2,2012,Portsmouth FC,12250000
+e2,2012,Coventry City,10650000
+e2,2012,Doncaster Rovers,8800000
+e2,2012,AFC Bournemouth,8750000
+e2,2012,Oldham Athletic,8080000
+e2,2012,Milton Keynes Dons,7680000
+e2,2012,Swindon Town,7500000
+e2,2012,Colchester United,7380000
+e2,2012,Stevenage FC,7350000
+e2,2012,Brentford FC,7300000
+e2,2012,Bury FC,7150000
+e2,2012,Preston North End,7100000
+e2,2012,Crewe Alexandra,7080000
+e2,2012,Scunthorpe United,6650000
+e2,2012,Leyton Orient,6450000
+e2,2012,Notts County,6050000
+e2,2012,Yeovil Town,5900000
+e2,2012,Crawley Town,5330000
+e2,2012,Shrewsbury Town,5330000
+e2,2012,Carlisle United,5200000
+e2,2012,Tranmere Rovers,4390000
+e2,2012,Walsall FC,4099999
+e2,2012,Hartlepool United,4000000
+e2,2013,Wolverhampton Wanderers,23980000
+e2,2013,Bristol City,15050000
+e2,2013,Sheffield United,14430000
+e2,2013,Rotherham United,11930000
+e2,2013,Peterborough United,11350000
+e2,2013,Milton Keynes Dons,9350000
+e2,2013,Bradford City,9200000
+e2,2013,Coventry City,9180000
+e2,2013,Brentford FC,8780000
+e2,2013,Leyton Orient,8279999
+e2,2013,Notts County,8000000
+e2,2013,Oldham Athletic,7730000
+e2,2013,Preston North End,7700000
+e2,2013,Carlisle United,7000000
+e2,2013,Shrewsbury Town,6280000
+e2,2013,Swindon Town,5800000
+e2,2013,Stevenage FC,5250000
+e2,2013,Colchester United,5100000
+e2,2013,Crawley Town,4900000
+e2,2013,Gillingham FC,4800000
+e2,2013,Tranmere Rovers,4700000
+e2,2013,Walsall FC,4200000
+e2,2013,Port Vale FC,3680000
+e2,2013,Crewe Alexandra,3230000
+e2,2014,Milton Keynes Dons,13550000
+e2,2014,Sheffield United,12650000
+e2,2014,Bristol City,11300000
+e2,2014,Barnsley FC,9780000
+e2,2014,Leyton Orient,9100000
+e2,2014,Peterborough United,8530000
+e2,2014,Coventry City,8330000
+e2,2014,Yeovil Town,8300000
+e2,2014,Oldham Athletic,8300000
+e2,2014,Bradford City,8150000
+e2,2014,Scunthorpe United,8150000
+e2,2014,Preston North End,7580000
+e2,2014,Colchester United,6880000
+e2,2014,Crawley Town,6830000
+e2,2014,Swindon Town,6780000
+e2,2014,Doncaster Rovers,6680000
+e2,2014,Chesterfield FC,6330000
+e2,2014,Notts County,5900000
+e2,2014,Port Vale FC,5550000
+e2,2014,Rochdale AFC,5250000
+e2,2014,Fleetwood Town,5200000
+e2,2014,Crewe Alexandra,5030000
+e2,2014,Gillingham FC,3900000
+e2,2014,Walsall FC,3880000
+e2,2015,Wigan Athletic,16830000
+e2,2015,Sheffield United,14080000
+e2,2015,Coventry City,12700000
+e2,2015,Bradford City,9550000
+e2,2015,Peterborough United,9450000
+e2,2015,Millwall FC,8550000
+e2,2015,Shrewsbury Town,8400000
+e2,2015,Swindon Town,8050000
+e2,2015,Barnsley FC,7480000
+e2,2015,Oldham Athletic,7180000
+e2,2015,Doncaster Rovers,6500000
+e2,2015,Southend United,6430000
+e2,2015,Scunthorpe United,6350000
+e2,2015,Fleetwood Town,6330000
+e2,2015,Chesterfield FC,6150000
+e2,2015,Bury FC,6050000
+e2,2015,Gillingham FC,5930000
+e2,2015,Walsall FC,5930000
+e2,2015,Colchester United,5730000
+e2,2015,Burton Albion,5630000
+e2,2015,Rochdale AFC,4750000
+e2,2015,Blackpool FC,4700000
+e2,2015,Port Vale FC,4250000
+e2,2015,Crewe Alexandra,4030000
+e2,2016,Bolton Wanderers,20130000
+e2,2016,Charlton Athletic,19700000
+e2,2016,Sheffield United,16100000
+e2,2016,Bury FC,8550000
+e2,2016,Millwall FC,8330000
+e2,2016,Oxford United,7950000
+e2,2016,Milton Keynes Dons,7630000
+e2,2016,Swindon Town,7550000
+e2,2016,Bradford City,7500000
+e2,2016,Fleetwood Town,7200000
+e2,2016,Peterborough United,6950000
+e2,2016,Scunthorpe United,6880000
+e2,2016,Coventry City,6700000
+e2,2016,Gillingham FC,6630000
+e2,2016,Port Vale FC,6450000
+e2,2016,Northampton Town,6200000
+e2,2016,Oldham Athletic,5730000
+e2,2016,Walsall FC,5480000
+e2,2016,Bristol Rovers,5480000
+e2,2016,Shrewsbury Town,5330000
+e2,2016,Chesterfield FC,5150000
+e2,2016,Southend United,4880000
+e2,2016,Rochdale AFC,4280000
+e2,2016,AFC Wimbledon,3350000
+e2,2017,Blackburn Rovers,15000000
+e2,2017,Wigan Athletic,14780000
+e2,2017,Charlton Athletic,11700000
+e2,2017,Milton Keynes Dons,11000000
+e2,2017,Oxford United,10880000
+e2,2017,Oldham Athletic,9350000
+e2,2017,Northampton Town,9050000
+e2,2017,Bury FC,8180000
+e2,2017,Rotherham United,8050000
+e2,2017,Scunthorpe United,7750000
+e2,2017,Portsmouth FC,6750000
+e2,2017,Fleetwood Town,6300000
+e2,2017,Southend United,5880000
+e2,2017,Bradford City,5780000
+e2,2017,Walsall FC,5730000
+e2,2017,Plymouth Argyle,5700000
+e2,2017,Peterborough United,5450000
+e2,2017,Blackpool FC,5380000
+e2,2017,Rochdale AFC,5250000
+e2,2017,Doncaster Rovers,4330000
+e2,2017,AFC Wimbledon,4200000
+e2,2017,Bristol Rovers,3980000
+e2,2017,Gillingham FC,3480000
+e2,2017,Shrewsbury Town,3080000
+e2,2018,Sunderland AFC,32400000
+e2,2018,Charlton Athletic,19500000
+e2,2018,Barnsley FC,12350000
+e2,2018,Scunthorpe United,11400000
+e2,2018,Portsmouth FC,9980000
+e2,2018,Oxford United,9050000
+e2,2018,Peterborough United,8880000
+e2,2018,Bradford City,8880000
+e2,2018,Fleetwood Town,8800000
+e2,2018,Luton Town,8050000
+e2,2018,Burton Albion,6750000
+e2,2018,Southend United,6550000
+e2,2018,Shrewsbury Town,6100000
+e2,2018,Rochdale AFC,6080000
+e2,2018,Coventry City,5930000
+e2,2018,Blackpool FC,5600000
+e2,2018,Plymouth Argyle,5350000
+e2,2018,Walsall FC,5250000
+e2,2018,Wycombe Wanderers,5100000
+e2,2018,Doncaster Rovers,4179999
+e2,2018,Accrington Stanley,4130000
+e2,2018,Bristol Rovers,4030000
+e2,2018,Gillingham FC,3800000
+e2,2018,AFC Wimbledon,3350000
+e2,2019,Sunderland AFC,15900000
+e2,2019,Ipswich Town,13180000
+e2,2019,Oxford United,12830000
+e2,2019,Blackpool FC,11480000
+e2,2019,Bolton Wanderers,8850000
+e2,2019,Fleetwood Town,8780000
+e2,2019,Lincoln City,7750000
+e2,2019,Shrewsbury Town,7280000
+e2,2019,Rotherham United,6800000
+e2,2019,Portsmouth FC,6050000
+e2,2019,Milton Keynes Dons,6000000
+e2,2019,Doncaster Rovers,5930000
+e2,2019,Peterborough United,5350000
+e2,2019,Burton Albion,4900000
+e2,2019,Wycombe Wanderers,4730000
+e2,2019,Tranmere Rovers,4650000
+e2,2019,Coventry City,4330000
+e2,2019,Southend United,4250000
+e2,2019,Bristol Rovers,4130000
+e2,2019,Rochdale AFC,4080000
+e2,2019,Gillingham FC,3530000
+e2,2019,AFC Wimbledon,2330000
+e2,2019,Accrington Stanley,1930000
+e2,2020,Ipswich Town,18200000
+e2,2020,Hull City,16350000
+e2,2020,Milton Keynes Dons,13650000
+e2,2020,Charlton Athletic,13050000
+e2,2020,Blackpool FC,12300000
+e2,2020,Peterborough United,12300000
+e2,2020,Sunderland AFC,11500000
+e2,2020,Shrewsbury Town,11000000
+e2,2020,Doncaster Rovers,10150000
+e2,2020,Wigan Athletic,9330000
+e2,2020,Fleetwood Town,9030000
+e2,2020,Portsmouth FC,8100000
+e2,2020,Lincoln City,7830000
+e2,2020,Swindon Town,7380000
+e2,2020,Oxford United,7150000
+e2,2020,Burton Albion,5500000
+e2,2020,Gillingham FC,4900000
+e2,2020,Crewe Alexandra,4700000
+e2,2020,Plymouth Argyle,4179999
+e2,2020,Northampton Town,3800000
+e2,2020,Bristol Rovers,3630000
+e2,2020,Rochdale AFC,3550000
+e2,2020,AFC Wimbledon,2880000
+e2,2020,Accrington Stanley,1850000
+e2,2021,Sheffield Wednesday,32049999
+e2,2021,Sunderland AFC,25030000
+e2,2021,Ipswich Town,24680000
+e2,2021,Wigan Athletic,17300000
+e2,2021,Milton Keynes Dons,16700000
+e2,2021,Portsmouth FC,14850000
+e2,2021,Rotherham United,13850000
+e2,2021,Charlton Athletic,12150000
+e2,2021,Wycombe Wanderers,10700000
+e2,2021,Lincoln City,9750000
+e2,2021,Doncaster Rovers,8850000
+e2,2021,Oxford United,8850000
+e2,2021,Burton Albion,8780000
+e2,2021,Bolton Wanderers,7850000
+e2,2021,Fleetwood Town,7080000
+e2,2021,Shrewsbury Town,7000000
+e2,2021,Cheltenham Town,6550000
+e2,2021,Crewe Alexandra,6550000
+e2,2021,Gillingham FC,6280000
+e2,2021,Plymouth Argyle,5680000
+e2,2021,Morecambe FC,4950000
+e2,2021,AFC Wimbledon,3800000
+e2,2021,Accrington Stanley,3100000
+e2,2021,Cambridge United,2650000
+e2,2022,Peterborough United,22380000
+e2,2022,Derby County,22330000
+e2,2022,Bolton Wanderers,21330000
+e2,2022,Barnsley FC,21030000
+e2,2022,Ipswich Town,20130000
+e2,2022,Portsmouth FC,16100000
+e2,2022,Sheffield Wednesday,14850000
+e2,2022,Plymouth Argyle,13900000
+e2,2022,Charlton Athletic,12580000
+e2,2022,Fleetwood Town,11280000
+e2,2022,Lincoln City,11250000
+e2,2022,Milton Keynes Dons,10630000
+e2,2022,Bristol Rovers,10600000
+e2,2022,Burton Albion,10280000
+e2,2022,Forest Green Rovers,9600000
+e2,2022,Exeter City,9530000
+e2,2022,Wycombe Wanderers,9450000
+e2,2022,Cheltenham Town,8750000
+e2,2022,Oxford United,8650000
+e2,2022,Morecambe FC,8180000
+e2,2022,Port Vale FC,8180000
+e2,2022,Cambridge United,7680000
+e2,2022,Shrewsbury Town,7200000
+e2,2022,Accrington Stanley,5850000
+e2,2023,Peterborough United,22700000
+e2,2023,Barnsley FC,19150000
+e2,2023,Oxford United,17180000
+e2,2023,Bolton Wanderers,16950000
+e2,2023,Reading FC,16250000
+e2,2023,Derby County,15980000
+e2,2023,Charlton Athletic,15900000
+e2,2023,Portsmouth FC,13950000
+e2,2023,Blackpool FC,13700000
+e2,2023,Wigan Athletic,11900000
+e2,2023,Bristol Rovers,11780000
+e2,2023,Exeter City,10930000
+e2,2023,Port Vale FC,10030000
+e2,2023,Lincoln City,9530000
+e2,2023,Wycombe Wanderers,9430000
+e2,2023,Fleetwood Town,8530000
+e2,2023,Carlisle United,7800000
+e2,2023,Leyton Orient,7550000
+e2,2023,Burton Albion,7430000
+e2,2023,Shrewsbury Town,7350000
+e2,2023,Stevenage FC,6950000
+e2,2023,Cheltenham Town,6530000
+e2,2023,Northampton Town,6400000
+e2,2023,Cambridge United,5850000
+e2,2024,Birmingham City,54800000
+e2,2024,Wrexham AFC,15750000
+e2,2024,Huddersfield Town,14230000
+e2,2024,Stockport County,12830000
+e2,2024,Bolton Wanderers,12300000
+e2,2024,Barnsley FC,12250000
+e2,2024,Wycombe Wanderers,10930000
+e2,2024,Charlton Athletic,10130000
+e2,2024,Blackpool FC,9900000
+e2,2024,Peterborough United,9750000
+e2,2024,Lincoln City,8400000
+e2,2024,Reading FC,7680000
+e2,2024,Leyton Orient,7450000
+e2,2024,Rotherham United,7200000
+e2,2024,Wigan Athletic,7050000
+e2,2024,Crawley Town,6680000
+e2,2024,Burton Albion,5930000
+e2,2024,Exeter City,5550000
+e2,2024,Bristol Rovers,5480000
+e2,2024,Northampton Town,4400000
+e2,2024,Stevenage FC,4280000
+e2,2024,Mansfield Town,4230000
+e2,2024,Cambridge United,3980000
+e2,2024,Shrewsbury Town,2550000
+e2,2025,Cardiff City,31350000
+e2,2025,Luton Town,30180000
+e2,2025,Huddersfield Town,16300000
+e2,2025,Bolton Wanderers,14430000
+e2,2025,Stockport County,13630000
+e2,2025,Leyton Orient,13430000
+e2,2025,Plymouth Argyle,12980000
+e2,2025,Blackpool FC,12100000
+e2,2025,Reading FC,10550000
+e2,2025,Wycombe Wanderers,10100000
+e2,2025,Lincoln City,9980000
+e2,2025,Port Vale FC,8780000
+e2,2025,Stevenage FC,8650000
+e2,2025,Wigan Athletic,8530000
+e2,2025,Rotherham United,8080000
+e2,2025,Peterborough United,7830000
+e2,2025,Burton Albion,7680000
+e2,2025,Bradford City,7230000
+e2,2025,Barnsley FC,6880000
+e2,2025,Doncaster Rovers,6850000
+e2,2025,Mansfield Town,6380000
+e2,2025,AFC Wimbledon,5380000
+e2,2025,Exeter City,4700000
+e2,2025,Northampton Town,4080000
+e3,2005,Northampton Town,4099999
+e3,2005,Carlisle United,3600000
+e3,2005,Oxford United,3500000
+e3,2005,Wrexham AFC,2930000
+e3,2005,Wycombe Wanderers,2850000
+e3,2005,Peterborough United,2650000
+e3,2005,Rushden & Diamonds (- 2011),1880000
+e3,2005,Bristol Rovers,1750000
+e3,2005,Grimsby Town,1700000
+e3,2005,Boston United,1630000
+e3,2005,Notts County,1630000
+e3,2005,Bury FC,1430000
+e3,2005,Stockport County,1330000
+e3,2005,Mansfield Town,1280000
+e3,2005,Torquay United,1250000
+e3,2005,Barnet FC,1100000
+e3,2005,Chester City (- 2010),1000000
+e3,2005,Macclesfield Town FC,1000000
+e3,2005,Lincoln City,700000
+e3,2005,Shrewsbury Town,550000
+e3,2005,Rochdale AFC,525000
+e3,2005,Cheltenham Town,400000
+e3,2005,Leyton Orient,350000
+e3,2006,Walsall FC,7150000
+e3,2006,Wrexham AFC,6080000
+e3,2006,Milton Keynes Dons,5600000
+e3,2006,Swindon Town,5030000
+e3,2006,Peterborough United,3680000
+e3,2006,Accrington Stanley,3130000
+e3,2006,Wycombe Wanderers,3050000
+e3,2006,Torquay United,2850000
+e3,2006,Boston United,2830000
+e3,2006,Hartlepool United,2450000
+e3,2006,Stockport County,2200000
+e3,2006,Rochdale AFC,1980000
+e3,2006,Grimsby Town,1750000
+e3,2006,Bristol Rovers,1730000
+e3,2006,Bury FC,1650000
+e3,2006,Shrewsbury Town,1550000
+e3,2006,Chester City (- 2010),1350000
+e3,2006,Notts County,1300000
+e3,2006,Barnet FC,1250000
+e3,2006,Mansfield Town,1130000
+e3,2006,Hereford United (- 2014),925000
+e3,2006,Macclesfield Town FC,875000
+e3,2006,Lincoln City,550000
+e3,2007,Chester City (- 2010),5650000
+e3,2007,Wycombe Wanderers,5130000
+e3,2007,Bradford City,4550000
+e3,2007,Milton Keynes Dons,4380000
+e3,2007,Chesterfield FC,4250000
+e3,2007,Wrexham AFC,3750000
+e3,2007,Notts County,3580000
+e3,2007,Peterborough United,3480000
+e3,2007,Shrewsbury Town,2880000
+e3,2007,Brentford FC,2600000
+e3,2007,Stockport County,2550000
+e3,2007,Hereford United (- 2014),2330000
+e3,2007,Accrington Stanley,2280000
+e3,2007,Mansfield Town,2180000
+e3,2007,Grimsby Town,1730000
+e3,2007,Rotherham United,1580000
+e3,2007,Rochdale AFC,1580000
+e3,2007,Barnet FC,1500000
+e3,2007,Morecambe FC,1300000
+e3,2007,Bury FC,1050000
+e3,2007,Macclesfield Town FC,775000
+e3,2007,Dagenham & Redbridge FC,450000
+e3,2007,Lincoln City,400000
+e3,2008,Luton Town,6430000
+e3,2008,Shrewsbury Town,6250000
+e3,2008,Grimsby Town,4830000
+e3,2008,Barnet FC,4480000
+e3,2008,Brentford FC,4330000
+e3,2008,Bradford City,4200000
+e3,2008,Exeter City,4050000
+e3,2008,Wycombe Wanderers,4030000
+e3,2008,Notts County,4030000
+e3,2008,Chester City (- 2010),3730000
+e3,2008,Chesterfield FC,3630000
+e3,2008,Accrington Stanley,2830000
+e3,2008,Gillingham FC,2780000
+e3,2008,AFC Bournemouth,2580000
+e3,2008,Rotherham United,1900000
+e3,2008,Lincoln City,1880000
+e3,2008,Port Vale FC,1850000
+e3,2008,Rochdale AFC,1630000
+e3,2008,Morecambe FC,1280000
+e3,2008,Bury FC,1180000
+e3,2008,Aldershot Town,900000
+e3,2008,Macclesfield Town FC,575000
+e3,2008,Dagenham & Redbridge FC,350000
+e3,2009,Notts County,8650000
+e3,2009,Rochdale AFC,6080000
+e3,2009,Chesterfield FC,5880000
+e3,2009,Northampton Town,5530000
+e3,2009,Shrewsbury Town,5530000
+e3,2009,Grimsby Town,5300000
+e3,2009,Bradford City,5230000
+e3,2009,Cheltenham Town,5000000
+e3,2009,Hereford United (- 2014),4640000
+e3,2009,Port Vale FC,4530000
+e3,2009,Rotherham United,4530000
+e3,2009,Dagenham & Redbridge FC,4200000
+e3,2009,Burton Albion,3850000
+e3,2009,Barnet FC,3830000
+e3,2009,Bury FC,3750000
+e3,2009,Crewe Alexandra,3750000
+e3,2009,AFC Bournemouth,3550000
+e3,2009,Lincoln City,3480000
+e3,2009,Morecambe FC,3400000
+e3,2009,Aldershot Town,3330000
+e3,2009,Torquay United,3130000
+e3,2009,Macclesfield Town FC,2530000
+e3,2009,Accrington Stanley,2150000
+e3,2010,Gillingham FC,6100000
+e3,2010,Wycombe Wanderers,5880000
+e3,2010,Southend United,5730000
+e3,2010,Shrewsbury Town,5650000
+e3,2010,Northampton Town,5530000
+e3,2010,Burton Albion,5480000
+e3,2010,Bradford City,5350000
+e3,2010,Stevenage FC,5100000
+e3,2010,Stockport County,4930000
+e3,2010,Morecambe FC,4780000
+e3,2010,Rotherham United,4650000
+e3,2010,Oxford United,4630000
+e3,2010,Hereford United (- 2014),4540000
+e3,2010,Lincoln City,4300000
+e3,2010,Aldershot Town,4280000
+e3,2010,Port Vale FC,4200000
+e3,2010,Barnet FC,4050000
+e3,2010,Chesterfield FC,3880000
+e3,2010,Torquay United,3130000
+e3,2010,Bury FC,2650000
+e3,2010,Cheltenham Town,2380000
+e3,2010,Crewe Alexandra,2250000
+e3,2010,Macclesfield Town FC,2000000
+e3,2010,Accrington Stanley,1880000
+e3,2011,Oxford United,8180000
+e3,2011,Bradford City,7780000
+e3,2011,Crawley Town,7680000
+e3,2011,Swindon Town,7430000
+e3,2011,Southend United,6650000
+e3,2011,Northampton Town,6630000
+e3,2011,Bristol Rovers,6400000
+e3,2011,Plymouth Argyle,6350000
+e3,2011,Rotherham United,6050000
+e3,2011,Gillingham FC,5280000
+e3,2011,Cheltenham Town,4950000
+e3,2011,Barnet FC,4780000
+e3,2011,Port Vale FC,4300000
+e3,2011,Shrewsbury Town,4050000
+e3,2011,Dagenham & Redbridge FC,3390000
+e3,2011,Hereford United (- 2014),3350000
+e3,2011,Burton Albion,3300000
+e3,2011,Morecambe FC,3300000
+e3,2011,Macclesfield Town FC,3180000
+e3,2011,Accrington Stanley,2780000
+e3,2011,Aldershot Town,2700000
+e3,2011,Torquay United,2480000
+e3,2011,AFC Wimbledon,1880000
+e3,2011,Crewe Alexandra,1700000
+e3,2012,Rotherham United,9600000
+e3,2012,Bradford City,6330000
+e3,2012,Bristol Rovers,6000000
+e3,2012,Southend United,5430000
+e3,2012,Plymouth Argyle,5430000
+e3,2012,Barnet FC,5350000
+e3,2012,Chesterfield FC,4850000
+e3,2012,Fleetwood Town,4680000
+e3,2012,Wycombe Wanderers,4530000
+e3,2012,Gillingham FC,4400000
+e3,2012,Accrington Stanley,4380000
+e3,2012,Northampton Town,4330000
+e3,2012,Oxford United,4300000
+e3,2012,AFC Wimbledon,4250000
+e3,2012,Exeter City,4200000
+e3,2012,Port Vale FC,4200000
+e3,2012,York City,4000000
+e3,2012,Burton Albion,3810000
+e3,2012,Dagenham & Redbridge FC,3700000
+e3,2012,Rochdale AFC,3650000
+e3,2012,Aldershot Town,3630000
+e3,2012,Morecambe FC,2730000
+e3,2012,Cheltenham Town,2730000
+e3,2012,Torquay United,2280000
+e3,2013,Northampton Town,7400000
+e3,2013,Portsmouth FC,6830000
+e3,2013,Chesterfield FC,6450000
+e3,2013,Bury FC,6250000
+e3,2013,Scunthorpe United,5430000
+e3,2013,Fleetwood Town,4280000
+e3,2013,Plymouth Argyle,4200000
+e3,2013,Burton Albion,4059999
+e3,2013,Southend United,3980000
+e3,2013,Hartlepool United,3750000
+e3,2013,Torquay United,3700000
+e3,2013,Bristol Rovers,3500000
+e3,2013,Exeter City,3480000
+e3,2013,Rochdale AFC,3330000
+e3,2013,Wycombe Wanderers,3130000
+e3,2013,Cheltenham Town,2900000
+e3,2013,Oxford United,2900000
+e3,2013,York City,2900000
+e3,2013,Newport County,2880000
+e3,2013,AFC Wimbledon,2800000
+e3,2013,Dagenham & Redbridge FC,2680000
+e3,2013,Accrington Stanley,2580000
+e3,2013,Morecambe FC,2280000
+e3,2013,Mansfield Town,1980000
+e3,2014,Portsmouth FC,6400000
+e3,2014,Northampton Town,6100000
+e3,2014,Exeter City,5900000
+e3,2014,Bury FC,5130000
+e3,2014,Hartlepool United,5100000
+e3,2014,Tranmere Rovers,4950000
+e3,2014,Carlisle United,4830000
+e3,2014,Shrewsbury Town,4630000
+e3,2014,Burton Albion,4440000
+e3,2014,Cheltenham Town,4150000
+e3,2014,Oxford United,4150000
+e3,2014,York City,4150000
+e3,2014,Southend United,3980000
+e3,2014,Cambridge United,3400000
+e3,2014,Mansfield Town,3350000
+e3,2014,Morecambe FC,2980000
+e3,2014,Stevenage FC,2950000
+e3,2014,Wycombe Wanderers,2900000
+e3,2014,AFC Wimbledon,2800000
+e3,2014,Accrington Stanley,2630000
+e3,2014,Luton Town,2550000
+e3,2014,Plymouth Argyle,2500000
+e3,2014,Dagenham & Redbridge FC,2000000
+e3,2014,Newport County,1800000
+e3,2015,Leyton Orient,8130000
+e3,2015,Portsmouth FC,6300000
+e3,2015,Notts County,5550000
+e3,2015,Luton Town,5500000
+e3,2015,Northampton Town,5180000
+e3,2015,Exeter City,5100000
+e3,2015,Stevenage FC,4900000
+e3,2015,Crawley Town,4530000
+e3,2015,York City,4400000
+e3,2015,Yeovil Town,4250000
+e3,2015,Cambridge United,3830000
+e3,2015,Barnet FC,3580000
+e3,2015,Oxford United,3530000
+e3,2015,Mansfield Town,3400000
+e3,2015,Plymouth Argyle,3250000
+e3,2015,Hartlepool United,3130000
+e3,2015,Wycombe Wanderers,3130000
+e3,2015,Dagenham & Redbridge FC,3030000
+e3,2015,AFC Wimbledon,3000000
+e3,2015,Carlisle United,2750000
+e3,2015,Bristol Rovers,2400000
+e3,2015,Newport County,2330000
+e3,2015,Morecambe FC,2029999
+e3,2015,Accrington Stanley,1830000
+e3,2016,Leyton Orient,6400000
+e3,2016,Blackpool FC,4950000
+e3,2016,Notts County,4880000
+e3,2016,Portsmouth FC,4780000
+e3,2016,Luton Town,4530000
+e3,2016,Plymouth Argyle,4480000
+e3,2016,Colchester United,4200000
+e3,2016,Mansfield Town,3930000
+e3,2016,Carlisle United,3850000
+e3,2016,Grimsby Town,3850000
+e3,2016,Barnet FC,3730000
+e3,2016,Wycombe Wanderers,3730000
+e3,2016,Crawley Town,3600000
+e3,2016,Hartlepool United,3550000
+e3,2016,Doncaster Rovers,3430000
+e3,2016,Cambridge United,3380000
+e3,2016,Exeter City,3380000
+e3,2016,Accrington Stanley,3330000
+e3,2016,Newport County,2950000
+e3,2016,Stevenage FC,2800000
+e3,2016,Crewe Alexandra,2630000
+e3,2016,Morecambe FC,2430000
+e3,2016,Cheltenham Town,2150000
+e3,2016,Yeovil Town,1950000
+e3,2017,Chesterfield FC,4930000
+e3,2017,Exeter City,4800000
+e3,2017,Coventry City,4780000
+e3,2017,Notts County,4430000
+e3,2017,Colchester United,4300000
+e3,2017,Luton Town,3980000
+e3,2017,Mansfield Town,3850000
+e3,2017,Grimsby Town,3730000
+e3,2017,Lincoln City,3500000
+e3,2017,Wycombe Wanderers,3450000
+e3,2017,Port Vale FC,3400000
+e3,2017,Crawley Town,3330000
+e3,2017,Swindon Town,3330000
+e3,2017,Cheltenham Town,3030000
+e3,2017,Carlisle United,2900000
+e3,2017,Barnet FC,2800000
+e3,2017,Cambridge United,2750000
+e3,2017,Forest Green Rovers,2680000
+e3,2017,Crewe Alexandra,2600000
+e3,2017,Stevenage FC,2600000
+e3,2017,Morecambe FC,2500000
+e3,2017,Yeovil Town,2200000
+e3,2017,Accrington Stanley,2180000
+e3,2017,Newport County,2080000
+e3,2018,Milton Keynes Dons,7680000
+e3,2018,Oldham Athletic,5750000
+e3,2018,Lincoln City,5700000
+e3,2018,Bury FC,5480000
+e3,2018,Exeter City,5430000
+e3,2018,Mansfield Town,5330000
+e3,2018,Northampton Town,4530000
+e3,2018,Notts County,4300000
+e3,2018,Forest Green Rovers,3600000
+e3,2018,Carlisle United,3550000
+e3,2018,Cambridge United,3500000
+e3,2018,Grimsby Town,3250000
+e3,2018,Newport County,3130000
+e3,2018,Crawley Town,3080000
+e3,2018,Swindon Town,3050000
+e3,2018,Tranmere Rovers,2980000
+e3,2018,Cheltenham Town,2630000
+e3,2018,Crewe Alexandra,2500000
+e3,2018,Macclesfield Town FC,2380000
+e3,2018,Yeovil Town,2350000
+e3,2018,Colchester United,2280000
+e3,2018,Morecambe FC,2200000
+e3,2018,Stevenage FC,1650000
+e3,2018,Port Vale FC,1580000
+e3,2019,Salford City,5450000
+e3,2019,Swindon Town,5430000
+e3,2019,Scunthorpe United,5400000
+e3,2019,Bradford City,5130000
+e3,2019,Oldham Athletic,4080000
+e3,2019,Plymouth Argyle,3480000
+e3,2019,Exeter City,3380000
+e3,2019,Northampton Town,3150000
+e3,2019,Mansfield Town,2980000
+e3,2019,Forest Green Rovers,2950000
+e3,2019,Colchester United,2930000
+e3,2019,Carlisle United,2800000
+e3,2019,Grimsby Town,2680000
+e3,2019,Cheltenham Town,2480000
+e3,2019,Leyton Orient,2200000
+e3,2019,Stevenage FC,2180000
+e3,2019,Walsall FC,2150000
+e3,2019,Crawley Town,2080000
+e3,2019,Cambridge United,2049999
+e3,2019,Newport County,1930000
+e3,2019,Morecambe FC,1830000
+e3,2019,Crewe Alexandra,1800000
+e3,2019,Macclesfield Town FC,1400000
+e3,2019,Port Vale FC,1380000
+e3,2020,Salford City,7750000
+e3,2020,Bolton Wanderers,4250000
+e3,2020,Tranmere Rovers,4080000
+e3,2020,Oldham Athletic,3930000
+e3,2020,Barrow AFC,3600000
+e3,2020,Newport County,3580000
+e3,2020,Mansfield Town,3550000
+e3,2020,Colchester United,3180000
+e3,2020,Southend United,2900000
+e3,2020,Cheltenham Town,2730000
+e3,2020,Exeter City,2530000
+e3,2020,Bradford City,2480000
+e3,2020,Walsall FC,2400000
+e3,2020,Scunthorpe United,2350000
+e3,2020,Leyton Orient,2250000
+e3,2020,Morecambe FC,2250000
+e3,2020,Carlisle United,2230000
+e3,2020,Crawley Town,2180000
+e3,2020,Forest Green Rovers,1950000
+e3,2020,Grimsby Town,1950000
+e3,2020,Stevenage FC,1950000
+e3,2020,Cambridge United,1900000
+e3,2020,Port Vale FC,1480000
+e3,2020,Harrogate Town,625000
+e3,2021,Salford City,8250000
+e3,2021,Mansfield Town,6630000
+e3,2021,Swindon Town,6080000
+e3,2021,Northampton Town,5400000
+e3,2021,Bristol Rovers,5350000
+e3,2021,Colchester United,5150000
+e3,2021,Tranmere Rovers,4600000
+e3,2021,Carlisle United,4099999
+e3,2021,Bradford City,3880000
+e3,2021,Oldham Athletic,3800000
+e3,2021,Rochdale AFC,3700000
+e3,2021,Barrow AFC,3380000
+e3,2021,Newport County,3230000
+e3,2021,Stevenage FC,3230000
+e3,2021,Crawley Town,3130000
+e3,2021,Hartlepool United,3100000
+e3,2021,Port Vale FC,2950000
+e3,2021,Exeter City,2650000
+e3,2021,Leyton Orient,2630000
+e3,2021,Walsall FC,2550000
+e3,2021,Forest Green Rovers,2480000
+e3,2021,Scunthorpe United,2450000
+e3,2021,Harrogate Town,1980000
+e3,2021,Sutton United,1780000
+e3,2022,Crewe Alexandra,9150000
+e3,2022,Salford City,8250000
+e3,2022,Colchester United,6880000
+e3,2022,Tranmere Rovers,6880000
+e3,2022,AFC Wimbledon,6800000
+e3,2022,Swindon Town,6650000
+e3,2022,Northampton Town,6600000
+e3,2022,Bradford City,6500000
+e3,2022,Doncaster Rovers,6380000
+e3,2022,Stockport County,6330000
+e3,2022,Stevenage FC,6280000
+e3,2022,Leyton Orient,6100000
+e3,2022,Crawley Town,6030000
+e3,2022,Carlisle United,5600000
+e3,2022,Walsall FC,5280000
+e3,2022,Gillingham FC,5230000
+e3,2022,Hartlepool United,5080000
+e3,2022,Mansfield Town,5080000
+e3,2022,Harrogate Town,4830000
+e3,2022,Newport County,4630000
+e3,2022,Grimsby Town,4390000
+e3,2022,Sutton United,4380000
+e3,2022,Barrow AFC,4030000
+e3,2022,Rochdale AFC,3930000
+e3,2023,Wrexham AFC,8700000
+e3,2023,Milton Keynes Dons,8130000
+e3,2023,Stockport County,7900000
+e3,2023,Colchester United,7350000
+e3,2023,Forest Green Rovers,7250000
+e3,2023,Crewe Alexandra,6880000
+e3,2023,AFC Wimbledon,6500000
+e3,2023,Swindon Town,6000000
+e3,2023,Bradford City,5600000
+e3,2023,Gillingham FC,5580000
+e3,2023,Notts County,5400000
+e3,2023,Doncaster Rovers,5350000
+e3,2023,Mansfield Town,5200000
+e3,2023,Morecambe FC,5150000
+e3,2023,Salford City,4930000
+e3,2023,Accrington Stanley,4880000
+e3,2023,Crawley Town,4800000
+e3,2023,Walsall FC,4780000
+e3,2023,Grimsby Town,4650000
+e3,2023,Harrogate Town,4450000
+e3,2023,Tranmere Rovers,4330000
+e3,2023,Barrow AFC,4280000
+e3,2023,Newport County,4280000
+e3,2023,Sutton United,3380000
+e3,2024,Port Vale FC,5130000
+e3,2024,Notts County,5100000
+e3,2024,Crewe Alexandra,4530000
+e3,2024,Fleetwood Town,4450000
+e3,2024,Bradford City,4400000
+e3,2024,Milton Keynes Dons,4380000
+e3,2024,Gillingham FC,3950000
+e3,2024,Carlisle United,3800000
+e3,2024,AFC Wimbledon,3780000
+e3,2024,Doncaster Rovers,3680000
+e3,2024,Barrow AFC,3650000
+e3,2024,Colchester United,3580000
+e3,2024,Swindon Town,3580000
+e3,2024,Tranmere Rovers,3580000
+e3,2024,Salford City,3480000
+e3,2024,Grimsby Town,3430000
+e3,2024,Newport County,3250000
+e3,2024,Chesterfield FC,3200000
+e3,2024,Walsall FC,3180000
+e3,2024,Morecambe FC,3100000
+e3,2024,Accrington Stanley,2780000
+e3,2024,Harrogate Town,2530000
+e3,2024,Bromley FC,2150000
+e3,2024,Cheltenham Town,2130000
+e3,2025,Milton Keynes Dons,9730000
+e3,2025,Bristol Rovers,5400000
+e3,2025,Notts County,5300000
+e3,2025,Salford City,5200000
+e3,2025,Grimsby Town,5180000
+e3,2025,Cambridge United,4780000
+e3,2025,Crewe Alexandra,4780000
+e3,2025,Chesterfield FC,4530000
+e3,2025,Gillingham FC,4480000
+e3,2025,Walsall FC,4050000
+e3,2025,Crawley Town,3930000
+e3,2025,Fleetwood Town,3930000
+e3,2025,Swindon Town,3680000
+e3,2025,Barnet FC,3630000
+e3,2025,Colchester United,3580000
+e3,2025,Tranmere Rovers,3380000
+e3,2025,Bromley FC,3300000
+e3,2025,Barrow AFC,3180000
+e3,2025,Cheltenham Town,2950000
+e3,2025,Oldham Athletic,2950000
+e3,2025,Newport County,2650000
+e3,2025,Accrington Stanley,2580000
+e3,2025,Harrogate Town,2430000
+e3,2025,Shrewsbury Town,2430000
+bundesliga,2005,Bayern Munich,177380000
+bundesliga,2005,SV Werder Bremen,111600000
+bundesliga,2005,Hamburger SV,106630000
+bundesliga,2005,FC Schalke 04,87180000
+bundesliga,2005,Bayer 04 Leverkusen,81230000
+bundesliga,2005,Borussia Dortmund,78530000
+bundesliga,2005,Hertha BSC,72580000
+bundesliga,2005,VfB Stuttgart,69400000
+bundesliga,2005,VfL Wolfsburg,61380000
+bundesliga,2005,1.FC Nuremberg,52130000
+bundesliga,2005,Borussia Mönchengladbach,49800000
+bundesliga,2005,Hannover 96,45200000
+bundesliga,2005,1.FC Köln,43480000
+bundesliga,2005,Eintracht Frankfurt,39900000
+bundesliga,2005,1.FSV Mainz 05,37700000
+bundesliga,2005,1.FC Kaiserslautern,36630000
+bundesliga,2005,Arminia Bielefeld,32750000
+bundesliga,2005,MSV Duisburg,24180000
+bundesliga,2006,Bayern Munich,180730000
+bundesliga,2006,SV Werder Bremen,157250000
+bundesliga,2006,FC Schalke 04,106500000
+bundesliga,2006,Hamburger SV,101450000
+bundesliga,2006,VfB Stuttgart,96930000
+bundesliga,2006,Borussia Dortmund,79630000
+bundesliga,2006,Bayer 04 Leverkusen,74080000
+bundesliga,2006,Hertha BSC,66250000
+bundesliga,2006,1.FC Nuremberg,65450000
+bundesliga,2006,VfL Wolfsburg,55900000
+bundesliga,2006,Eintracht Frankfurt,52150000
+bundesliga,2006,Borussia Mönchengladbach,45750000
+bundesliga,2006,Hannover 96,45050000
+bundesliga,2006,VfL Bochum,40700000
+bundesliga,2006,Arminia Bielefeld,35600000
+bundesliga,2006,1.FSV Mainz 05,35330000
+bundesliga,2006,FC Energie Cottbus,26550000
+bundesliga,2006,Alemannia Aachen,25900000
+bundesliga,2007,Bayern Munich,237050000
+bundesliga,2007,SV Werder Bremen,151300000
+bundesliga,2007,FC Schalke 04,125500000
+bundesliga,2007,Hamburger SV,115050000
+bundesliga,2007,VfB Stuttgart,108750000
+bundesliga,2007,Bayer 04 Leverkusen,89750000
+bundesliga,2007,Borussia Dortmund,79700000
+bundesliga,2007,VfL Wolfsburg,77000000
+bundesliga,2007,Eintracht Frankfurt,67800000
+bundesliga,2007,Hertha BSC,64300000
+bundesliga,2007,Hannover 96,61550000
+bundesliga,2007,1.FC Nuremberg,53050000
+bundesliga,2007,VfL Bochum,41050000
+bundesliga,2007,Karlsruher SC,37350000
+bundesliga,2007,Arminia Bielefeld,34750000
+bundesliga,2007,MSV Duisburg,29200000
+bundesliga,2007,FC Energie Cottbus,28150000
+bundesliga,2007,FC Hansa Rostock,27300000
+bundesliga,2008,Bayern Munich,217050000
+bundesliga,2008,SV Werder Bremen,149200000
+bundesliga,2008,Hamburger SV,135300000
+bundesliga,2008,VfL Wolfsburg,132030000
+bundesliga,2008,FC Schalke 04,117950000
+bundesliga,2008,VfB Stuttgart,117550000
+bundesliga,2008,Bayer 04 Leverkusen,114300000
+bundesliga,2008,Borussia Dortmund,103230000
+bundesliga,2008,Hertha BSC,88100000
+bundesliga,2008,TSG 1899 Hoffenheim,79050000
+bundesliga,2008,Eintracht Frankfurt,62650000
+bundesliga,2008,Hannover 96,56250000
+bundesliga,2008,1.FC Köln,47350000
+bundesliga,2008,Borussia Mönchengladbach,46000000
+bundesliga,2008,VfL Bochum,40530000
+bundesliga,2008,Karlsruher SC,30900000
+bundesliga,2008,FC Energie Cottbus,28530000
+bundesliga,2008,Arminia Bielefeld,28050000
+bundesliga,2009,Bayern Munich,279550000
+bundesliga,2009,VfL Wolfsburg,155430000
+bundesliga,2009,SV Werder Bremen,143950000
+bundesliga,2009,Hamburger SV,136280000
+bundesliga,2009,FC Schalke 04,134550000
+bundesliga,2009,Bayer 04 Leverkusen,132900000
+bundesliga,2009,VfB Stuttgart,124650000
+bundesliga,2009,Borussia Dortmund,109400000
+bundesliga,2009,TSG 1899 Hoffenheim,97500000
+bundesliga,2009,Hertha BSC,61980000
+bundesliga,2009,Eintracht Frankfurt,59200000
+bundesliga,2009,1.FC Köln,59130000
+bundesliga,2009,Borussia Mönchengladbach,55000000
+bundesliga,2009,Hannover 96,50880000
+bundesliga,2009,1.FSV Mainz 05,48780000
+bundesliga,2009,1.FC Nuremberg,47000000
+bundesliga,2009,VfL Bochum,39900000
+bundesliga,2009,SC Freiburg,39450000
+bundesliga,2010,Bayern Munich,308980000
+bundesliga,2010,Borussia Dortmund,169950000
+bundesliga,2010,FC Schalke 04,157180000
+bundesliga,2010,SV Werder Bremen,151130000
+bundesliga,2010,Bayer 04 Leverkusen,147680000
+bundesliga,2010,VfL Wolfsburg,145100000
+bundesliga,2010,TSG 1899 Hoffenheim,126130000
+bundesliga,2010,Hamburger SV,112130000
+bundesliga,2010,VfB Stuttgart,105250000
+bundesliga,2010,1.FC Köln,69280000
+bundesliga,2010,Borussia Mönchengladbach,66550000
+bundesliga,2010,Hannover 96,65349999
+bundesliga,2010,1.FSV Mainz 05,60600000
+bundesliga,2010,1.FC Nuremberg,60200000
+bundesliga,2010,SC Freiburg,59950000
+bundesliga,2010,1.FC Kaiserslautern,50500000
+bundesliga,2010,Eintracht Frankfurt,47580000
+bundesliga,2010,FC St. Pauli,30500000
+bundesliga,2011,Bayern Munich,355400000
+bundesliga,2011,Borussia Dortmund,215550000
+bundesliga,2011,FC Schalke 04,155130000
+bundesliga,2011,Bayer 04 Leverkusen,134850000
+bundesliga,2011,VfL Wolfsburg,123800000
+bundesliga,2011,VfB Stuttgart,118000000
+bundesliga,2011,SV Werder Bremen,111950000
+bundesliga,2011,TSG 1899 Hoffenheim,88600000
+bundesliga,2011,Borussia Mönchengladbach,88300000
+bundesliga,2011,Hamburger SV,85900000
+bundesliga,2011,Hannover 96,76800000
+bundesliga,2011,SC Freiburg,69100000
+bundesliga,2011,1.FC Köln,59750000
+bundesliga,2011,1.FC Nuremberg,52100000
+bundesliga,2011,1.FSV Mainz 05,52000000
+bundesliga,2011,Hertha BSC,45000000
+bundesliga,2011,1.FC Kaiserslautern,41900000
+bundesliga,2011,FC Augsburg,38350000
+bundesliga,2012,Bayern Munich,462250000
+bundesliga,2012,Borussia Dortmund,301050000
+bundesliga,2012,FC Schalke 04,180700000
+bundesliga,2012,Bayer 04 Leverkusen,155150000
+bundesliga,2012,VfL Wolfsburg,107550000
+bundesliga,2012,Hamburger SV,104550000
+bundesliga,2012,VfB Stuttgart,92480000
+bundesliga,2012,Borussia Mönchengladbach,87330000
+bundesliga,2012,Hannover 96,82680000
+bundesliga,2012,TSG 1899 Hoffenheim,78150000
+bundesliga,2012,SV Werder Bremen,78000000
+bundesliga,2012,Eintracht Frankfurt,68400000
+bundesliga,2012,SC Freiburg,65400000
+bundesliga,2012,1.FSV Mainz 05,52380000
+bundesliga,2012,1.FC Nuremberg,46550000
+bundesliga,2012,FC Augsburg,38050000
+bundesliga,2012,SpVgg Greuther Fürth,33330000
+bundesliga,2012,Fortuna Düsseldorf,31030000
+bundesliga,2013,Bayern Munich,538750000
+bundesliga,2013,Borussia Dortmund,326050000
+bundesliga,2013,FC Schalke 04,202200000
+bundesliga,2013,Bayer 04 Leverkusen,175650000
+bundesliga,2013,VfL Wolfsburg,155100000
+bundesliga,2013,Borussia Mönchengladbach,111380000
+bundesliga,2013,VfB Stuttgart,108000000
+bundesliga,2013,Hamburger SV,102630000
+bundesliga,2013,TSG 1899 Hoffenheim,97400000
+bundesliga,2013,Eintracht Frankfurt,86200000
+bundesliga,2013,Hannover 96,80180000
+bundesliga,2013,SC Freiburg,71580000
+bundesliga,2013,Hertha BSC,68080000
+bundesliga,2013,SV Werder Bremen,66300000
+bundesliga,2013,1.FSV Mainz 05,59350000
+bundesliga,2013,1.FC Nuremberg,56430000
+bundesliga,2013,FC Augsburg,45150000
+bundesliga,2013,Eintracht Braunschweig,28580000
+bundesliga,2014,Bayern Munich,575130000
+bundesliga,2014,Borussia Dortmund,319500000
+bundesliga,2014,VfL Wolfsburg,221050000
+bundesliga,2014,FC Schalke 04,212000000
+bundesliga,2014,Bayer 04 Leverkusen,177100000
+bundesliga,2014,Borussia Mönchengladbach,130630000
+bundesliga,2014,TSG 1899 Hoffenheim,121780000
+bundesliga,2014,1.FSV Mainz 05,88000000
+bundesliga,2014,Hamburger SV,87150000
+bundesliga,2014,VfB Stuttgart,86950000
+bundesliga,2014,Hannover 96,76650000
+bundesliga,2014,Eintracht Frankfurt,74900000
+bundesliga,2014,SV Werder Bremen,67530000
+bundesliga,2014,Hertha BSC,66000000
+bundesliga,2014,SC Freiburg,57400000
+bundesliga,2014,1.FC Köln,50750000
+bundesliga,2014,FC Augsburg,50080000
+bundesliga,2014,SC Paderborn 07,28500000
+bundesliga,2015,Bayern Munich,596050000
+bundesliga,2015,Borussia Dortmund,352950000
+bundesliga,2015,VfL Wolfsburg,270430000
+bundesliga,2015,Bayer 04 Leverkusen,241300000
+bundesliga,2015,FC Schalke 04,225200000
+bundesliga,2015,Borussia Mönchengladbach,186150000
+bundesliga,2015,TSG 1899 Hoffenheim,90200000
+bundesliga,2015,1.FSV Mainz 05,85150000
+bundesliga,2015,VfB Stuttgart,81180000
+bundesliga,2015,Hertha BSC,78930000
+bundesliga,2015,Eintracht Frankfurt,76600000
+bundesliga,2015,FC Augsburg,75830000
+bundesliga,2015,1.FC Köln,68630000
+bundesliga,2015,SV Werder Bremen,64680000
+bundesliga,2015,Hamburger SV,63200000
+bundesliga,2015,Hannover 96,60830000
+bundesliga,2015,FC Ingolstadt 04,35650000
+bundesliga,2015,SV Darmstadt 98,25150000
+bundesliga,2016,Bayern Munich,562550000
+bundesliga,2016,Borussia Dortmund,390650000
+bundesliga,2016,Bayer 04 Leverkusen,265029999
+bundesliga,2016,FC Schalke 04,217250000
+bundesliga,2016,VfL Wolfsburg,203080000
+bundesliga,2016,RB Leipzig,176330000
+bundesliga,2016,Borussia Mönchengladbach,162180000
+bundesliga,2016,TSG 1899 Hoffenheim,138630000
+bundesliga,2016,1.FC Köln,116150000
+bundesliga,2016,1.FSV Mainz 05,96730000
+bundesliga,2016,Hertha BSC,96530000
+bundesliga,2016,SV Werder Bremen,89450000
+bundesliga,2016,SC Freiburg,86730000
+bundesliga,2016,Hamburger SV,80480000
+bundesliga,2016,Eintracht Frankfurt,72300000
+bundesliga,2016,FC Augsburg,65849999
+bundesliga,2016,FC Ingolstadt 04,38630000
+bundesliga,2016,SV Darmstadt 98,25980000
+bundesliga,2017,Bayern Munich,811850000
+bundesliga,2017,Borussia Dortmund,574200000
+bundesliga,2017,RB Leipzig,373300000
+bundesliga,2017,Bayer 04 Leverkusen,357350000
+bundesliga,2017,FC Schalke 04,274350000
+bundesliga,2017,TSG 1899 Hoffenheim,212750000
+bundesliga,2017,Borussia Mönchengladbach,193250000
+bundesliga,2017,VfL Wolfsburg,143600000
+bundesliga,2017,VfB Stuttgart,134700000
+bundesliga,2017,Hertha BSC,131449999
+bundesliga,2017,Eintracht Frankfurt,126150000
+bundesliga,2017,SV Werder Bremen,107150000
+bundesliga,2017,SC Freiburg,100600000
+bundesliga,2017,FC Augsburg,100450000
+bundesliga,2017,1.FSV Mainz 05,98350000
+bundesliga,2017,Hannover 96,92950000
+bundesliga,2017,1.FC Köln,91730000
+bundesliga,2017,Hamburger SV,62400000
+bundesliga,2018,Bayern Munich,784880000
+bundesliga,2018,Borussia Dortmund,643250000
+bundesliga,2018,RB Leipzig,479000000
+bundesliga,2018,Bayer 04 Leverkusen,429400000
+bundesliga,2018,TSG 1899 Hoffenheim,336250000
+bundesliga,2018,Eintracht Frankfurt,313400000
+bundesliga,2018,Borussia Mönchengladbach,264300000
+bundesliga,2018,VfL Wolfsburg,229250000
+bundesliga,2018,FC Schalke 04,221300000
+bundesliga,2018,Hertha BSC,207630000
+bundesliga,2018,SV Werder Bremen,168050000
+bundesliga,2018,1.FSV Mainz 05,159730000
+bundesliga,2018,VfB Stuttgart,143750000
+bundesliga,2018,FC Augsburg,139250000
+bundesliga,2018,SC Freiburg,122100000
+bundesliga,2018,Fortuna Düsseldorf,94950000
+bundesliga,2018,Hannover 96,91430000
+bundesliga,2018,1.FC Nuremberg,54400000
+bundesliga,2019,Bayern Munich,777330000
+bundesliga,2019,Borussia Dortmund,654050000
+bundesliga,2019,RB Leipzig,570480000
+bundesliga,2019,Bayer 04 Leverkusen,398950000
+bundesliga,2019,Borussia Mönchengladbach,254700000
+bundesliga,2019,TSG 1899 Hoffenheim,226050000
+bundesliga,2019,FC Schalke 04,221580000
+bundesliga,2019,Hertha BSC,217200000
+bundesliga,2019,Eintracht Frankfurt,208980000
+bundesliga,2019,VfL Wolfsburg,207600000
+bundesliga,2019,SV Werder Bremen,135130000
+bundesliga,2019,SC Freiburg,122650000
+bundesliga,2019,1.FSV Mainz 05,121580000
+bundesliga,2019,FC Augsburg,112950000
+bundesliga,2019,1.FC Köln,98480000
+bundesliga,2019,Fortuna Düsseldorf,71780000
+bundesliga,2019,1.FC Union Berlin,41200000
+bundesliga,2019,SC Paderborn 07,28900000
+bundesliga,2020,Bayern Munich,858230000
+bundesliga,2020,Borussia Dortmund,628400000
+bundesliga,2020,RB Leipzig,574950000
+bundesliga,2020,Bayer 04 Leverkusen,373250000
+bundesliga,2020,Borussia Mönchengladbach,300750000
+bundesliga,2020,Eintracht Frankfurt,269150000
+bundesliga,2020,VfL Wolfsburg,256829999
+bundesliga,2020,Hertha BSC,228880000
+bundesliga,2020,TSG 1899 Hoffenheim,228150000
+bundesliga,2020,VfB Stuttgart,189250000
+bundesliga,2020,1.FSV Mainz 05,163300000
+bundesliga,2020,SC Freiburg,139100000
+bundesliga,2020,FC Schalke 04,123050000
+bundesliga,2020,1.FC Köln,118200000
+bundesliga,2020,SV Werder Bremen,111980000
+bundesliga,2020,FC Augsburg,93050000
+bundesliga,2020,1.FC Union Berlin,82050000
+bundesliga,2020,Arminia Bielefeld,56730000
+bundesliga,2021,Bayern Munich,790330000
+bundesliga,2021,Borussia Dortmund,558980000
+bundesliga,2021,RB Leipzig,498950000
+bundesliga,2021,Bayer 04 Leverkusen,455050000
+bundesliga,2021,VfL Wolfsburg,269300000
+bundesliga,2021,Borussia Mönchengladbach,236800000
+bundesliga,2021,Eintracht Frankfurt,228750000
+bundesliga,2021,TSG 1899 Hoffenheim,211430000
+bundesliga,2021,SC Freiburg,176350000
+bundesliga,2021,VfB Stuttgart,174230000
+bundesliga,2021,Hertha BSC,155780000
+bundesliga,2021,1.FSV Mainz 05,131030000
+bundesliga,2021,1.FC Union Berlin,115900000
+bundesliga,2021,1.FC Köln,99280000
+bundesliga,2021,FC Augsburg,95300000
+bundesliga,2021,Arminia Bielefeld,65849999
+bundesliga,2021,VfL Bochum,52250000
+bundesliga,2021,SpVgg Greuther Fürth,36950000
+bundesliga,2022,Bayern Munich,948950000
+bundesliga,2022,Borussia Dortmund,567550000
+bundesliga,2022,RB Leipzig,486400000
+bundesliga,2022,Bayer 04 Leverkusen,452500000
+bundesliga,2022,Eintracht Frankfurt,324550000
+bundesliga,2022,Borussia Mönchengladbach,241680000
+bundesliga,2022,VfL Wolfsburg,238300000
+bundesliga,2022,SC Freiburg,200950000
+bundesliga,2022,TSG 1899 Hoffenheim,178800000
+bundesliga,2022,1.FC Union Berlin,157950000
+bundesliga,2022,VfB Stuttgart,151050000
+bundesliga,2022,1.FSV Mainz 05,135900000
+bundesliga,2022,FC Augsburg,132229999
+bundesliga,2022,1.FC Köln,115650000
+bundesliga,2022,Hertha BSC,94000000
+bundesliga,2022,FC Schalke 04,87780000
+bundesliga,2022,SV Werder Bremen,87000000
+bundesliga,2022,VfL Bochum,53700000
+bundesliga,2023,Bayern Munich,965150000
+bundesliga,2023,Bayer 04 Leverkusen,658350000
+bundesliga,2023,RB Leipzig,545400000
+bundesliga,2023,Borussia Dortmund,494800000
+bundesliga,2023,VfB Stuttgart,346630000
+bundesliga,2023,Eintracht Frankfurt,326650000
+bundesliga,2023,VfL Wolfsburg,206450000
+bundesliga,2023,SC Freiburg,180350000
+bundesliga,2023,TSG 1899 Hoffenheim,176000000
+bundesliga,2023,Borussia Mönchengladbach,165230000
+bundesliga,2023,1.FC Union Berlin,160950000
+bundesliga,2023,1.FSV Mainz 05,142880000
+bundesliga,2023,FC Augsburg,140800000
+bundesliga,2023,SV Werder Bremen,134930000
+bundesliga,2023,1.FC Köln,81450000
+bundesliga,2023,1.FC Heidenheim 1846,66450000
+bundesliga,2023,VfL Bochum,64530000
+bundesliga,2023,SV Darmstadt 98,38700000
+bundesliga,2024,Bayern Munich,909000000
+bundesliga,2024,Bayer 04 Leverkusen,567050000
+bundesliga,2024,RB Leipzig,486250000
+bundesliga,2024,Borussia Dortmund,477900000
+bundesliga,2024,Eintracht Frankfurt,430050000
+bundesliga,2024,VfB Stuttgart,343730000
+bundesliga,2024,VfL Wolfsburg,247800000
+bundesliga,2024,SC Freiburg,169900000
+bundesliga,2024,1.FSV Mainz 05,167830000
+bundesliga,2024,Borussia Mönchengladbach,145350000
+bundesliga,2024,TSG 1899 Hoffenheim,137950000
+bundesliga,2024,SV Werder Bremen,130850000
+bundesliga,2024,FC Augsburg,126830000
+bundesliga,2024,1.FC Union Berlin,118050000
+bundesliga,2024,1.FC Heidenheim 1846,65080000
+bundesliga,2024,FC St. Pauli,64980000
+bundesliga,2024,VfL Bochum,53150000
+bundesliga,2024,Holstein Kiel,45630000
+bundesliga,2025,Bayern Munich,971650000
+bundesliga,2025,RB Leipzig,544200000
+bundesliga,2025,Borussia Dortmund,491500000
+bundesliga,2025,Bayer 04 Leverkusen,458550000
+bundesliga,2025,VfB Stuttgart,407600000
+bundesliga,2025,Eintracht Frankfurt,398850000
+bundesliga,2025,TSG 1899 Hoffenheim,278750000
+bundesliga,2025,SC Freiburg,245850000
+bundesliga,2025,VfL Wolfsburg,216100000
+bundesliga,2025,Hamburger SV,179400000
+bundesliga,2025,SV Werder Bremen,172630000
+bundesliga,2025,FC Augsburg,168450000
+bundesliga,2025,1.FSV Mainz 05,158450000
+bundesliga,2025,1.FC Köln,154550000
+bundesliga,2025,Borussia Mönchengladbach,153600000
+bundesliga,2025,1.FC Union Berlin,129850000
+bundesliga,2025,1.FC Heidenheim 1846,64950000
+bundesliga,2025,FC St. Pauli,64250000
+d2,2005,VfL Bochum,21530000
+d2,2005,SC Freiburg,19650000
+d2,2005,Alemannia Aachen,19000000
+d2,2005,TSV 1860 Munich,17500000
+d2,2005,Karlsruher SC,16850000
+d2,2005,FC Hansa Rostock,15900000
+d2,2005,SpVgg Greuther Fürth,15500000
+d2,2005,FC Energie Cottbus,12900000
+d2,2005,SV Wacker Burghausen,11930000
+d2,2005,SC Paderborn 07,10580000
+d2,2005,FC Erzgebirge Aue,10480000
+d2,2005,SG Dynamo Dresden,9980000
+d2,2005,SpVgg Unterhaching,8530000
+d2,2005,1.FC Saarbrücken,8530000
+d2,2005,Eintracht Braunschweig,8480000
+d2,2005,LR Ahlen,8199999
+d2,2005,Kickers Offenbach,8029999
+d2,2005,Sportfreunde Siegen,6230000
+d2,2006,1.FC Kaiserslautern,26780000
+d2,2006,1.FC Köln,26050000
+d2,2006,Karlsruher SC,24300000
+d2,2006,MSV Duisburg,22350000
+d2,2006,FC Hansa Rostock,20700000
+d2,2006,SC Freiburg,19100000
+d2,2006,SpVgg Greuther Fürth,16399999
+d2,2006,TSV 1860 Munich,12650000
+d2,2006,FC Erzgebirge Aue,12150000
+d2,2006,FC Augsburg,11850000
+d2,2006,SC Paderborn 07,11550000
+d2,2006,TuS Koblenz,11450000
+d2,2006,FC Carl Zeiss Jena,11230000
+d2,2006,Kickers Offenbach,11050000
+d2,2006,Rot-Weiss Essen,10950000
+d2,2006,SpVgg Unterhaching,10900000
+d2,2006,SV Wacker Burghausen,10700000
+d2,2006,Eintracht Braunschweig,10550000
+d2,2007,Borussia Mönchengladbach,30800000
+d2,2007,TSG 1899 Hoffenheim,28880000
+d2,2007,1.FSV Mainz 05,27100000
+d2,2007,1.FC Köln,26800000
+d2,2007,SC Freiburg,23500000
+d2,2007,1.FC Kaiserslautern,19550000
+d2,2007,Alemannia Aachen,19000000
+d2,2007,SpVgg Greuther Fürth,16530000
+d2,2007,TuS Koblenz,15950000
+d2,2007,FC Carl Zeiss Jena,15380000
+d2,2007,TSV 1860 Munich,14050000
+d2,2007,FC Augsburg,13450000
+d2,2007,SC Paderborn 07,13300000
+d2,2007,FC Erzgebirge Aue,12650000
+d2,2007,SV Wehen Wiesbaden,12000000
+d2,2007,VfL Osnabrück,11150000
+d2,2007,FC St. Pauli,11050000
+d2,2007,Kickers Offenbach,10650000
+d2,2008,1.FC Nuremberg,39330000
+d2,2008,1.FSV Mainz 05,30250000
+d2,2008,SC Freiburg,27550000
+d2,2008,MSV Duisburg,24180000
+d2,2008,TSV 1860 Munich,23600000
+d2,2008,1.FC Kaiserslautern,21400000
+d2,2008,FC Hansa Rostock,20450000
+d2,2008,Alemannia Aachen,20300000
+d2,2008,SpVgg Greuther Fürth,20000000
+d2,2008,FC St. Pauli,15650000
+d2,2008,TuS Koblenz,15280000
+d2,2008,FC Augsburg,14950000
+d2,2008,SV Wehen Wiesbaden,11980000
+d2,2008,Rot Weiss Ahlen,11600000
+d2,2008,VfL Osnabrück,11530000
+d2,2008,FSV Frankfurt,11000000
+d2,2008,Rot-Weiß Oberhausen,9580000
+d2,2008,FC Ingolstadt 04,8630000
+d2,2009,1.FC Kaiserslautern,31200000
+d2,2009,MSV Duisburg,26350000
+d2,2009,TSV 1860 Munich,25380000
+d2,2009,FC St. Pauli,23880000
+d2,2009,FC Augsburg,22850000
+d2,2009,Arminia Bielefeld,22730000
+d2,2009,FC Energie Cottbus,20480000
+d2,2009,Karlsruher SC,20400000
+d2,2009,SpVgg Greuther Fürth,19450000
+d2,2009,Alemannia Aachen,18850000
+d2,2009,FC Hansa Rostock,17480000
+d2,2009,Fortuna Düsseldorf,17230000
+d2,2009,SC Paderborn 07,12730000
+d2,2009,TuS Koblenz,11980000
+d2,2009,FSV Frankfurt,11330000
+d2,2009,Rot-Weiß Oberhausen,10530000
+d2,2009,Rot Weiss Ahlen,10300000
+d2,2009,1.FC Union Berlin,9880000
+d2,2010,Hertha BSC,38450000
+d2,2010,FC Augsburg,30400000
+d2,2010,VfL Bochum,27250000
+d2,2010,TSV 1860 Munich,26850000
+d2,2010,SpVgg Greuther Fürth,23700000
+d2,2010,FC Energie Cottbus,20300000
+d2,2010,Alemannia Aachen,19930000
+d2,2010,MSV Duisburg,19480000
+d2,2010,Fortuna Düsseldorf,17050000
+d2,2010,Karlsruher SC,16930000
+d2,2010,Arminia Bielefeld,13730000
+d2,2010,FC Erzgebirge Aue,13300000
+d2,2010,FC Ingolstadt 04,12500000
+d2,2010,1.FC Union Berlin,12150000
+d2,2010,FSV Frankfurt,11650000
+d2,2010,SC Paderborn 07,11650000
+d2,2010,VfL Osnabrück,10000000
+d2,2010,Rot-Weiß Oberhausen,9850000
+d2,2011,Eintracht Frankfurt,43450000
+d2,2011,SpVgg Greuther Fürth,26150000
+d2,2011,Fortuna Düsseldorf,23600000
+d2,2011,FC St. Pauli,21500000
+d2,2011,TSV 1860 Munich,20430000
+d2,2011,FC Energie Cottbus,19450000
+d2,2011,VfL Bochum,19300000
+d2,2011,MSV Duisburg,15450000
+d2,2011,SG Dynamo Dresden,15280000
+d2,2011,SC Paderborn 07,15250000
+d2,2011,Karlsruher SC,14250000
+d2,2011,Eintracht Braunschweig,13580000
+d2,2011,FC Ingolstadt 04,13450000
+d2,2011,Alemannia Aachen,13400000
+d2,2011,FSV Frankfurt,13230000
+d2,2011,1.FC Union Berlin,13130000
+d2,2011,FC Erzgebirge Aue,13000000
+d2,2011,FC Hansa Rostock,9850000
+d2,2012,Hertha BSC,37650000
+d2,2012,1.FC Kaiserslautern,35200000
+d2,2012,1.FC Köln,24350000
+d2,2012,Eintracht Braunschweig,19650000
+d2,2012,VfL Bochum,18480000
+d2,2012,TSV 1860 Munich,17330000
+d2,2012,MSV Duisburg,16900000
+d2,2012,FC St. Pauli,16500000
+d2,2012,1.FC Union Berlin,15230000
+d2,2012,FC Energie Cottbus,15100000
+d2,2012,FC Ingolstadt 04,14430000
+d2,2012,FSV Frankfurt,14430000
+d2,2012,SG Dynamo Dresden,14250000
+d2,2012,FC Erzgebirge Aue,13500000
+d2,2012,SC Paderborn 07,13100000
+d2,2012,VfR Aalen,11700000
+d2,2012,SV Sandhausen,9700000
+d2,2012,SSV Jahn Regensburg,9680000
+d2,2013,1.FC Köln,30250000
+d2,2013,1.FC Kaiserslautern,25500000
+d2,2013,Fortuna Düsseldorf,24330000
+d2,2013,SpVgg Greuther Fürth,21550000
+d2,2013,SC Paderborn 07,18350000
+d2,2013,TSV 1860 Munich,16850000
+d2,2013,FC St. Pauli,15900000
+d2,2013,FC Ingolstadt 04,13850000
+d2,2013,1.FC Union Berlin,13830000
+d2,2013,Karlsruher SC,13400000
+d2,2013,FSV Frankfurt,13000000
+d2,2013,VfL Bochum,12980000
+d2,2013,FC Erzgebirge Aue,12980000
+d2,2013,Arminia Bielefeld,11180000
+d2,2013,SV Sandhausen,11030000
+d2,2013,VfR Aalen,10550000
+d2,2013,FC Energie Cottbus,10330000
+d2,2013,SG Dynamo Dresden,9880000
+d2,2014,RB Leipzig,32650000
+d2,2014,SpVgg Greuther Fürth,26880000
+d2,2014,1.FC Kaiserslautern,25050000
+d2,2014,1.FC Nuremberg,24650000
+d2,2014,Fortuna Düsseldorf,21580000
+d2,2014,Eintracht Braunschweig,20030000
+d2,2014,TSV 1860 Munich,19700000
+d2,2014,FC Ingolstadt 04,19230000
+d2,2014,FC St. Pauli,18830000
+d2,2014,Karlsruher SC,17250000
+d2,2014,1.FC Union Berlin,15400000
+d2,2014,VfL Bochum,14900000
+d2,2014,FC Erzgebirge Aue,13150000
+d2,2014,SV Darmstadt 98,12850000
+d2,2014,VfR Aalen,12700000
+d2,2014,FSV Frankfurt,12500000
+d2,2014,SV Sandhausen,12400000
+d2,2014,1.FC Heidenheim 1846,11300000
+d2,2015,RB Leipzig,41050000
+d2,2015,SC Freiburg,32799999
+d2,2015,1.FC Nuremberg,27800000
+d2,2015,FC St. Pauli,21450000
+d2,2015,Karlsruher SC,20530000
+d2,2015,Eintracht Braunschweig,19180000
+d2,2015,1.FC Kaiserslautern,19050000
+d2,2015,1.FC Union Berlin,18700000
+d2,2015,Fortuna Düsseldorf,18300000
+d2,2015,SC Paderborn 07,17950000
+d2,2015,TSV 1860 Munich,17130000
+d2,2015,SpVgg Greuther Fürth,16000000
+d2,2015,VfL Bochum,15800000
+d2,2015,FSV Frankfurt,14450000
+d2,2015,1.FC Heidenheim 1846,13650000
+d2,2015,Arminia Bielefeld,13180000
+d2,2015,SV Sandhausen,12900000
+d2,2015,MSV Duisburg,11480000
+d2,2016,VfB Stuttgart,50900000
+d2,2016,Hannover 96,39180000
+d2,2016,1.FC Nuremberg,26480000
+d2,2016,1.FC Union Berlin,21700000
+d2,2016,1.FC Kaiserslautern,21000000
+d2,2016,Eintracht Braunschweig,19950000
+d2,2016,FC St. Pauli,18050000
+d2,2016,SpVgg Greuther Fürth,17650000
+d2,2016,VfL Bochum,16149999
+d2,2016,TSV 1860 Munich,16100000
+d2,2016,SG Dynamo Dresden,15880000
+d2,2016,Fortuna Düsseldorf,15230000
+d2,2016,1.FC Heidenheim 1846,14930000
+d2,2016,Arminia Bielefeld,14530000
+d2,2016,Karlsruher SC,13430000
+d2,2016,SV Sandhausen,12030000
+d2,2016,FC Erzgebirge Aue,11680000
+d2,2016,Würzburger Kickers,10180000
+d2,2017,Fortuna Düsseldorf,37280000
+d2,2017,FC Ingolstadt 04,34330000
+d2,2017,1.FC Nuremberg,33200000
+d2,2017,1.FC Union Berlin,23150000
+d2,2017,1.FC Kaiserslautern,21630000
+d2,2017,VfL Bochum,20300000
+d2,2017,SG Dynamo Dresden,19250000
+d2,2017,Eintracht Braunschweig,18380000
+d2,2017,Holstein Kiel,18150000
+d2,2017,Arminia Bielefeld,18000000
+d2,2017,FC St. Pauli,17880000
+d2,2017,SV Darmstadt 98,17850000
+d2,2017,SpVgg Greuther Fürth,16649999
+d2,2017,SV Sandhausen,16000000
+d2,2017,1.FC Heidenheim 1846,14480000
+d2,2017,FC Erzgebirge Aue,13280000
+d2,2017,MSV Duisburg,13100000
+d2,2017,SSV Jahn Regensburg,12400000
+d2,2018,Hamburger SV,86850000
+d2,2018,1.FC Köln,83500000
+d2,2018,1.FC Union Berlin,30480000
+d2,2018,SC Paderborn 07,25750000
+d2,2018,Holstein Kiel,24930000
+d2,2018,FC St. Pauli,21650000
+d2,2018,SG Dynamo Dresden,21000000
+d2,2018,1.FC Heidenheim 1846,20300000
+d2,2018,VfL Bochum,19980000
+d2,2018,FC Ingolstadt 04,19950000
+d2,2018,Arminia Bielefeld,19200000
+d2,2018,SV Darmstadt 98,18100000
+d2,2018,SSV Jahn Regensburg,15750000
+d2,2018,SV Sandhausen,15500000
+d2,2018,SpVgg Greuther Fürth,14830000
+d2,2018,FC Erzgebirge Aue,14780000
+d2,2018,1.FC Magdeburg,12650000
+d2,2018,MSV Duisburg,11980000
+d2,2019,VfB Stuttgart,70800000
+d2,2019,Hamburger SV,49900000
+d2,2019,Hannover 96,38930000
+d2,2019,1.FC Nuremberg,31800000
+d2,2019,FC St. Pauli,21980000
+d2,2019,Arminia Bielefeld,20350000
+d2,2019,1.FC Heidenheim 1846,19700000
+d2,2019,Holstein Kiel,18650000
+d2,2019,SG Dynamo Dresden,18530000
+d2,2019,VfL Bochum,18080000
+d2,2019,SpVgg Greuther Fürth,14030000
+d2,2019,SV Darmstadt 98,13800000
+d2,2019,FC Erzgebirge Aue,13680000
+d2,2019,SV Sandhausen,13350000
+d2,2019,VfL Osnabrück,12030000
+d2,2019,SSV Jahn Regensburg,11830000
+d2,2019,SV Wehen Wiesbaden,10450000
+d2,2019,Karlsruher SC,9880000
+d2,2020,Fortuna Düsseldorf,35930000
+d2,2020,Hamburger SV,35600000
+d2,2020,VfL Bochum,33900000
+d2,2020,SpVgg Greuther Fürth,30530000
+d2,2020,1.FC Nuremberg,27380000
+d2,2020,Hannover 96,24050000
+d2,2020,FC St. Pauli,23230000
+d2,2020,SC Paderborn 07,22680000
+d2,2020,Holstein Kiel,21350000
+d2,2020,1.FC Heidenheim 1846,20500000
+d2,2020,SV Darmstadt 98,17030000
+d2,2020,Karlsruher SC,15400000
+d2,2020,SV Sandhausen,14530000
+d2,2020,FC Erzgebirge Aue,13830000
+d2,2020,VfL Osnabrück,13150000
+d2,2020,SSV Jahn Regensburg,12980000
+d2,2020,Würzburger Kickers,11030000
+d2,2020,Eintracht Braunschweig,10180000
+d2,2021,SV Werder Bremen,62100000
+d2,2021,FC Schalke 04,43830000
+d2,2021,Hamburger SV,43730000
+d2,2021,1.FC Nuremberg,28830000
+d2,2021,Hannover 96,28600000
+d2,2021,Fortuna Düsseldorf,27280000
+d2,2021,FC St. Pauli,25680000
+d2,2021,SV Darmstadt 98,20330000
+d2,2021,SC Paderborn 07,19900000
+d2,2021,1.FC Heidenheim 1846,18350000
+d2,2021,Karlsruher SC,17600000
+d2,2021,SV Sandhausen,16980000
+d2,2021,Holstein Kiel,16850000
+d2,2021,SSV Jahn Regensburg,16780000
+d2,2021,SG Dynamo Dresden,14200000
+d2,2021,FC Ingolstadt 04,13830000
+d2,2021,FC Hansa Rostock,13500000
+d2,2021,FC Erzgebirge Aue,11000000
+d2,2022,Hamburger SV,38780000
+d2,2022,Fortuna Düsseldorf,29300000
+d2,2022,1.FC Nuremberg,28530000
+d2,2022,SV Darmstadt 98,27880000
+d2,2022,SC Paderborn 07,25880000
+d2,2022,1.FC Heidenheim 1846,25200000
+d2,2022,FC St. Pauli,25050000
+d2,2022,Arminia Bielefeld,25000000
+d2,2022,SpVgg Greuther Fürth,23600000
+d2,2022,Karlsruher SC,22080000
+d2,2022,Hannover 96,21780000
+d2,2022,Eintracht Braunschweig,19230000
+d2,2022,Holstein Kiel,17880000
+d2,2022,1.FC Magdeburg,17500000
+d2,2022,SV Sandhausen,15380000
+d2,2022,1.FC Kaiserslautern,14580000
+d2,2022,FC Hansa Rostock,14300000
+d2,2022,SSV Jahn Regensburg,14280000
+d2,2023,Hertha BSC,62230000
+d2,2023,Fortuna Düsseldorf,44900000
+d2,2023,Hamburger SV,42150000
+d2,2023,FC St. Pauli,42080000
+d2,2023,1.FC Nuremberg,40300000
+d2,2023,Holstein Kiel,38480000
+d2,2023,FC Schalke 04,37700000
+d2,2023,Hannover 96,35330000
+d2,2023,SpVgg Greuther Fürth,32630000
+d2,2023,SC Paderborn 07,25500000
+d2,2023,SV 07 Elversberg,25280000
+d2,2023,1.FC Kaiserslautern,24430000
+d2,2023,Karlsruher SC,23080000
+d2,2023,1.FC Magdeburg,18050000
+d2,2023,Eintracht Braunschweig,17630000
+d2,2023,SV Wehen Wiesbaden,16780000
+d2,2023,VfL Osnabrück,14100000
+d2,2023,FC Hansa Rostock,14030000
+d2,2024,1.FC Köln,62080000
+d2,2024,Hamburger SV,61200000
+d2,2024,1.FC Nuremberg,58130000
+d2,2024,Hertha BSC,51280000
+d2,2024,SV 07 Elversberg,39150000
+d2,2024,Fortuna Düsseldorf,36780000
+d2,2024,SC Paderborn 07,36380000
+d2,2024,FC Schalke 04,34600000
+d2,2024,1.FC Kaiserslautern,32950000
+d2,2024,Hannover 96,31450000
+d2,2024,SV Darmstadt 98,28550000
+d2,2024,1.FC Magdeburg,28400000
+d2,2024,Karlsruher SC,27280000
+d2,2024,SpVgg Greuther Fürth,25750000
+d2,2024,Eintracht Braunschweig,19400000
+d2,2024,Preußen Münster,13380000
+d2,2024,SSV Ulm 1846,13100000
+d2,2024,SSV Jahn Regensburg,11400000
+d2,2025,Hertha BSC,61450000
+d2,2025,FC Schalke 04,57250000
+d2,2025,Hannover 96,49330000
+d2,2025,1.FC Nuremberg,48450000
+d2,2025,VfL Bochum,47950000
+d2,2025,SC Paderborn 07,47700000
+d2,2025,Karlsruher SC,38230000
+d2,2025,SV 07 Elversberg,35780000
+d2,2025,Holstein Kiel,34150000
+d2,2025,1.FC Kaiserslautern,32930000
+d2,2025,SV Darmstadt 98,32799999
+d2,2025,SpVgg Greuther Fürth,29980000
+d2,2025,Fortuna Düsseldorf,29830000
+d2,2025,1.FC Magdeburg,28400000
+d2,2025,SG Dynamo Dresden,24930000
+d2,2025,Eintracht Braunschweig,21900000
+d2,2025,Arminia Bielefeld,19350000
+d2,2025,Preußen Münster,18050000
+laliga,2005,FC Barcelona,327500000
+laliga,2005,Real Madrid,271500000
+laliga,2005,Valencia CF,207850000
+laliga,2005,Atlético de Madrid,134150000
+laliga,2005,Deportivo de La Coruña,123650000
+laliga,2005,Villarreal CF,81800000
+laliga,2005,Sevilla FC,79350000
+laliga,2005,Real Betis Balompié,79250000
+laliga,2005,Real Zaragoza,66349999
+laliga,2005,RCD Espanyol Barcelona,57880000
+laliga,2005,Real Sociedad,53830000
+laliga,2005,Celta de Vigo,48300000
+laliga,2005,Athletic Bilbao,47230000
+laliga,2005,RCD Mallorca,41550000
+laliga,2005,CA Osasuna,40450000
+laliga,2005,Getafe CF,36380000
+laliga,2005,Deportivo Alavés,34830000
+laliga,2005,Racing Santander,29480000
+laliga,2005,Málaga CF,28030000
+laliga,2005,Cádiz CF,20900000
+laliga,2006,FC Barcelona,351500000
+laliga,2006,Real Madrid,349650000
+laliga,2006,Valencia CF,226950000
+laliga,2006,Atlético de Madrid,173650000
+laliga,2006,Sevilla FC,137200000
+laliga,2006,Real Zaragoza,121000000
+laliga,2006,Villarreal CF,108900000
+laliga,2006,Deportivo de La Coruña,97150000
+laliga,2006,Real Betis Balompié,75180000
+laliga,2006,CA Osasuna,71350000
+laliga,2006,RCD Espanyol Barcelona,61650000
+laliga,2006,RCD Mallorca,55300000
+laliga,2006,Athletic Bilbao,54550000
+laliga,2006,Celta de Vigo,54080000
+laliga,2006,Levante UD,53750000
+laliga,2006,Racing Santander,47450000
+laliga,2006,Real Sociedad,44800000
+laliga,2006,Recreativo Huelva,40500000
+laliga,2006,Getafe CF,40050000
+laliga,2006,Gimnàstic de Tarragona,26750000
+laliga,2007,FC Barcelona,412900000
+laliga,2007,Real Madrid,349800000
+laliga,2007,Valencia CF,227900000
+laliga,2007,Sevilla FC,199400000
+laliga,2007,Atlético de Madrid,193600000
+laliga,2007,Villarreal CF,148800000
+laliga,2007,Real Zaragoza,119900000
+laliga,2007,RCD Espanyol Barcelona,119500000
+laliga,2007,CA Osasuna,81400000
+laliga,2007,Real Betis Balompié,81100000
+laliga,2007,RCD Mallorca,76500000
+laliga,2007,Athletic Bilbao,74300000
+laliga,2007,Racing Santander,72100000
+laliga,2007,Deportivo de La Coruña,69300000
+laliga,2007,Getafe CF,66700000
+laliga,2007,Recreativo Huelva,55600000
+laliga,2007,UD Almería,54500000
+laliga,2007,Real Murcia CF,49100000
+laliga,2007,Real Valladolid CF,42400000
+laliga,2007,Levante UD,39500000
+laliga,2008,FC Barcelona,424600000
+laliga,2008,Real Madrid,393500000
+laliga,2008,Valencia CF,211500000
+laliga,2008,Atlético de Madrid,204500000
+laliga,2008,Sevilla FC,198400000
+laliga,2008,Villarreal CF,165000000
+laliga,2008,Real Betis Balompié,116600000
+laliga,2008,RCD Espanyol Barcelona,92800000
+laliga,2008,UD Almería,79000000
+laliga,2008,Racing Santander,78700000
+laliga,2008,Deportivo de La Coruña,76800000
+laliga,2008,Athletic Bilbao,76400000
+laliga,2008,Getafe CF,73600000
+laliga,2008,RCD Mallorca,68700000
+laliga,2008,CA Osasuna,66400000
+laliga,2008,Málaga CF,54000000
+laliga,2008,Recreativo Huelva,49800000
+laliga,2008,Real Valladolid CF,48800000
+laliga,2008,CD Numancia,36300000
+laliga,2008,Sporting Gijón,34900000
+laliga,2009,FC Barcelona,515400000
+laliga,2009,Real Madrid,451200000
+laliga,2009,Valencia CF,240000000
+laliga,2009,Sevilla FC,218300000
+laliga,2009,Atlético de Madrid,210800000
+laliga,2009,Villarreal CF,163700000
+laliga,2009,Athletic Bilbao,100800000
+laliga,2009,Real Zaragoza,87250000
+laliga,2009,Getafe CF,77300000
+laliga,2009,Deportivo de La Coruña,75900000
+laliga,2009,RCD Espanyol Barcelona,71000000
+laliga,2009,Racing Santander,65500000
+laliga,2009,RCD Mallorca,65099999
+laliga,2009,UD Almería,63700000
+laliga,2009,CA Osasuna,60000000
+laliga,2009,Málaga CF,58600000
+laliga,2009,Sporting Gijón,55200000
+laliga,2009,Real Valladolid CF,50300000
+laliga,2009,CD Tenerife,34000000
+laliga,2009,Xerez CD,32500000
+laliga,2010,FC Barcelona,602200000
+laliga,2010,Real Madrid,519000000
+laliga,2010,Atlético de Madrid,187000000
+laliga,2010,Valencia CF,176600000
+laliga,2010,Villarreal CF,170600000
+laliga,2010,Sevilla FC,169600000
+laliga,2010,Athletic Bilbao,112000000
+laliga,2010,RCD Espanyol Barcelona,78400000
+laliga,2010,UD Almería,73600000
+laliga,2010,Málaga CF,71050000
+laliga,2010,Real Sociedad,66700000
+laliga,2010,Getafe CF,66400000
+laliga,2010,Deportivo de La Coruña,63700000
+laliga,2010,Racing Santander,59300000
+laliga,2010,CA Osasuna,57900000
+laliga,2010,Real Zaragoza,57000000
+laliga,2010,RCD Mallorca,53700000
+laliga,2010,Sporting Gijón,53400000
+laliga,2010,Hércules CF,51700000
+laliga,2010,Levante UD,37400000
+laliga,2011,FC Barcelona,618200000
+laliga,2011,Real Madrid,539200000
+laliga,2011,Atlético de Madrid,210000000
+laliga,2011,Valencia CF,181000000
+laliga,2011,Athletic Bilbao,144200000
+laliga,2011,Villarreal CF,137000000
+laliga,2011,Sevilla FC,133000000
+laliga,2011,Málaga CF,121300000
+laliga,2011,RCD Espanyol Barcelona,81200000
+laliga,2011,Real Sociedad,74700000
+laliga,2011,Getafe CF,69600000
+laliga,2011,RCD Mallorca,62200000
+laliga,2011,Real Zaragoza,61000000
+laliga,2011,Granada CF,60600000
+laliga,2011,Sporting Gijón,53400000
+laliga,2011,Real Betis Balompié,52700000
+laliga,2011,Rayo Vallecano,47300000
+laliga,2011,CA Osasuna,44400000
+laliga,2011,Racing Santander,42600000
+laliga,2011,Levante UD,40250000
+laliga,2012,FC Barcelona,583300000
+laliga,2012,Real Madrid,574900000
+laliga,2012,Atlético de Madrid,265000000
+laliga,2012,Valencia CF,172900000
+laliga,2012,Sevilla FC,143900000
+laliga,2012,Málaga CF,122900000
+laliga,2012,Athletic Bilbao,118800000
+laliga,2012,Real Sociedad,112800000
+laliga,2012,Granada CF,72700000
+laliga,2012,Getafe CF,68300000
+laliga,2012,Real Betis Balompié,65700000
+laliga,2012,RCD Espanyol Barcelona,61600000
+laliga,2012,Rayo Vallecano,49750000
+laliga,2012,Celta de Vigo,49100000
+laliga,2012,RCD Mallorca,47100000
+laliga,2012,CA Osasuna,46400000
+laliga,2012,Real Zaragoza,46400000
+laliga,2012,Deportivo de La Coruña,45200000
+laliga,2012,Real Valladolid CF,38800000
+laliga,2012,Levante UD,37800000
+laliga,2013,Real Madrid,636800000
+laliga,2013,FC Barcelona,591200000
+laliga,2013,Atlético de Madrid,306000000
+laliga,2013,Valencia CF,178800000
+laliga,2013,Sevilla FC,141150000
+laliga,2013,Real Sociedad,136700000
+laliga,2013,Athletic Bilbao,130199999
+laliga,2013,Villarreal CF,77300000
+laliga,2013,Málaga CF,62500000
+laliga,2013,Real Betis Balompié,58500000
+laliga,2013,Getafe CF,55900000
+laliga,2013,Granada CF,54800000
+laliga,2013,RCD Espanyol Barcelona,51300000
+laliga,2013,Celta de Vigo,49900000
+laliga,2013,Rayo Vallecano,46100000
+laliga,2013,Elche CF,44600000
+laliga,2013,Levante UD,42400000
+laliga,2013,CA Osasuna,42300000
+laliga,2013,Real Valladolid CF,41200000
+laliga,2013,UD Almería,36150000
+laliga,2014,Real Madrid,787800000
+laliga,2014,FC Barcelona,603800000
+laliga,2014,Atlético de Madrid,356000000
+laliga,2014,Valencia CF,230000000
+laliga,2014,Sevilla FC,166750000
+laliga,2014,Villarreal CF,132699999
+laliga,2014,Athletic Bilbao,112100000
+laliga,2014,Real Sociedad,96800000
+laliga,2014,Málaga CF,82800000
+laliga,2014,RCD Espanyol Barcelona,75700000
+laliga,2014,Granada CF,67550000
+laliga,2014,Celta de Vigo,60400000
+laliga,2014,Deportivo de La Coruña,53400000
+laliga,2014,Rayo Vallecano,51700000
+laliga,2014,Córdoba CF,50900000
+laliga,2014,Getafe CF,48700000
+laliga,2014,Levante UD,43450000
+laliga,2014,Elche CF,38600000
+laliga,2014,UD Almería,38300000
+laliga,2014,SD Eibar,29400000
+laliga,2015,FC Barcelona,726000000
+laliga,2015,Real Madrid,714300000
+laliga,2015,Atlético de Madrid,418500000
+laliga,2015,Valencia CF,254000000
+laliga,2015,Sevilla FC,230300000
+laliga,2015,Athletic Bilbao,148000000
+laliga,2015,Villarreal CF,140600000
+laliga,2015,Real Sociedad,119400000
+laliga,2015,Celta de Vigo,91100000
+laliga,2015,Málaga CF,77950000
+laliga,2015,Granada CF,71500000
+laliga,2015,RCD Espanyol Barcelona,62200000
+laliga,2015,Deportivo de La Coruña,61750000
+laliga,2015,SD Eibar,56600000
+laliga,2015,Real Betis Balompié,56400000
+laliga,2015,Sporting Gijón,53200000
+laliga,2015,Levante UD,53100000
+laliga,2015,Rayo Vallecano,49600000
+laliga,2015,Getafe CF,49100000
+laliga,2015,UD Las Palmas,32200000
+laliga,2016,Real Madrid,802900000
+laliga,2016,FC Barcelona,765300000
+laliga,2016,Atlético de Madrid,515799999
+laliga,2016,Sevilla FC,270100000
+laliga,2016,Valencia CF,257500000
+laliga,2016,Villarreal CF,190700000
+laliga,2016,Athletic Bilbao,172600000
+laliga,2016,Real Sociedad,156450000
+laliga,2016,Celta de Vigo,122400000
+laliga,2016,Deportivo de La Coruña,94000000
+laliga,2016,Deportivo Alavés,85400000
+laliga,2016,Málaga CF,84300000
+laliga,2016,UD Las Palmas,84300000
+laliga,2016,Real Betis Balompié,84200000
+laliga,2016,RCD Espanyol Barcelona,80800000
+laliga,2016,SD Eibar,67950000
+laliga,2016,Granada CF,66450000
+laliga,2016,CD Leganés,53150000
+laliga,2016,Sporting Gijón,46750000
+laliga,2016,CA Osasuna,42900000
+laliga,2017,FC Barcelona,1090000000
+laliga,2017,Real Madrid,955350000
+laliga,2017,Atlético de Madrid,711150000
+laliga,2017,Valencia CF,398050000
+laliga,2017,Sevilla FC,253200000
+laliga,2017,Athletic Bilbao,249400000
+laliga,2017,Real Sociedad,232950000
+laliga,2017,Villarreal CF,220000000
+laliga,2017,Celta de Vigo,173050000
+laliga,2017,Real Betis Balompié,132250000
+laliga,2017,RCD Espanyol Barcelona,97800000
+laliga,2017,UD Las Palmas,91250000
+laliga,2017,Girona FC,81750000
+laliga,2017,Deportivo Alavés,74650000
+laliga,2017,Deportivo de La Coruña,66450000
+laliga,2017,Getafe CF,65599999
+laliga,2017,Levante UD,61250000
+laliga,2017,SD Eibar,60050000
+laliga,2017,CD Leganés,58550000
+laliga,2017,Málaga CF,55200000
+laliga,2018,FC Barcelona,1160000000
+laliga,2018,Atlético de Madrid,969700000
+laliga,2018,Real Madrid,896100000
+laliga,2018,Valencia CF,499650000
+laliga,2018,Sevilla FC,306300000
+laliga,2018,Real Sociedad,300950000
+laliga,2018,Real Betis Balompié,290750000
+laliga,2018,Athletic Bilbao,234250000
+laliga,2018,Celta de Vigo,234100000
+laliga,2018,Villarreal CF,230650000
+laliga,2018,RCD Espanyol Barcelona,174700000
+laliga,2018,Getafe CF,132199999
+laliga,2018,CD Leganés,112450000
+laliga,2018,Deportivo Alavés,110800000
+laliga,2018,Levante UD,107850000
+laliga,2018,Girona FC,97250000
+laliga,2018,SD Eibar,93900000
+laliga,2018,Rayo Vallecano,86700000
+laliga,2018,Real Valladolid CF,83000000
+laliga,2018,SD Huesca,61400000
+laliga,2019,FC Barcelona,930280000
+laliga,2019,Real Madrid,913750000
+laliga,2019,Atlético de Madrid,720150000
+laliga,2019,Valencia CF,427800000
+laliga,2019,Real Sociedad,330900000
+laliga,2019,Sevilla FC,294750000
+laliga,2019,Real Betis Balompié,244350000
+laliga,2019,Athletic Bilbao,211750000
+laliga,2019,Villarreal CF,208680000
+laliga,2019,Getafe CF,175450000
+laliga,2019,Celta de Vigo,167000000
+laliga,2019,RCD Espanyol Barcelona,156050000
+laliga,2019,CD Leganés,109700000
+laliga,2019,Deportivo Alavés,106750000
+laliga,2019,Levante UD,90500000
+laliga,2019,Real Valladolid CF,87780000
+laliga,2019,RCD Mallorca,64680000
+laliga,2019,CA Osasuna,62780000
+laliga,2019,Granada CF,56580000
+laliga,2019,SD Eibar,53750000
+laliga,2020,FC Barcelona,813500000
+laliga,2020,Real Madrid,787300000
+laliga,2020,Atlético de Madrid,773100000
+laliga,2020,Sevilla FC,418250000
+laliga,2020,Real Sociedad,406600000
+laliga,2020,Villarreal CF,292600000
+laliga,2020,Valencia CF,278850000
+laliga,2020,Real Betis Balompié,207700000
+laliga,2020,Athletic Bilbao,204150000
+laliga,2020,Getafe CF,170100000
+laliga,2020,Celta de Vigo,155850000
+laliga,2020,Granada CF,122650000
+laliga,2020,Levante UD,113000000
+laliga,2020,CA Osasuna,96750000
+laliga,2020,SD Eibar,83400000
+laliga,2020,Deportivo Alavés,79800000
+laliga,2020,SD Huesca,64099999
+laliga,2020,Real Valladolid CF,63050000
+laliga,2020,Cádiz CF,47650000
+laliga,2020,Elche CF,45650000
+laliga,2021,Real Madrid,770750000
+laliga,2021,FC Barcelona,735600000
+laliga,2021,Atlético de Madrid,661800000
+laliga,2021,Villarreal CF,408100000
+laliga,2021,Sevilla FC,385000000
+laliga,2021,Real Sociedad,376950000
+laliga,2021,Valencia CF,310600000
+laliga,2021,Real Betis Balompié,259000000
+laliga,2021,Athletic Bilbao,226050000
+laliga,2021,Getafe CF,208680000
+laliga,2021,RCD Espanyol Barcelona,131600000
+laliga,2021,Celta de Vigo,120000000
+laliga,2021,CA Osasuna,108450000
+laliga,2021,Granada CF,103750000
+laliga,2021,Levante UD,77600000
+laliga,2021,RCD Mallorca,74150000
+laliga,2021,Elche CF,72980000
+laliga,2021,Cádiz CF,67800000
+laliga,2021,Rayo Vallecano,67200000
+laliga,2021,Deportivo Alavés,65349999
+laliga,2022,Real Madrid,923450000
+laliga,2022,FC Barcelona,836800000
+laliga,2022,Atlético de Madrid,534299999
+laliga,2022,Real Sociedad,441700000
+laliga,2022,Villarreal CF,363500000
+laliga,2022,Valencia CF,249780000
+laliga,2022,Real Betis Balompié,246400000
+laliga,2022,Sevilla FC,232580000
+laliga,2022,Athletic Bilbao,222450000
+laliga,2022,CA Osasuna,150050000
+laliga,2022,Girona FC,139900000
+laliga,2022,Celta de Vigo,138800000
+laliga,2022,Getafe CF,118900000
+laliga,2022,RCD Espanyol Barcelona,116500000
+laliga,2022,UD Almería,114200000
+laliga,2022,RCD Mallorca,107000000
+laliga,2022,Rayo Vallecano,103400000
+laliga,2022,Real Valladolid CF,90750000
+laliga,2022,Elche CF,67500000
+laliga,2022,Cádiz CF,65599999
+laliga,2023,Real Madrid,1140000000
+laliga,2023,FC Barcelona,916200000
+laliga,2023,Real Sociedad,498500000
+laliga,2023,Atlético de Madrid,458450000
+laliga,2023,Girona FC,297900000
+laliga,2023,Athletic Bilbao,295650000
+laliga,2023,Villarreal CF,252500000
+laliga,2023,Valencia CF,244730000
+laliga,2023,Sevilla FC,228750000
+laliga,2023,Real Betis Balompié,224880000
+laliga,2023,Celta de Vigo,149300000
+laliga,2023,Granada CF,141100000
+laliga,2023,Getafe CF,133000000
+laliga,2023,Deportivo Alavés,123700000
+laliga,2023,UD Las Palmas,112400000
+laliga,2023,CA Osasuna,105350000
+laliga,2023,UD Almería,99400000
+laliga,2023,RCD Mallorca,87700000
+laliga,2023,Rayo Vallecano,63950000
+laliga,2023,Cádiz CF,60700000
+laliga,2024,Real Madrid,1340000000
+laliga,2024,FC Barcelona,1070000000
+laliga,2024,Atlético de Madrid,536049999
