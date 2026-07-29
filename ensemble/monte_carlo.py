@@ -160,6 +160,52 @@ def simulate_match(lambda_home: float, lambda_away: float,
     }
 
 
+# ── In-play (live) pricing ──────────────────────────────────────────────────────
+
+def price_live(lambda_home: float, lambda_away: float,
+               minute: float, goals_home: int, goals_away: int,
+               ou_lines: Sequence[float] = DEFAULT_OU_LINES,
+               max_goals: int = DEFAULT_MAX_GOALS,
+               full_minutes: float = 90.0) -> Dict:
+    """Live market book from the pre-match rates + current state.
+
+    The pre-match λ are full-match expected goals. In-play, only the REMAINING
+    time can still produce goals: with (roughly uniform) arrival, remaining rate
+    = λ · (remaining minutes / full). We grid the remaining-goals distribution,
+    add the goals already on the board, and read every market off the FINAL
+    score distribution.
+
+    This is where a model edge is real — live markets are far less efficient than
+    the pre-match close. Independent Poisson on the remainder (the Dixon-Coles
+    low-score draw fix is a pre-match artefact and doesn't apply mid-game).
+    """
+    frac = max(0.0, (full_minutes - minute) / full_minutes)
+    M = score_matrix(lambda_home * frac, lambda_away * frac, rho=0.0, max_goals=max_goals)
+    n = M.shape[0]
+    rh = np.arange(n)[:, None]          # remaining home goals
+    ra = np.arange(n)[None, :]          # remaining away goals
+    fh = goals_home + rh                # final home
+    fa = goals_away + ra                # final away
+    home = float(M[fh > fa].sum())
+    draw = float(M[fh == fa].sum())
+    away = float(M[fh < fa].sum())
+    total = fh + fa
+    ou = {}
+    for line in ou_lines:
+        over = float(M[total > line].sum())
+        ou[f"over_{line}"] = over
+        ou[f"under_{line}"] = 1.0 - over
+    p_home_scores = 1.0 if goals_home >= 1 else float(1.0 - M[0, :].sum())
+    p_away_scores = 1.0 if goals_away >= 1 else float(1.0 - M[:, 0].sum())
+    return {
+        "minute": minute, "score": [int(goals_home), int(goals_away)],
+        "1x2": {"home": home, "draw": draw, "away": away},
+        "over_under": ou,
+        "btts": {"yes": p_home_scores * p_away_scores},
+        "exp_final_goals": float((total * M).sum()),
+    }
+
+
 # ── Season simulation ──────────────────────────────────────────────────────────
 
 def simulate_season(fixtures: Sequence[Tuple[str, str, float, float]],

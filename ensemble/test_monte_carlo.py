@@ -3,7 +3,7 @@
 import numpy as np
 
 from monte_carlo import (score_matrix, price_match, simulate_match,
-                         simulate_season, DEFAULT_RHO)
+                         simulate_season, price_live, DEFAULT_RHO)
 
 
 def approx(a, b, tol=1e-9):
@@ -68,6 +68,36 @@ def test_season_probabilities_valid():
     approx(sum(t["p_last"] for t in table.values()), 1.0, 1e-9)
     # Strongest team (A) should most often finish first.
     assert max(table, key=lambda t: table[t]["p_first"]) == "A"
+
+
+def test_live_kickoff_matches_prematch():
+    # minute 0, 0-0 with rho=0 should equal the independent-Poisson pre-match book.
+    live = price_live(1.6, 1.1, minute=0, goals_home=0, goals_away=0)["1x2"]
+    pm = price_match(1.6, 1.1, rho=0.0)["1x2"]
+    for k in ("home", "draw", "away"):
+        approx(live[k], pm[k], 1e-9)
+
+
+def test_live_1x2_sums_to_one():
+    p = price_live(1.4, 1.4, minute=60, goals_home=1, goals_away=0)["1x2"]
+    approx(p["home"] + p["draw"] + p["away"], 1.0, 1e-9)
+
+
+def test_live_leading_late_is_strong_favourite():
+    # 1-0 up at 80' → home win prob should be very high.
+    p = price_live(1.5, 1.2, minute=80, goals_home=1, goals_away=0)["1x2"]
+    assert p["home"] > 0.85, p
+
+
+def test_live_goalless_late_is_mostly_draw():
+    p = price_live(1.3, 1.3, minute=89, goals_home=0, goals_away=0)["1x2"]
+    assert p["draw"] > 0.85, p
+
+
+def test_live_over_locks_in_once_reached():
+    # already 3 goals → Over 2.5 is certain.
+    ou = price_live(1.5, 1.5, minute=70, goals_home=2, goals_away=1)["over_under"]
+    approx(ou["over_2.5"], 1.0, 1e-9)
 
 
 if __name__ == "__main__":
