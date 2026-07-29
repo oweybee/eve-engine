@@ -95,8 +95,9 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ensemble/models/_csv_cache_v3.csv.gz \
-                  ensemble/models/supermodel_halftime_v2.onnx \
+          # NB: _csv_cache_v3.csv.gz is intentionally gitignored (a rebuildable
+          # artifact) — we commit the trained models, not the corpus cache.
+          git add ensemble/models/supermodel_halftime_v2.onnx \
                   ensemble/models/supermodel_prematch_v2.onnx \
                   ensemble/models/supermodel_halftime_v2_features.json \
                   ensemble/models/supermodel_prematch_v2_features.json

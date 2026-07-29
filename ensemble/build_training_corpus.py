@@ -229,10 +229,28 @@ def _parse_main(df, fallback_league):
     return rows
 
 
+def _read_csv_any(path: Path):
+    """Read a football-data CSV robustly across encodings and ragged rows.
+
+    Older football-data.co.uk files are Windows-1252 (cp1252), not UTF-8, and
+    some carry trailing junk / uneven field counts. Try UTF-8 first, then fall
+    back to cp1252 / latin-1 (which never fail at the byte level), skipping any
+    unparseable rows rather than aborting the whole file.
+    """
+    last = None
+    for enc in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            return pd.read_csv(path, encoding=enc, on_bad_lines="skip")
+        except (UnicodeDecodeError, pd.errors.ParserError) as e:
+            last = e
+            continue
+    raise last if last else RuntimeError("unreadable")
+
+
 def load_upload(path: Path):
     """Auto-detect the layout of one uploaded CSV and parse it."""
     try:
-        df = pd.read_csv(path, encoding="utf-8-sig")
+        df = _read_csv_any(path)
     except Exception as e:
         print(f"  skip {path.name}: unreadable ({e})")
         return []
@@ -253,8 +271,12 @@ def load_upload(path: Path):
 
 
 def discover_uploads(data_dir: Path):
-    """Every *.csv in data_dir (sorted for determinism)."""
-    return sorted(p for p in data_dir.glob("*.csv") if p.is_file())
+    """Every *.csv under data_dir, recursively (sorted for determinism).
+
+    Recursive so files can be organised into subfolders (e.g. data/england/)
+    without changing the pipeline.
+    """
+    return sorted(p for p in data_dir.rglob("*.csv") if p.is_file())
 
 
 # ── Orchestration ───────────────────────────────────────────────────────────────
@@ -273,21 +295,44 @@ def main():
     data_dir = Path(args.data_dir)
     rows = []
 
-    if not (args.no_big5 or args.dry_run):
-        print("Downloading big-5 from footballcsv/cache.footballdata ...")
-        with ThreadPoolExecutor(max_workers=5) as ex:
-            for r in ex.map(fetch_big5, BIG5.items()): rows += r
-
+    # Parse uploads FIRST so we know which leagues they cover. An uploaded
+    # league REPLACES the thin GitHub-mirror feed for that league — uploaded
+    # football-data files carry closing odds + shots + more seasons, so they are
+    # strictly richer. This also sidesteps cross-source team-name mismatches
+    # (mirror "Manchester United" vs football-data "Man United") that a naive
+    # (home, away) dedup would miss.
     uploads = discover_uploads(data_dir)
     print(f"Loading {len(uploads)} uploaded CSV(s) from {data_dir} ...")
     for path in uploads:
         rows += load_upload(path)
+    upload_leagues = {r["league"] for r in rows}
+
+    if not (args.no_big5 or args.dry_run):
+        pending = [(code, key) for code, key in BIG5.items() if key not in upload_leagues]
+        replaced = sorted(key for code, key in BIG5.items() if key in upload_leagues)
+        if replaced:
+            print(f"Skipping mirror fetch for {replaced} (provided by upload).")
+        if pending:
+            print(f"Downloading {[k for _, k in pending]} from footballcsv/cache.footballdata ...")
+            with ThreadPoolExecutor(max_workers=5) as ex:
+                for r in ex.map(fetch_big5, pending): rows += r
 
     if not rows:
         print("No matches parsed — nothing to write.")
         return
 
-    df = pd.DataFrame(rows, columns=COLS).sort_values("date").reset_index(drop=True)
+    # Safety-net dedup within the corpus: same (league, date, home, away) →
+    # keep the richest row (most non-null odds/shots/HT fields).
+    df = pd.DataFrame(rows, columns=COLS)
+    before = len(df)
+    rich = df[["hst", "ast", "b365h", "psh", "maxh", "hthg"]].notna().sum(axis=1)
+    df = (df.assign(_rich=rich)
+            .sort_values(["date", "_rich"], ascending=[True, False])
+            .drop_duplicates(subset=["league", "date", "home", "away"], keep="first")
+            .drop(columns="_rich")
+            .sort_values("date").reset_index(drop=True))
+    if before - len(df):
+        print(f"deduped {before - len(df):,} duplicate rows")
     print(f"\n{len(df):,} matches parsed")
     print(df.groupby("league").size().to_string())
     print("date range:", df.date.min().date(), "->", df.date.max().date())
