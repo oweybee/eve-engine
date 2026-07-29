@@ -45,7 +45,10 @@ jobs:
       - name: Install ML dependencies
         run: |
           pip install --upgrade pip
-          pip install xgboost scikit-learn numpy pandas requests onnx onnxmltools
+          pip install -r ensemble/requirements-train.txt
+          # Fail fast here if the export toolchain can't import — don't discover
+          # it only after a full training run (as happened before pinning).
+          python3 -c "from onnxmltools import convert_xgboost; from onnxmltools.convert.common.data_types import FloatTensorType; print('onnx export toolchain OK')"
 
       # Record the current feature-vector contract so we can refuse to ship a
       # model whose dimensions drifted from what lib/halftimeFeatures.js builds

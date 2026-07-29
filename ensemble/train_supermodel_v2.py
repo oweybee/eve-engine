@@ -1344,8 +1344,11 @@ def export_to_onnx(model: xgb.XGBClassifier, model_name: str,
     try:
         from onnxmltools import convert_xgboost
         from onnxmltools.convert.common.data_types import FloatTensorType
-    except ImportError:
-        sys.exit('pip install onnxmltools')
+    except ImportError as e:
+        # Surface the REAL missing dependency — a bare "pip install onnxmltools"
+        # masked a broken onnxmltools/skl2onnx/onnx resolution in CI.
+        sys.exit(f'ONNX export toolchain import failed: {e!r}. '
+                 f'Install the pinned set: pip install -r ensemble/requirements-train.txt')
 
     initial_type = [('float_input', FloatTensorType([None, n_features]))]
     onnx_model   = convert_xgboost(model, initial_types=initial_type)
