@@ -118,7 +118,7 @@ def _implied(psh, psd, psa):
     return inv / inv.sum()
 
 
-def build_features(df: pd.DataFrame, xw, squad=None, resolve=None) -> pd.DataFrame:
+def build_features(df: pd.DataFrame, xw, squad=None, resolve=None, anchor="close") -> pd.DataFrame:
     """Chronological walk-forward → one pre-match feature row per odds match."""
     squad = squad or {}
     resolve = resolve or {}
@@ -143,9 +143,16 @@ def build_features(df: pd.DataFrame, xw, squad=None, resolve=None) -> pd.DataFra
         if not pd.isna(m.ast) and not pd.isna(m.ashots):
             ax = xw.sot * m.ast + xw.off * max((m.ashots - m.ast), 0) + xw.corner * (m.ac if not pd.isna(m.ac) else 0)
 
-        # emit a feature row only when closing odds exist (bettable universe)
-        if not (pd.isna(m.psh) or pd.isna(m.psd) or pd.isna(m.psa)):
-            mp = _implied(m.psh, m.psd, m.psa)
+        # Market anchor: 'close' = Pinnacle closing (default, for the close-priced
+        # model); 'open' = market-average OPENING, so the CLV test can't cheat by
+        # feeding the model the very line it's later benchmarked against.
+        if anchor == "open":
+            ok = not (pd.isna(m.oh) or pd.isna(m.od) or pd.isna(m.oa))
+            mp = _implied(m.oh, m.od, m.oa) if ok else (0, 0, 0)
+        else:
+            ok = not (pd.isna(m.psh) or pd.isna(m.psd) or pd.isna(m.psa))
+            mp = _implied(m.psh, m.psd, m.psa) if ok else (0, 0, 0)
+        if ok:
             h_gf, a_gf = mean(gf[h], 1.35), mean(gf[a], 1.15)
             h_xg = mean(xgf[h], h_gf)
             a_xg = mean(xgf[a], a_gf)
@@ -161,6 +168,8 @@ def build_features(df: pd.DataFrame, xw, squad=None, resolve=None) -> pd.DataFra
                 "psh": m.psh, "psd": m.psd, "psa": m.psa,
                 "maxh": m.maxh, "maxd": m.maxd, "maxa": m.maxa,
                 "o25": m.o25, "u25": m.u25,
+                "oh": m.oh, "od": m.od, "oa": m.oa,   # opening avg 1X2
+                "ch": m.ch, "cd": m.cd, "ca": m.ca,   # closing avg 1X2 (for CLV)
                 "m_home": mp[0], "m_draw": mp[1], "m_away": mp[2],
                 "elo_home": eh, "elo_away": ea, "elo_diff": eh - ea,
                 "h_gf": h_gf, "h_ga": mean(ga[h], 1.15),
@@ -200,7 +209,7 @@ def add_league_stats(feat: pd.DataFrame, train_mask) -> pd.DataFrame:
     return feat
 
 
-def fit_predict():
+def fit_predict(anchor="close"):
     """Train the λ-model and predict on the chronological test set.
     Returns (te, lh, la): the test frame + predicted home/away expected goals.
     Shared by evaluate() and backtest.py so both use identical, leak-free preds.
@@ -224,7 +233,7 @@ def fit_predict():
 
     print("Walk-forward feature build …")
     # 'as' is a Python keyword → unusable via itertuples attribute access; rename now.
-    feat = build_features(df.rename(columns={"as": "ashots"}), xw, squad, resolve)
+    feat = build_features(df.rename(columns={"as": "ashots"}), xw, squad, resolve, anchor=anchor)
     cov = feat["sv_has"].mean()
     print(f"  squad-value coverage on odds matches: {100*cov:.0f}%")
     train_mask = feat["date"] < SPLIT

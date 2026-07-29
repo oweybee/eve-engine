@@ -72,7 +72,9 @@ COLS = ["date","league","season","home","away","fthg","ftag","ftr","hthg","htag"
         "hs","as","hc","ac",
         "b365h","b365d","b365a","psh","psd","psa","maxh","maxd","maxa",
         # best available over/under 2.5 goals odds — for the totals value backtest
-        "o25","u25"]
+        "o25","u25",
+        # market-average OPENING and CLOSING 1X2 — for the early-price CLV test
+        "oh","od","oa","ch","cd","ca"]
 
 # ── League-name / division-code → canonical slug ────────────────────────────────
 # Preserves the exact keys production (lib/halftimeFeatures.js) and the trainer's
@@ -265,6 +267,11 @@ def _parse_main(df, fallback_league):
                          "PC>2.5", "P>2.5", "B365C>2.5", "B365>2.5"),
             "u25": _pick(m, "MaxC<2.5", "Max<2.5", "AvgC<2.5", "Avg<2.5",
                          "PC<2.5", "P<2.5", "B365C<2.5", "B365<2.5"),
+            # market-average OPENING (AvgH…) vs CLOSING (AvgCH…) — same source,
+            # so log(open/close) is a clean closing-line-value measure.
+            "oh": _pick(m, "AvgH", "BbAvH"), "od": _pick(m, "AvgD", "BbAvD"),
+            "oa": _pick(m, "AvgA", "BbAvA"),
+            "ch": _pick(m, "AvgCH"), "cd": _pick(m, "AvgCD"), "ca": _pick(m, "AvgCA"),
             "b365h": _pick(m, "B365CH", "B365H"), "b365d": _pick(m, "B365CD", "B365D"), "b365a": _pick(m, "B365CA", "B365A"),
             "psh": _pick(m, "PSCH", "PSH", "PH"), "psd": _pick(m, "PSCD", "PSD", "PD"), "psa": _pick(m, "PSCA", "PSA", "PA"),
             "maxh": _pick(m, "MaxCH", "MaxH"), "maxd": _pick(m, "MaxCD", "MaxD"), "maxa": _pick(m, "MaxCA", "MaxA")}))
