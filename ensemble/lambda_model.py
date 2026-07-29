@@ -89,6 +89,7 @@ def build_features(df: pd.DataFrame, xw) -> pd.DataFrame:
                 "fthg": m.fthg, "ftag": m.ftag, "ftr": m.ftr,
                 "psh": m.psh, "psd": m.psd, "psa": m.psa,
                 "maxh": m.maxh, "maxd": m.maxd, "maxa": m.maxa,
+                "o25": m.o25, "u25": m.u25,
                 "m_home": mp[0], "m_draw": mp[1], "m_away": mp[2],
                 "elo_home": eh, "elo_away": ea, "elo_diff": eh - ea,
                 "h_gf": h_gf, "h_ga": mean(ga[h], 1.15),
@@ -159,11 +160,12 @@ def train_and_eval():
 
 def evaluate(te, lh, la):
     n = len(te)
-    p_home = np.zeros(n); p_draw = np.zeros(n); p_away = np.zeros(n)
+    p_home = np.zeros(n); p_draw = np.zeros(n); p_away = np.zeros(n); p_over = np.zeros(n)
     for i in range(n):
         M = score_matrix(lh[i], la[i])
-        mk = markets_from_matrix(M)["1x2"]
-        p_home[i], p_draw[i], p_away[i] = mk["home"], mk["draw"], mk["away"]
+        mk = markets_from_matrix(M)
+        p_home[i], p_draw[i], p_away[i] = mk["1x2"]["home"], mk["1x2"]["draw"], mk["1x2"]["away"]
+        p_over[i] = mk["over_under"]["over_2.5"]
 
     occ_h = (te.ftr == "H").to_numpy(int)
     occ_d = (te.ftr == "D").to_numpy(int)
@@ -212,6 +214,67 @@ def evaluate(te, lh, la):
             print(f"\nMin edge {int(thr*100)}%:  bets={bets:,}  ROI={100*pnl/staked:+.2f}%  "
                   f"win%={100*wins/bets:.1f}  meanCLV={100*clv/max(nclv,1):+.2f}pp")
     print("\n(baseline to beat: old form model was CLV -0.77pp, ROI -3.4%)")
+
+    # ── Per-outcome flat-bet helper on the 1X2 book at best price ──────────────
+    def bet_1x2(mask, thr=0.03):
+        bets = pnl = wins = 0
+        for oc, p in (("H", p_home), ("D", p_draw), ("A", p_away)):
+            odds = best[oc]; occ = (te.ftr == oc).to_numpy(int)
+            edge = p * odds - 1
+            take = np.where(mask & (edge > thr) & ~np.isnan(odds))[0]
+            for i in take:
+                bets += 1; pnl += (odds[i] - 1) if occ[i] else -1; wins += occ[i]
+        return bets, pnl
+
+    # ── Where is it profitable? Per-league 1X2 ROI @ edge≥3% ──────────────────
+    print("\n" + "-" * 66)
+    print("PER-LEAGUE 1X2 value (bet best price, edge ≥ 3%, min 200 bets):")
+    rows = []
+    for lg in te["league"].unique():
+        b, pl = bet_1x2((te["league"] == lg).to_numpy(), 0.03)
+        if b >= 200:
+            rows.append((lg, b, 100 * pl / b))
+    rows.sort(key=lambda r: r[2], reverse=True)
+    print(f"  {'league':28s}{'bets':>7s}{'ROI%':>9s}")
+    for lg, b, roi in rows[:8]:
+        print(f"  {lg:28s}{b:>7,}{roi:>+9.2f}   ▲")
+    for lg, b, roi in rows[-5:]:
+        print(f"  {lg:28s}{b:>7,}{roi:>+9.2f}")
+
+    # ── Favourite–longshot: ROI of model bets by the outcome's market prob ─────
+    print("\nFAVOURITE–LONGSHOT edge (model 1X2 bets @ edge≥3%, by market prob):")
+    mp = {"H": te.m_home.to_numpy(), "D": te.m_draw.to_numpy(), "A": te.m_away.to_numpy()}
+    seg = {"longshot (p<0.25)": (0, .25), "mid (0.25-0.5)": (.25, .5), "fav (p>0.5)": (.5, 1.01)}
+    for name, (lo, hi) in seg.items():
+        bets = pnl = wins = 0
+        for oc, p in (("H", p_home), ("D", p_draw), ("A", p_away)):
+            odds = best[oc]; occ = (te.ftr == oc).to_numpy(int); mpr = mp[oc]
+            edge = p * odds - 1
+            take = np.where((edge > .03) & ~np.isnan(odds) & (mpr >= lo) & (mpr < hi))[0]
+            for i in take:
+                bets += 1; pnl += (odds[i] - 1) if occ[i] else -1; wins += occ[i]
+        if bets:
+            print(f"  {name:20s} bets={bets:>7,}  ROI={100*pnl/bets:+6.2f}%  win%={100*wins/bets:4.1f}")
+
+    # ── Over/Under 2.5 goals value (model prices totals natively via MC) ───────
+    ou = te.dropna(subset=["o25", "u25"]).index.to_numpy()
+    if len(ou):
+        o = te.o25.to_numpy(); u = te.u25.to_numpy()
+        occ_o = ((te.fthg + te.ftag) > 2.5).to_numpy(int)
+        for thr in (0.0, 0.03, 0.05):
+            bets = pnl = 0
+            for i in ou:
+                eo, eu = p_over[i] * o[i] - 1, (1 - p_over[i]) * u[i] - 1
+                if max(eo, eu) <= thr:
+                    continue
+                bets += 1
+                if eo >= eu:
+                    pnl += (o[i] - 1) if occ_o[i] else -1
+                else:
+                    pnl += (u[i] - 1) if not occ_o[i] else -1
+            if bets:
+                print(f"\nOver/Under 2.5 @ edge {int(thr*100)}%:  bets={bets:,}  "
+                      f"ROI={100*pnl/bets:+.2f}%  (coverage {len(ou):,} matches)")
 
 
 if __name__ == "__main__":
