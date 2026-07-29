@@ -200,7 +200,11 @@ def add_league_stats(feat: pd.DataFrame, train_mask) -> pd.DataFrame:
     return feat
 
 
-def train_and_eval():
+def fit_predict():
+    """Train the λ-model and predict on the chronological test set.
+    Returns (te, lh, la): the test frame + predicted home/away expected goals.
+    Shared by evaluate() and backtest.py so both use identical, leak-free preds.
+    """
     print("Loading corpus …")
     df = pd.read_csv(CACHE, low_memory=False)
     df["date"] = pd.to_datetime(df["date"], utc=True, errors="coerce")
@@ -238,8 +242,12 @@ def train_and_eval():
     print("Training λ_away …");  ma = xgb.XGBRegressor(**params).fit(Xtr, tr["ftag"])
     lh = np.clip(mh.predict(Xte), 0.05, 6.0)
     la = np.clip(ma.predict(Xte), 0.05, 6.0)
+    return te.reset_index(drop=True), lh, la
 
-    evaluate(te.reset_index(drop=True), lh, la)
+
+def train_and_eval():
+    te, lh, la = fit_predict()
+    evaluate(te, lh, la)
 
 
 def evaluate(te, lh, la):
