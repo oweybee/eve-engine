@@ -71,6 +71,11 @@ jobs:
       - name: Retrain supermodels (halftime + prematch)
         run: python3 ensemble/train_supermodel_v2.py --mode both
 
+      - name: Build λ board model (full corpus, ONNX + state bundle)
+        run: |
+          pip install onnxruntime
+          python3 ensemble/train_lambda_prod.py
+
       # Per-model contract gate: a model whose feature count is UNCHANGED is
       # contract-safe and ships; a model whose count changed (a league-OHE
       # width change vs the hardcoded vector in lib/halftimeFeatures.js) is HELD
@@ -110,6 +115,10 @@ jobs:
             [ -n "$m" ] && git add "ensemble/models/supermodel_${m}_v2.onnx" \
                                     "ensemble/models/supermodel_${m}_v2_features.json"
           done
+          # λ board model: contract is carried inside the bundle and consumed by
+          # lib/lambdaBoard.js from the same commit — always safe to ship together.
+          git add ensemble/models/lambda_home.onnx ensemble/models/lambda_away.onnx \
+                  ensemble/models/lambda_bundle.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No contract-safe model changes to commit."
             exit 0
