@@ -167,6 +167,7 @@ def build_features(df: pd.DataFrame, xw, squad=None, resolve=None, anchor="close
                 "fthg": m.fthg, "ftag": m.ftag, "ftr": m.ftr,
                 "psh": m.psh, "psd": m.psd, "psa": m.psa,
                 "maxh": m.maxh, "maxd": m.maxd, "maxa": m.maxa,
+                "b365h": m.b365h, "b365d": m.b365d, "b365a": m.b365a,
                 "o25": m.o25, "u25": m.u25,
                 "oh": m.oh, "od": m.od, "oa": m.oa,   # opening avg 1X2
                 "ch": m.ch, "cd": m.cd, "ca": m.ca,   # closing avg 1X2 (for CLV)
