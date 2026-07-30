@@ -27,6 +27,11 @@ jobs:
     env:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ODDS_API_KEY:              ${{ secrets.ODDS_API_KEY }}
+      ODDS_API_REGIONS:          ${{ vars.ODDS_API_REGIONS || 'uk' }}
+      ODDS_API_MARKETS_INPLAY:   ${{ vars.ODDS_API_MARKETS_INPLAY || 'h2h' }}
+      ODDS_API_RESERVE:          ${{ vars.ODDS_API_RESERVE || '2000' }}
+      ODDS_API_MONTHLY_CREDITS:  ${{ vars.ODDS_API_MONTHLY_CREDITS || '100000' }}
       API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
       # Stage 2 (model-vs-market) stays OFF until a parity live-feature service
       # exists — see computeInplayValues.js buildHalftimeFeatures(). Flip to
@@ -67,6 +72,14 @@ jobs:
 
       - name: Compute in-play values
         run: node computeInplayValues.js
+
+      - name: Ingest live odds — The Odds API (multi-book, h2h)
+        continue-on-error: true
+        run: node ingestOddsApi.js --inplay
+
+      - name: Capture in-play market series (for the live chart)
+        continue-on-error: true
+        run: node captureInplaySeries.js
 
       - name: Post in-play signals to Telegram
         run: node postToX.js

@@ -1,0 +1,148 @@
+name: Train Supermodels (historical corpus)
+
+# Teaches the ELO/form supermodels from the historical football-data.co.uk
+# corpus. Fires automatically whenever a season CSV is added/updated under
+# ensemble/data/ (the "drop a CSV, push" workflow), and on demand.
+#
+#   git add ensemble/data/GER2_2023.csv && git commit && git push
+#     → this workflow rebuilds the corpus, retrains the supermodels,
+#       and commits the refreshed .onnx + *_features.json back to the branch.
+#
+# The separate weekly train-models.yml retrains the Supabase-fed ensemble
+# (match_odds / btts / over_under); the two are independent.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ensemble/data/**'
+  # Weekly in-season refresh: re-pull this season's football-data files and
+  # retrain, so club Elo/form keep advancing as results come in. Mondays 04:00
+  # UTC — after the weekend's fixtures have settled.
+  schedule:
+    - cron: '0 4 * * 1'
+
+# Never run two retrains on the same branch at once, and let the latest win.
+concurrency:
+  group: train-supermodels-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  train:
+    name: Rebuild corpus + retrain supermodels
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ML dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r ensemble/requirements-train.txt
+          # Fail fast here if the export toolchain can't import — don't discover
+          # it only after a full training run (as happened before pinning).
+          python3 -c "from onnxmltools import convert_xgboost; from onnxmltools.convert.common.data_types import FloatTensorType; print('onnx export toolchain OK')"
+
+      # Record the current feature-vector contract so we can refuse to ship a
+      # model whose dimensions drifted from what lib/halftimeFeatures.js builds
+      # by hand. Adding DATA never changes these counts; adding a brand-new
+      # first-class LEAGUE does, and that needs a matching JS edit first.
+      - name: Snapshot feature contract (before)
+        id: contract_before
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, pathlib
+          for mode in ("halftime", "prematch"):
+              p = pathlib.Path(f"ensemble/models/supermodel_{mode}_v2_features.json")
+              n = json.loads(p.read_text())["n"] if p.exists() else 0
+              print(f"{mode}={n}")
+          PY
+
+      # Keep the corpus current: re-download this season's football-data files so
+      # club Elo/form advance as the season plays out. Without this the ratings
+      # freeze at the archive's last date and every retrain reproduces stale state.
+      # Safe to re-run — the corpus builder dedups on (league, date, home, away).
+      - name: Refresh current-season CSVs
+        continue-on-error: true
+        run: |
+          pip install requests
+          python3 ensemble/scrapers/refresh_football_data.py
+
+      - name: Rebuild training corpus from ensemble/data/ + big-5 mirror
+        run: python3 ensemble/build_training_corpus.py
+
+      - name: Retrain supermodels (halftime + prematch)
+        run: python3 ensemble/train_supermodel_v2.py --mode both
+
+      - name: Build λ board model (full corpus, ONNX + state bundle)
+        run: |
+          pip install onnxruntime
+          python3 ensemble/train_lambda_prod.py
+
+      # Per-model contract gate: a model whose feature count is UNCHANGED is
+      # contract-safe and ships; a model whose count changed (a league-OHE
+      # width change vs the hardcoded vector in lib/halftimeFeatures.js) is HELD
+      # with a warning — it must not ship until the JS is updated to match. This
+      # is per-model so a safe model (e.g. prematch) still ships even when the
+      # other (halftime) drifts.
+      - name: Select contract-safe models
+        id: select
+        run: |
+          python3 - "${{ steps.contract_before.outputs.halftime }}" "${{ steps.contract_before.outputs.prematch }}" <<'PY'
+          import json, os, pathlib, sys
+          before = {"halftime": int(sys.argv[1]), "prematch": int(sys.argv[2])}
+          safe, held = [], []
+          for mode, prev in before.items():
+              n = json.loads(pathlib.Path(f"ensemble/models/supermodel_{mode}_v2_features.json").read_text())["n"]
+              if not prev or n == prev:
+                  print(f"{mode}: {prev} -> {n}  OK (shippable)")
+                  safe.append(mode)
+              else:
+                  print(f"::warning::{mode} feature count {prev} -> {n}: contract changed "
+                        f"(league-OHE width). HELD — update lib/halftimeFeatures.js to the "
+                        f"new *_features.json, then re-run to ship {mode}.")
+                  held.append(mode)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("safe=" + ",".join(safe) + "\n")
+              f.write("held=" + ",".join(held) + "\n")
+          PY
+
+      - name: Commit contract-safe models
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # NB: _csv_cache_v3.csv.gz is intentionally gitignored (a rebuildable
+          # artifact) — we commit the trained models, not the corpus cache. Only
+          # contract-safe models are staged; held models are left uncommitted.
+          for m in $(echo "${{ steps.select.outputs.safe }}" | tr ',' ' '); do
+            [ -n "$m" ] && git add "ensemble/models/supermodel_${m}_v2.onnx" \
+                                    "ensemble/models/supermodel_${m}_v2_features.json"
+          done
+          # λ board model: contract is carried inside the bundle and consumed by
+          # lib/lambdaBoard.js from the same commit — always safe to ship together.
+          git add ensemble/models/lambda_home.onnx ensemble/models/lambda_away.onnx \
+                  ensemble/models/lambda_bundle.json 2>/dev/null || true
+          # refreshed season files — the input that keeps Elo moving in-season
+          git add ensemble/data/_current 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No contract-safe model changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: retrain supermodels from updated historical corpus [skip ci]"
+          for i in 1 2 3 4; do
+            if git push origin "HEAD:${{ github.ref_name }}"; then exit 0; fi
+            echo "push failed, retrying in $((2**i))s..."; sleep $((2**i))
+          done
+          git push origin "HEAD:${{ github.ref_name }}"

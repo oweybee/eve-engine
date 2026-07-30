@@ -20,7 +20,9 @@ echo "[inplay-worker] starting — interval ${INTERVAL}s, winprob=${INPLAY_WINPR
 while true; do
   START=$(date +%s)
   node ingestLiveOdds.js      || echo "[inplay-worker] ingest step failed (continuing)"
+  node ingestOddsApi.js --inplay || echo "[inplay-worker] odds-api step failed (continuing)"
   node computeInplayValues.js || echo "[inplay-worker] compute step failed (continuing)"
+  node captureInplaySeries.js || echo "[inplay-worker] series step failed (continuing)"
   node postToX.js             || echo "[inplay-worker] post step failed (continuing)"
   ELAPSED=$(( $(date +%s) - START ))
   SLEEP=$(( INTERVAL - ELAPSED ))

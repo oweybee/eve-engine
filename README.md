@@ -119,6 +119,81 @@ In-play-specific env vars: `INPLAY_MODEL_ENABLED` (default `false`),
 
 ---
 
+## Teaching the model — uploading historical seasons
+
+The ELO/form **supermodels** (`ensemble/models/supermodel_prematch_v2.onnx` and
+`supermodel_halftime_v2.onnx`) learn from a corpus of historical matches. You
+can make them more accurate by feeding in more history — previous seasons,
+extra leagues, closing odds — **without touching any code**.
+
+### The workflow: drop a CSV, push
+
+1. Get the season file in **football-data.co.uk** format. Two layouts are
+   auto-detected:
+
+   - **Extra-league** (same as the committed `ensemble/data/SWE.csv` /
+     `USA.csv`) — one file, many seasons, with closing odds:
+
+     ```
+     Country,League,Season,Date,Time,Home,Away,HG,AG,Res,PSCH,PSCD,PSCA,MaxCH,MaxCD,MaxCA,...
+     Sweden,Allsvenskan,2012,31/03/2012,15:00,Elfsborg,Djurgarden,2,1,H,1.71,3.98,5.44,...
+     ```
+
+   - **Main-league** (a single-division download such as `E0.csv`, `D1.csv`):
+
+     ```
+     Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HST,AST,HR,AR,B365H,B365D,B365A,PSH,PSD,PSA,...
+     ```
+
+2. Drop it into `ensemble/data/` and push it to your branch:
+
+   ```bash
+   git add ensemble/data/GER2_2023.csv
+   git commit -m "data: add Bundesliga 2 2023/24 history"
+   git push
+   ```
+
+3. The **Train Supermodels** workflow (`.github/workflows/train-supermodels.yml`)
+   fires automatically on any change under `ensemble/data/**`. It rebuilds the
+   corpus (`build_training_corpus.py` auto-discovers every CSV in that folder),
+   retrains both supermodels, and commits the refreshed `.onnx` +
+   `*_features.json` back to your branch. You can also trigger it by hand from
+   the **Actions** tab.
+
+The league slug is read from each file's own `League` column (or the `Div`
+code), so `Allsvenskan → allsvenskan` and `MLS → mls` map exactly as the
+production code already expects.
+
+### Existing league vs brand-new league
+
+- **More seasons of a league the model already knows** (`epl`, `laliga`,
+  `bundesliga`, `seriea`, `ligue1`, `allsvenskan`, `mls`) — fully automatic.
+  The feature contract is unchanged; the retrained models ship straight away.
+
+- **A brand-new league** — its matches are still learned (they feed ELO,
+  rolling form, and the global signal) but it shares the "other" (all-zero)
+  one-hot bucket until it is *promoted* to a first-class league. Promotion is a
+  deliberate, contract-changing edit: add the slug to `LEAGUES` /
+  `LEAGUE_PRIORS` in `ensemble/train_supermodel_v2.py` **and** to the matching
+  hardcoded league lists in `lib/halftimeFeatures.js` (production builds the
+  feature vector by hand and must stay column-for-column identical to
+  `*_features.json`). The retrain workflow has a **guard** that refuses to
+  commit a model whose feature count changed, so a mismatched contract can
+  never ship silently — if you add a new first-class league, the guard tells
+  you exactly what to update.
+
+### Validating a file locally (optional)
+
+```bash
+pip install numpy pandas requests
+python3 ensemble/build_training_corpus.py --dry-run   # parse + summarise, writes nothing
+```
+
+This prints per-file match counts and the leagues it detected, without the
+big-5 network fetch — a quick way to confirm a new CSV parses before you push.
+
+---
+
 ## Required secrets
 
 The engine needs three credentials. They are **never** stored in the repo — they

@@ -1,0 +1,24 @@
+# Supermodel training + ONNX export toolchain — PINNED.
+#
+# Why pinned: an unpinned `pip install ... onnx onnxmltools` on the CI runner
+# resolved a broken combination in which `from onnxmltools import convert_xgboost`
+# raised ImportError at export time (surfaced only as the masked message
+# "pip install onnxmltools", after a full, successful training run). This exact
+# set is verified end-to-end: corpus build → train both supermodels → ONNX export.
+#
+# The export chain (xgboost → skl2onnx/onnxmltools → onnx/protobuf) is the part
+# that must stay internally compatible; keep these versions locked together.
+xgboost==3.2.0
+scikit-learn==1.9.0
+skl2onnx==1.20.0
+onnx==1.22.0
+onnxmltools==1.16.0
+protobuf==7.35.1
+# onnxmltools does `import packaging` but does NOT declare it as a dependency,
+# so on a clean runner the import fails with ModuleNotFoundError: packaging.
+# (It's present locally by chance — which masked this as a version problem.)
+packaging>=23
+numpy==2.4.6
+pandas==3.0.5
+scipy==1.17.1
+requests>=2.31

@@ -80,11 +80,14 @@ const WORLD_CUP_LEAGUE_ID   = parseInt(process.env.WORLD_CUP_LEAGUE_ID   || '1',
 const ALLSVENSKAN_LEAGUE_ID = parseInt(process.env.ALLSVENSKAN_LEAGUE_ID || '113', 10);
 const MLS_LEAGUE_ID         = parseInt(process.env.MLS_LEAGUE_ID         || '253', 10);
 
-const TRACKED_LEAGUES = [
-  { id: WORLD_CUP_LEAGUE_ID,   name: 'FIFA World Cup',       country: 'International' },
-  { id: ALLSVENSKAN_LEAGUE_ID, name: 'Allsvenskan',         country: 'Sweden' },
-  { id: MLS_LEAGUE_ID,         name: 'Major League Soccer', country: 'USA' },
-];
+// The full tracked set now lives in lib/trackedLeagues.js (40 competitions,
+// 36 with corpus history). Ids are env-overridable and self-verified against the
+// name API-Football returns, so a wrong id warns instead of silently ingesting
+// the wrong competition. The three legacy env vars above are still honoured.
+const { trackedLeagues, nameLooksRight } = require('./lib/trackedLeagues');
+const { planPolling, summarise } = require('./lib/pollBudget');
+
+const TRACKED_LEAGUES = trackedLeagues(process.env);
 
 // ---------------------------------------------------------------------------
 // Supabase
@@ -148,6 +151,15 @@ async function fetchFixturesForDate(date, league) {
   console.log(`[plan] GET ${path}`);
   const json = await httpGet(path);
   const fixtures = json.response ?? [];
+  // SELF-VERIFY the league id: compare our expected name to what the API calls
+  // this id. A re-pointed or mistyped id would otherwise ingest the WRONG
+  // competition silently — this makes it a loud line in the run log instead.
+  const apiName = fixtures[0]?.league?.name;
+  if (apiName && !nameLooksRight(league.name, apiName)) {
+    console.warn(`[plan] ⚠ LEAGUE ID MISMATCH: id=${league.id} expected "${league.name}" ` +
+                 `but API says "${apiName}" — fix the id in lib/trackedLeagues.js or ` +
+                 `override it via env, then re-run.`);
+  }
   // Filter out already-finished fixtures (FT = full time, AET = after extra time, PEN = penalties)
   const FINISHED_STATUSES = ['FT', 'AET', 'PEN'];
   const upcoming = fixtures.filter(f => !FINISHED_STATUSES.includes(f.fixture?.status?.short));
@@ -186,7 +198,7 @@ function calcPlan(fixtures, today) {
   const fixtureIds = fixtures.map(f => f.fixture.id);
 
   if (fixtureIds.length === 0) {
-    console.log(`[plan] no upcoming World Cup fixtures in the next ${DAYS_AHEAD} days`);
+    console.log(`[plan] no upcoming fixtures across ${TRACKED_LEAGUES.length} tracked leagues in the next ${DAYS_AHEAD} days`);
     return {
       date:             today,
       fixture_ids:      [],
@@ -197,14 +209,32 @@ function calcPlan(fixtures, today) {
     };
   }
 
-  // Planner cost = 1 request per (day × tracked league) fetched
-  const plannerCost   = DAYS_AHEAD * TRACKED_LEAGUES.length;
-  // Each run fetches odds for all fixtures in one pass (1 req per fixture).
-  const costPerRun    = fixtureIds.length;
-  const runBudget     = DAILY_BUDGET - plannerCost;
-  const availableRuns = Math.floor(runBudget / costPerRun);
+  // ── Tiered, budget-aware polling (lib/pollBudget.js) ─────────────────────
+  // Previously every fixture was polled at ONE flat interval, so quota went on
+  // games three days out and ran thin before kickoff. Now each fixture gets an
+  // interval by time-to-kickoff (5m in the closing 3h → 12h out at the far end),
+  // and the planner degrades cheapest-information-first if the budget is tight.
+  const plannerCost = DAYS_AHEAD * TRACKED_LEAGUES.length;
+  const budgetPlan = planPolling({
+    fixtures: fixtures.map(f => ({ id: f.fixture.id, kickoffAt: f.fixture.date })),
+    budget: DAILY_BUDGET,
+    reserve: { planner: plannerCost, details: 0, live: 0 },
+  });
+  console.log(`  ${summarise(budgetPlan)}`);
+
+  // Per-fixture schedule for ingestOdds — it polls only what is DUE.
+  const fixtureSchedule = {};
+  for (const s2 of budgetPlan.schedule) {
+    fixtureSchedule[String(s2.id)] = {
+      tier: s2.tier, everyMin: s2.everyMin, nextPollAt: s2.nextPollAt,
+    };
+  }
+  // The loop must wake at least as often as the tightest tier so closing-line
+  // polls aren't missed; runs_planned is now an upper bound, not a hard budget.
+  const tightest = Math.min(...budgetPlan.tiers.map(t => t.everyMin));
+  const intervalMins = Math.max(1, tightest);
   const activeMinutes = (ACTIVE_END_HOUR - ACTIVE_START_HOUR) * 60;
-  const intervalMins  = Math.ceil(activeMinutes / availableRuns);
+  const availableRuns = Math.ceil(activeMinutes / intervalMins);
 
   // First run: top of the active window today (or now if already past it).
   const firstRun = new Date(`${today}T${String(ACTIVE_START_HOUR).padStart(2, '0')}:00:00Z`);
@@ -223,6 +253,7 @@ function calcPlan(fixtures, today) {
   return {
     date:             today,
     fixture_ids:      fixtureIds,
+    fixture_schedule: fixtureSchedule,
     interval_minutes: intervalMins,
     next_run_at:      nextRunAt.toISOString(),
     runs_planned:     availableRuns,

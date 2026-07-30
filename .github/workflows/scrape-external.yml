@@ -1,0 +1,82 @@
+name: Scrape external factors (ClubElo + Transfermarkt)
+
+# Runs the external-factor scrapers where the network is open (GitHub-hosted
+# runners), then commits the datasets to ensemble/data/external/. Manual only —
+# scraping is periodic, not per-push. The commit carries [skip ci] so it does
+# NOT trigger the supermodel retrain.
+#
+# Note: Transfermarkt may Cloudflare-challenge some runner IP ranges; if the
+# squad-value step comes back empty, run the scraper from an allowed network
+# (`python3 ensemble/scrapers/transfermarkt.py`) and commit the CSV instead.
+
+on:
+  workflow_dispatch:
+    inputs:
+      clubelo_start:
+        description: "ClubElo history start (YYYY-MM-DD)"
+        default: "2000-01-01"
+      clubelo_step_days:
+        description: "ClubElo snapshot cadence in days"
+        default: "7"
+      tm_from_year:
+        description: "Transfermarkt first season start-year"
+        default: "2005"
+      tm_to_year:
+        description: "Transfermarkt last season start-year"
+        default: "2025"
+
+concurrency:
+  group: scrape-external-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install scraper deps
+        run: pip install -r ensemble/scrapers/requirements.txt
+
+      - name: Sanity-check parsers
+        run: cd ensemble/scrapers && python3 test_parsers.py
+
+      - name: Scrape ClubElo world ranking
+        run: |
+          python3 ensemble/scrapers/clubelo.py \
+            --start "${{ inputs.clubelo_start }}" \
+            --step-days "${{ inputs.clubelo_step_days }}" || echo "clubelo step failed (non-fatal)"
+
+      - name: Scrape Transfermarkt squad values
+        run: |
+          python3 ensemble/scrapers/transfermarkt.py \
+            --from-year "${{ inputs.tm_from_year }}" \
+            --to-year "${{ inputs.tm_to_year }}" || echo "transfermarkt step failed (non-fatal)"
+
+      - name: Commit datasets
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ensemble/data/external/clubelo.csv ensemble/data/external/squad_values.csv 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No external data changes."
+            exit 0
+          fi
+          git commit -m "data(external): refresh ClubElo + Transfermarkt [skip ci]"
+          for i in 1 2 3 4; do
+            git push origin "HEAD:${{ github.ref_name }}" && exit 0
+            echo "push failed, retry in $((2**i))s"; sleep $((2**i))
+          done
+          git push origin "HEAD:${{ github.ref_name }}"
