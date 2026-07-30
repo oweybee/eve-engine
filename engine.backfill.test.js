@@ -179,12 +179,16 @@ const page = (current, total, items) => ({ paging: { current, total }, response:
     assert.strictEqual(got.pages, 1);
     assert.strictEqual(got.fixtures.length, 1);
     assert.ok(calls[0].includes('league=39') && calls[0].includes('season=2026'));
+    // The live API rejects unknown fields ("The Page field do not exist."), so
+    // the first request must NOT carry a page param at all.
+    assert.ok(!calls[0].includes('page='), 'first request must not send page=');
   });
 
   await asyncTest('a paged season is followed to the end, not truncated', async () => {
     const seen = [];
     const got = await fetchSeason(39, 2026, async p => {
-      const n = parseInt(p.match(/page=(\d+)/)[1], 10);
+      // Page 1 is requested bare; only follow-ups carry an explicit page param.
+      const n = parseInt(p.match(/page=(\d+)/)?.[1] ?? '1', 10);
       seen.push(n);
       return page(n, 3, [at(39, `2026-0${n}-15T14:00:00+00:00`),
                          at(39, `2026-0${n}-16T14:00:00+00:00`)]);

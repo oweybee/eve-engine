@@ -450,7 +450,8 @@ function getSupabase() {
 async function upsertLeague(supabase) {
   const { data, error } = await supabase
     .from('leagues')
-    .upsert({ name: 'FIFA World Cup', country: 'International' }, { onConflict: 'name' })
+    // (name, country) is the league's unique key — migration 044.
+    .upsert({ name: 'FIFA World Cup', country: 'International' }, { onConflict: 'name,country' })
     .select('id')
     .single();
   if (error) throw new Error(`upsertLeague: ${error.message}`);

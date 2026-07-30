@@ -128,7 +128,13 @@ async function fetchSeason(leagueId, season, get = httpGet) {
   const all = [];
   let page = 1, pages = 1, calls = 0;
   do {
-    const json = await get(`/fixtures?league=${leagueId}&season=${season}&page=${page}`);
+    // NEVER send `page` on the first request: /fixtures rejects unknown fields
+    // with HTTP 200 + "The Page field do not exist." — which fetchSeason then
+    // (correctly) throws on, so a bare `&page=1` made EVERY league fail. The
+    // param only exists at all as the follow-up mechanism should the API ever
+    // report paging.total > 1.
+    const pageArg = page > 1 ? `&page=${page}` : '';
+    const json = await get(`/fixtures?league=${leagueId}&season=${season}${pageArg}`);
     calls++;
     const errs = json?.errors;
     const errList = Array.isArray(errs) ? errs : Object.values(errs ?? {});
@@ -144,28 +150,19 @@ async function fetchSeason(leagueId, season, get = httpGet) {
 }
 
 /**
- * Finished fixtures need their scoreline written too — the schema rejects
- * status='completed' without goals, and these rows also feed computeElo and the
- * training exports.
+ * Extra columns for a FINISHED fixture: the scoreline lands in the same bulk
+ * upsert as the match row — the schema rejects status='completed' without
+ * goals, and these rows also feed computeElo and the training exports.
+ * (Bulk upserts need uniform keys per batch, so finished and unfinished
+ * fixtures are upserted as separate calls — see main().)
  */
-async function applyResults(supabase, fixtures) {
-  let done = 0;
-  for (const f of fixtures) {
-    const outcome = outcomeOf(f);
-    if (!outcome) continue;
-    const { error } = await supabase
-      .from('matches')
-      .update({
-        status: 'completed',
-        goals_home: f.goals.home,
-        goals_away: f.goals.away,
-        result: outcome,
-      })
-      .eq('external_id', String(f.fixture.id));
-    if (error) console.warn(`  warn result ${f.fixture.id}: ${error.message}`);
-    else done++;
-  }
-  return done;
+function resultCols(f) {
+  return {
+    status: 'completed',
+    goals_home: f.goals.home,
+    goals_away: f.goals.away,
+    result: outcomeOf(f),
+  };
 }
 
 async function main() {
@@ -188,6 +185,7 @@ async function main() {
 
   const supabase = DRY ? null : getClient();
   let totalFixtures = 0, totalUpserted = 0, totalResults = 0, apiCalls = 0;
+  let failedLeagues = 0, attemptedLeagues = 0;
   let rateLimited = false;
   const mismatches = [];
   const allFixtures = [];
@@ -197,12 +195,14 @@ async function main() {
     for (const league of leagues) {
       if (rateLimited) break;
       let fixtures, pages;
+      attemptedLeagues++;
       try {
         const got = await fetchSeason(league.id, season);
         fixtures = got.fixtures;
         pages = got.pages;
         apiCalls += got.calls;
       } catch (e) {
+        failedLeagues++;
         console.log(`  warn ${league.name} ${season}: ${e.message}`);
         if (/429|quota|limit|too many/i.test(e.message)) {
           console.log('[backfill] rate limited — stopping early; re-run later to continue ' +
@@ -229,14 +229,18 @@ async function main() {
       const tagged = fixtures.map(f => ({ ...f, _league: league }));
       totalFixtures += tagged.length;
       allFixtures.push(...tagged);
-      const finished = tagged.filter(f => outcomeOf(f)).length;
-      console.log(`  ${league.name} ${season}: ${tagged.length} fixtures (${finished} finished)` +
+      const finished = tagged.filter(f => outcomeOf(f));
+      console.log(`  ${league.name} ${season}: ${tagged.length} fixtures (${finished.length} finished)` +
                   (pages > 1 ? ` [${pages} pages]` : ''));
 
       if (DRY) continue;
-      const n = await upsertMatches(supabase, tagged);
-      totalUpserted += (n ?? 0);
-      totalResults += await applyResults(supabase, tagged);
+      // Two calls, not one: bulk upserts need uniform keys per batch, and only
+      // finished fixtures carry the scoreline columns.
+      const pending = tagged.filter(f => !outcomeOf(f));
+      totalUpserted += (await upsertMatches(supabase, pending)) ?? 0;
+      const nFinished = (await upsertMatches(supabase, finished, { extraCols: resultCols })) ?? 0;
+      totalUpserted += nFinished;
+      totalResults  += nFinished;
     }
   }
 
@@ -269,6 +273,15 @@ async function main() {
 
   console.log(`\n[backfill] the Odds API pacer can now divide its monthly pool against ` +
               `real fixture calendars instead of a calendar-time estimate.`);
+
+  // A run where EVERY league errored produced nothing — that must fail the job
+  // loudly rather than leave a green check over an empty calendar. (This is
+  // exactly how the `page` regression shipped: 40 warnings, 0 fixtures, exit 0.)
+  // Partial failures stay warnings: one plan-gated cup must not fail the cron.
+  if (attemptedLeagues > 0 && failedLeagues === attemptedLeagues && !rateLimited) {
+    console.error(`\n[backfill] FATAL: all ${attemptedLeagues} league fetch(es) failed — nothing loaded.`);
+    process.exit(1);
+  }
 }
 
 if (require.main === module) {

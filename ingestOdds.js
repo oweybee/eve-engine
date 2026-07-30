@@ -412,9 +412,11 @@ function makeShortName(name) {
 }
 
 async function upsertLeague(supabase, name, country) {
+  // League identity is (name, country) — names collide across countries
+  // (migration 044), and 'name' alone is no longer a unique constraint.
   const { data, error } = await supabase
     .from('leagues')
-    .upsert({ name, country }, { onConflict: 'name' })
+    .upsert({ name, country }, { onConflict: 'name,country' })
     .select('id').single();
   if (error) throw new Error(`upsertLeague: ${error.message}`);
   return data.id;
