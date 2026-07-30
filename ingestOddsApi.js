@@ -34,6 +34,7 @@ const { clubKey } = require('./lib/lambdaBoard');
 const {
   httpGetJson, quotaFromHeaders, requestCost, canSpend, mapSportKeys, parseEvent,
 } = require('./lib/oddsApi');
+const { planDailySpend } = require('./lib/oddsApiBudget');
 
 const KEY = process.env.ODDS_API_KEY;
 const DRY = process.argv.includes('--dry-run');
@@ -44,6 +45,8 @@ const MARKETS = INPLAY
   ? (process.env.ODDS_API_MARKETS_INPLAY || 'h2h')
   : (process.env.ODDS_API_MARKETS_PREMATCH || 'h2h,totals');
 const RESERVE = parseInt(process.env.ODDS_API_RESERVE || '2000', 10);
+// Monthly pool (not daily) — the pacer divides it across the month's football.
+const ALLOWANCE = parseInt(process.env.ODDS_API_MONTHLY_CREDITS || '100000', 10);
 const INCLUDE_CUPS = process.env.ODDS_API_INCLUDE_CUPS !== 'false';
 // Kickoff horizon for the pre-match sweep — no point pulling next month's games.
 const HORIZON_HOURS = parseFloat(process.env.ODDS_API_HORIZON_HOURS || '72');
@@ -83,6 +86,44 @@ async function loadFixtureIndex(supabase) {
   return idx;
 }
 
+/**
+ * Count "league-days" — the real cost driver, since one request covers a whole
+ * league. Returns { today, elapsed, total } for the current UTC month:
+ *   today   — tracked leagues with a fixture today (what this run may spend on)
+ *   elapsed — league-days already played this month (pacing denominator)
+ *   total   — league-days across the whole month (forecast; scheduled + played)
+ * Falls back to safe defaults if the fixture calendar is thin.
+ */
+async function countLeagueDays(supabase) {
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const { data, error } = await supabase
+    .from('matches')
+    .select('kickoff_at, league_id')
+    .gte('kickoff_at', monthStart.toISOString())
+    .lt('kickoff_at', monthEnd.toISOString());
+  if (error) {
+    console.log(`[oddsApi] league-day count failed (${error.message}) — using defaults`);
+    return { today: 1, elapsed: null, total: null };
+  }
+  const todayKey = now.toISOString().slice(0, 10);
+  const all = new Set(), past = new Set(), todaySet = new Set();
+  for (const m of data ?? []) {
+    if (!m.league_id || !m.kickoff_at) continue;
+    const day = String(m.kickoff_at).slice(0, 10);
+    const key = `${m.league_id}|${day}`;
+    all.add(key);
+    if (day < todayKey) past.add(key);
+    if (day === todayKey) todaySet.add(m.league_id);
+  }
+  return {
+    today: Math.max(1, todaySet.size),
+    elapsed: past.size,
+    total: Math.max(all.size, past.size + todaySet.size) || null,
+  };
+}
+
 /** Resolve an Odds API event to one of our match ids (names + kickoff proximity). */
 function resolveMatch(idx, event) {
   const k = `${clubKey(event.home_team)}|${clubKey(event.away_team)}`;
@@ -110,6 +151,31 @@ async function main() {
     return;
   }
 
+  // ── Monthly pacing ────────────────────────────────────────────────────────
+  // The pool is MONTHLY, so spend is paced against how much football is left in
+  // the month (league-days), not against calendar time. countLeagueDays() reads
+  // the real fixture calendar; the plan then caps this run's spend.
+  const cal = await countLeagueDays(supabase);
+  const used = quota.remaining != null ? (ALLOWANCE - quota.remaining) : (quota.used ?? 0);
+  const plan = planDailySpend({
+    allowance: ALLOWANCE, used, reserve: RESERVE, now: new Date(),
+    leagueDaysToday: cal.today, leagueDaysElapsed: cal.elapsed, leagueDaysTotal: cal.total,
+    regions: REGIONS, marketsPrematch: MARKETS, marketsInplay: MARKETS,
+  });
+  console.log(`[oddsApi] pace=${plan.pace} throttle=${plan.throttle} ` +
+              `progress=${(plan.progress * 100).toFixed(0)}% drift=${plan.drift} ` +
+              `league-days today=${cal.today} month=${cal.total} ` +
+              `→ ${plan.creditsPerLeagueDay} credits/league-day`);
+  if (plan.exhausted) {
+    console.log('[oddsApi] monthly pool exhausted — stopping');
+    return;
+  }
+  // Cap this run: pre-match gets the protected breadth floor, in-play the surplus.
+  const runCap = INPLAY
+    ? Math.max(1, plan.inplayPolls)
+    : Math.max(1, plan.prematchPolls);
+  console.log(`[oddsApi] run cap: ${runCap} league request(s)`);
+
   // FREE catalogue call → resolve sport keys (a renamed key warns, never silently drops)
   const cat = await httpGetJson(`/v4/sports/?apiKey=${KEY}`);
   const { map, unmatched } = mapSportKeys(cat.json, { includeCups: INCLUDE_CUPS });
@@ -126,6 +192,7 @@ async function main() {
   let matched = 0, unmatchedEv = 0, polled = 0, skippedGuard = 0;
 
   for (const [corpusKey, sportKey] of leagues) {
+    if (polled >= runCap) { skippedGuard++; continue; }
     if (!canSpend({ remaining, cost, reserve: RESERVE })) { skippedGuard++; continue; }
     let res;
     try {

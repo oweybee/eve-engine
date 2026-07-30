@@ -31,6 +31,7 @@ jobs:
       ODDS_API_REGIONS:          ${{ vars.ODDS_API_REGIONS || 'uk' }}
       ODDS_API_MARKETS_INPLAY:   ${{ vars.ODDS_API_MARKETS_INPLAY || 'h2h' }}
       ODDS_API_RESERVE:          ${{ vars.ODDS_API_RESERVE || '2000' }}
+      ODDS_API_MONTHLY_CREDITS:  ${{ vars.ODDS_API_MONTHLY_CREDITS || '100000' }}
       API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
       # Stage 2 (model-vs-market) stays OFF until a parity live-feature service
       # exists — see computeInplayValues.js buildHalftimeFeatures(). Flip to
