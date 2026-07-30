@@ -150,28 +150,19 @@ async function fetchSeason(leagueId, season, get = httpGet) {
 }
 
 /**
- * Finished fixtures need their scoreline written too — the schema rejects
- * status='completed' without goals, and these rows also feed computeElo and the
- * training exports.
+ * Extra columns for a FINISHED fixture: the scoreline lands in the same bulk
+ * upsert as the match row — the schema rejects status='completed' without
+ * goals, and these rows also feed computeElo and the training exports.
+ * (Bulk upserts need uniform keys per batch, so finished and unfinished
+ * fixtures are upserted as separate calls — see main().)
  */
-async function applyResults(supabase, fixtures) {
-  let done = 0;
-  for (const f of fixtures) {
-    const outcome = outcomeOf(f);
-    if (!outcome) continue;
-    const { error } = await supabase
-      .from('matches')
-      .update({
-        status: 'completed',
-        goals_home: f.goals.home,
-        goals_away: f.goals.away,
-        result: outcome,
-      })
-      .eq('external_id', String(f.fixture.id));
-    if (error) console.warn(`  warn result ${f.fixture.id}: ${error.message}`);
-    else done++;
-  }
-  return done;
+function resultCols(f) {
+  return {
+    status: 'completed',
+    goals_home: f.goals.home,
+    goals_away: f.goals.away,
+    result: outcomeOf(f),
+  };
 }
 
 async function main() {
@@ -238,14 +229,18 @@ async function main() {
       const tagged = fixtures.map(f => ({ ...f, _league: league }));
       totalFixtures += tagged.length;
       allFixtures.push(...tagged);
-      const finished = tagged.filter(f => outcomeOf(f)).length;
-      console.log(`  ${league.name} ${season}: ${tagged.length} fixtures (${finished} finished)` +
+      const finished = tagged.filter(f => outcomeOf(f));
+      console.log(`  ${league.name} ${season}: ${tagged.length} fixtures (${finished.length} finished)` +
                   (pages > 1 ? ` [${pages} pages]` : ''));
 
       if (DRY) continue;
-      const n = await upsertMatches(supabase, tagged);
-      totalUpserted += (n ?? 0);
-      totalResults += await applyResults(supabase, tagged);
+      // Two calls, not one: bulk upserts need uniform keys per batch, and only
+      // finished fixtures carry the scoreline columns.
+      const pending = tagged.filter(f => !outcomeOf(f));
+      totalUpserted += (await upsertMatches(supabase, pending)) ?? 0;
+      const nFinished = (await upsertMatches(supabase, finished, { extraCols: resultCols })) ?? 0;
+      totalUpserted += nFinished;
+      totalResults  += nFinished;
     }
   }
 

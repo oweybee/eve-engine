@@ -265,56 +265,82 @@ function calcPlan(fixtures, today) {
 // Upsert match records so ingestOdds.js can link odds to real team names
 // ---------------------------------------------------------------------------
 
-async function upsertMatches(supabase, fixtures) {
-  // Resolve (and cache) each tracked league's DB id, so a match links to the
-  // right competition — not a single hard-coded league.
+async function upsertMatches(supabase, fixtures, { extraCols } = {}) {
+  // BATCHED, not per-fixture. The old shape — three sequential round trips per
+  // fixture (home team, away team, match) — was fine for planDay's ~50-game
+  // daily window but took over an hour for a whole-season backfill (~15k
+  // fixtures), blowing straight past the workflow timeout. Same rows land
+  // either way; they land in ~30 requests instead of ~45,000.
+  //
+  // `extraCols(fixture)` optionally returns extra columns to merge into that
+  // fixture's row (the season backfill uses it to write final scores in the
+  // same pass). Rows keep status 'scheduled' unless extraCols overrides it.
+  const CHUNK = 500;
+  const shortName = n => n.length > 12 ? n.split(' ').slice(0, 2).join(' ') : n;
+
+  // 1. Leagues — a handful, resolved (and cached) one upsert each.
   const leagueIdByName = new Map();
-  async function resolveLeagueId(league) {
-    if (leagueIdByName.has(league.name)) return leagueIdByName.get(league.name);
+  for (const f of fixtures) {
+    const league = f._league ?? TRACKED_LEAGUES[0];
+    if (leagueIdByName.has(league.name)) continue;
     const { data, error } = await supabase
       .from('leagues')
       .upsert({ name: league.name, country: league.country }, { onConflict: 'name' })
       .select('id').single();
-    if (error) { console.warn(`[plan] upsertLeague(${league.name}): ${error.message}`); return null; }
+    if (error) { console.warn(`[plan] upsertLeague(${league.name}): ${error.message}`); continue; }
     leagueIdByName.set(league.name, data.id);
-    return data.id;
   }
 
-  let upserted = 0;
+  // 2. Teams — unique by name (bulk upsert rejects in-batch duplicates), chunked.
+  const uniqueTeams = new Map();
+  for (const f of fixtures) {
+    for (const name of [f.teams?.home?.name ?? `home_${f.fixture.id}`,
+                        f.teams?.away?.name ?? `away_${f.fixture.id}`]) {
+      if (!uniqueTeams.has(name)) uniqueTeams.set(name, { name, short_name: shortName(name) });
+    }
+  }
+  const teamIdByName = new Map();
+  const teamRows = [...uniqueTeams.values()];
+  for (let i = 0; i < teamRows.length; i += CHUNK) {
+    const { data, error } = await supabase.from('teams')
+      .upsert(teamRows.slice(i, i + CHUNK), { onConflict: 'name' })
+      .select('id, name');
+    if (error) { console.warn(`[plan] upsertTeams: ${error.message}`); continue; }
+    for (const t of data ?? []) teamIdByName.set(t.name, t.id);
+  }
+
+  // 3. Matches — unique by external_id (twin rows in one batch are a Postgres
+  //    error, "cannot affect row a second time"), chunked.
+  const rowById = new Map();
   for (const f of fixtures) {
     const fixtureId = f.fixture.id;
     const league    = f._league ?? TRACKED_LEAGUES[0];
-    const leagueId  = await resolveLeagueId(league);
-    if (!leagueId) continue;
-    const homeName  = f.teams?.home?.name ?? `home_${fixtureId}`;
-    const awayName  = f.teams?.away?.name ?? `away_${fixtureId}`;
-
-    // kickoff is an ISO 8601 string e.g. "2026-06-25T20:00:00+00:00"
-    const kickoffAt = f.fixture?.date ?? null;
-
-    const shortName = n => n.length > 12 ? n.split(' ').slice(0, 2).join(' ') : n;
-
-    const { data: homeRow } = await supabase.from('teams')
-      .upsert({ name: homeName, short_name: shortName(homeName) }, { onConflict: 'name' })
-      .select('id').single();
-    const { data: awayRow } = await supabase.from('teams')
-      .upsert({ name: awayName, short_name: shortName(awayName) }, { onConflict: 'name' })
-      .select('id').single();
-    if (!homeRow || !awayRow) continue;
-
-    const { error: me } = await supabase.from('matches').upsert({
+    const leagueId  = leagueIdByName.get(league.name);
+    const homeId    = teamIdByName.get(f.teams?.home?.name ?? `home_${fixtureId}`);
+    const awayId    = teamIdByName.get(f.teams?.away?.name ?? `away_${fixtureId}`);
+    if (!leagueId || !homeId || !awayId) continue;
+    rowById.set(String(fixtureId), {
       external_id:   String(fixtureId),
-      home_team_id:  homeRow.id,
-      away_team_id:  awayRow.id,
+      home_team_id:  homeId,
+      away_team_id:  awayId,
       league_id:     leagueId,
-      kickoff_at:    kickoffAt,
+      // kickoff is an ISO 8601 string e.g. "2026-06-25T20:00:00+00:00"
+      kickoff_at:    f.fixture?.date ?? null,
       status:        'scheduled',
-    }, { onConflict: 'external_id' });
-
-    if (me) console.warn(`[plan] upsertMatch(${fixtureId}): ${me.message}`);
-    else upserted++;
+      ...(extraCols ? extraCols(f) : null),
+    });
+  }
+  let upserted = 0;
+  const matchRows = [...rowById.values()];
+  for (let i = 0; i < matchRows.length; i += CHUNK) {
+    const batch = matchRows.slice(i, i + CHUNK);
+    const { error: me } = await supabase.from('matches')
+      .upsert(batch, { onConflict: 'external_id' });
+    if (me) console.warn(`[plan] upsertMatches batch @${i}: ${me.message}`);
+    else upserted += batch.length;
   }
   console.log(`[plan] upserted ${upserted}/${fixtures.length} match records`);
+  return upserted;
 }
 
 // ---------------------------------------------------------------------------
