@@ -2,7 +2,7 @@
 # MaxEdge in-play worker — tight loop for live signal cadence.
 #
 # GitHub Actions throttles the run-inplay schedule to every few hours, far too
-# slow to react to a goal. This runs the same three steps on a short interval on
+# slow to react to a goal. This runs the same steps on a short interval on
 # an always-on host instead. Each step is idempotent and self-gating, so a fast
 # interval is cheap when nothing is live (one /fixtures?live=all poll per tick).
 set -uo pipefail
@@ -21,6 +21,7 @@ while true; do
   START=$(date +%s)
   node ingestLiveOdds.js      || echo "[inplay-worker] ingest step failed (continuing)"
   node ingestOddsApi.js --inplay || echo "[inplay-worker] odds-api step failed (continuing)"
+  node fetchLiveStats.js      || echo "[inplay-worker] stats step failed (continuing)"
   node computeInplayValues.js || echo "[inplay-worker] compute step failed (continuing)"
   node captureInplaySeries.js || echo "[inplay-worker] series step failed (continuing)"
   node postToX.js             || echo "[inplay-worker] post step failed (continuing)"

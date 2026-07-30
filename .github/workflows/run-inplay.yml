@@ -77,6 +77,10 @@ jobs:
         continue-on-error: true
         run: node ingestOddsApi.js --inplay
 
+      - name: Fetch live match statistics (possession/shots/xG)
+        continue-on-error: true
+        run: node fetchLiveStats.js
+
       - name: Capture in-play market series (for the live chart)
         continue-on-error: true
         run: node captureInplaySeries.js

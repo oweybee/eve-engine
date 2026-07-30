@@ -9,15 +9,32 @@ Unlike the Betfair worker, this needs **no UK IP** — API-Football works from
 anywhere, so the cheapest free VM is fine. It can share the same host as
 `scripts/betfair-vps/` if you already run that.
 
-Each tick runs three idempotent, self-gating steps:
+Each tick runs six idempotent, self-gating steps:
 
 1. `ingestLiveOdds.js` — live score/minute/status + current 1X2 price
-2. `computeInplayValues.js` — book-lag + model-vs-market + **win-prob** stages
-3. `postToX.js` — posts in-play signals to `TELEGRAM_INPLAY_CHAT_ID` (if set)
+2. `ingestOddsApi.js --inplay` — multi-book live prices (The Odds API), so the
+   live chart has a real consensus↔best spread instead of one aggregated feed.
+   Self-throttles against the monthly credit pool; no-ops without a key.
+3. `fetchLiveStats.js` — possession / shots / corners / cards / **xG** per team,
+   gated by `LIVE_STATS_REFRESH_SECONDS` (default 90s) so a fast loop doesn't
+   re-pull data that hasn't moved. This is what feeds the live stats panel.
+4. `computeInplayValues.js` — book-lag + model-vs-market + **win-prob** stages
+5. `captureInplaySeries.js` — one point per selection per tick (market shape +
+   our model's live line + match state) — the data behind the live chart
+6. `postToX.js` — posts in-play signals to `TELEGRAM_INPLAY_CHAT_ID` (if set)
 
 When nothing is live it costs one `/fixtures?live=all` poll per tick and a couple
 of DB reads — cheap enough to run continuously and stay inside the 75k/day
 API-Football budget.
+
+**Why 30s matters.** GitHub Actions throttles the in-play schedule, so odds and
+stats arrive minutes late — useless for reacting to a goal, and it leaves the
+live chart with a handful of coarse points. On this worker the chart gets ~240
+points across a match and the stats panel actually tracks play.
+
+**Budget at 30s.** ~15 live fixtures ⇒ live odds ≈ 16 calls/tick and stats ≈ 10
+calls/min (behind the 90s gate) ≈ 5k/day across a full matchday — comfortable
+inside Ultra alongside the pre-match sweep.
 
 ## Where to run it (cheapest first)
 - **£0** — Oracle Cloud *Always Free* VM (any region).
