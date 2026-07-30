@@ -366,9 +366,16 @@ async function main() {
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
   console.log(`\n[planDay] ${DRY_RUN ? '(DRY RUN) ' : ''}${today} — budget ${DAILY_BUDGET} req, window ${ACTIVE_START_HOUR}:00–${ACTIVE_END_HOUR}:00 UTC\n`);
 
-  // P1-3 fix: early-exit if a plan for today already exists.
+  // P1-3 fix: early-exit if a plan for today already exists AND has fixtures.
   // Without this, every accidental re-run (or workflow retry) burns DAYS_AHEAD
   // API credits re-fetching the same fixtures and overwrites runs_completed → 0.
+  //
+  // The fixture-count check was added after a bad first-run-of-the-day fetch
+  // (transient API-Football error/empty response) saved a 0-fixture plan and
+  // then had that empty plan re-confirmed by this same guard on every 5-minute
+  // tick for the rest of the day — ingestOdds.js self-gates on an empty plan,
+  // so one bad fetch blacked out odds ingestion until UTC midnight. An empty
+  // existing plan is now retried instead of locked in.
   if (!DRY_RUN) {
     const supabaseEarly = getSupabase();
     const { data: existing } = await supabaseEarly
@@ -376,9 +383,12 @@ async function main() {
       .select('date, fixture_ids, runs_planned, runs_completed')
       .eq('date', today)
       .single();
-    if (existing) {
-      console.log(`[planDay] plan for ${today} already exists (${existing.fixture_ids?.length ?? 0} fixtures, ${existing.runs_completed}/${existing.runs_planned} runs) — skipping`);
+    if (existing && (existing.fixture_ids?.length ?? 0) > 0) {
+      console.log(`[planDay] plan for ${today} already exists (${existing.fixture_ids.length} fixtures, ${existing.runs_completed}/${existing.runs_planned} runs) — skipping`);
       return;
+    }
+    if (existing) {
+      console.log(`[planDay] existing plan for ${today} has 0 fixtures — retrying fetch instead of locking in an empty day`);
     }
   }
 
