@@ -28,6 +28,16 @@ const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5',    
 const USE_UNIFORM_ALPHA   = (process.env.USE_UNIFORM_ALPHA || '').toLowerCase() === 'true';
 const ODDS_MAX_AGE_HOURS  = parseFloat(process.env.ODDS_MAX_AGE_HOURS || '24');
 
+// Upper bound on how far ahead we'll even ask for scheduled matches. Odds are
+// never priced this far out (see ODDS_MAX_AGE_HOURS above — a match's consensus
+// is dropped once its odds are stale), so this loses no real coverage. Without
+// it, fetchMatchesForComputation pulls EVERY row with status='scheduled' — a
+// full-season backfill (matches/fixtures loaded months ahead) balloons that to
+// thousands of ids, and the odds query's .in(matchIds) filter below then
+// encodes a match_id list too large for a single request, failing every cycle
+// with `fetchMatchesForComputation[odds]: Bad Request`.
+const COMPUTE_LOOKAHEAD_DAYS = parseFloat(process.env.COMPUTE_LOOKAHEAD_DAYS || '3');
+
 const ALPHA_HOME    = parseFloat(process.env.ALPHA_HOME    || '0.034');
 const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
 const ALPHA_AWAY    = parseFloat(process.env.ALPHA_AWAY    || '0.037');
@@ -67,6 +77,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  const kickoffCutoff = new Date(Date.now() + COMPUTE_LOOKAHEAD_DAYS * 24 * 3_600_000).toISOString();
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -76,6 +87,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .lte('kickoff_at', kickoffCutoff)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
