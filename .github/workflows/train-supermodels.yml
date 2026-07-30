@@ -16,6 +16,11 @@ on:
   push:
     paths:
       - 'ensemble/data/**'
+  # Weekly in-season refresh: re-pull this season's football-data files and
+  # retrain, so club Elo/form keep advancing as results come in. Mondays 04:00
+  # UTC — after the weekend's fixtures have settled.
+  schedule:
+    - cron: '0 4 * * 1'
 
 # Never run two retrains on the same branch at once, and let the latest win.
 concurrency:
@@ -64,6 +69,16 @@ jobs:
               n = json.loads(p.read_text())["n"] if p.exists() else 0
               print(f"{mode}={n}")
           PY
+
+      # Keep the corpus current: re-download this season's football-data files so
+      # club Elo/form advance as the season plays out. Without this the ratings
+      # freeze at the archive's last date and every retrain reproduces stale state.
+      # Safe to re-run — the corpus builder dedups on (league, date, home, away).
+      - name: Refresh current-season CSVs
+        continue-on-error: true
+        run: |
+          pip install requests
+          python3 ensemble/scrapers/refresh_football_data.py
 
       - name: Rebuild training corpus from ensemble/data/ + big-5 mirror
         run: python3 ensemble/build_training_corpus.py
@@ -119,6 +134,8 @@ jobs:
           # lib/lambdaBoard.js from the same commit — always safe to ship together.
           git add ensemble/models/lambda_home.onnx ensemble/models/lambda_away.onnx \
                   ensemble/models/lambda_bundle.json 2>/dev/null || true
+          # refreshed season files — the input that keeps Elo moving in-season
+          git add ensemble/data/_current 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No contract-safe model changes to commit."
             exit 0
