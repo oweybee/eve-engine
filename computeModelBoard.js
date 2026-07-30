@@ -29,6 +29,12 @@ const EV_THRESHOLD = parseFloat(process.env.LAMBDA_EV_THRESHOLD || '0.03');
 const ODDS_MAX_AGE_HOURS = parseFloat(process.env.ODDS_MAX_AGE_HOURS || '2');
 const DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
+// Upper bound on how far ahead we'll ask for scheduled fixtures. See the
+// matching guard + comment in computeValues.js: without this, a full-season
+// fixture backfill balloons the match_id list into the thousands and the odds
+// query's .in(matchIds) filter below fails with "Bad Request" (URL too large).
+const COMPUTE_LOOKAHEAD_DAYS = parseFloat(process.env.COMPUTE_LOOKAHEAD_DAYS || '3');
+
 // Production league names → corpus league slugs (the bundle's league keys).
 // Order matters: first match wins. Extend as leagues are added.
 const LEAGUE_PATTERNS = [
@@ -95,6 +101,7 @@ function summariseOdds(rows) {
 }
 
 async function fetchFixtures(supabase) {
+  const kickoffCutoff = new Date(Date.now() + COMPUTE_LOOKAHEAD_DAYS * 24 * 3_600_000).toISOString();
   const { data: matches, error } = await supabase
     .from('matches')
     .select(`
@@ -104,6 +111,7 @@ async function fetchFixtures(supabase) {
       league:leagues ( id, name )
     `)
     .eq('status', 'scheduled')
+    .or(`kickoff_at.is.null,kickoff_at.lte.${kickoffCutoff}`)
     .order('kickoff_at', { ascending: true });
   if (error) throw new Error(`modelBoard[matches]: ${error.message}`);
   if (!matches?.length) return [];
