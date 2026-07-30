@@ -87,7 +87,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
-    .lte('kickoff_at', kickoffCutoff)
+    .or(`kickoff_at.is.null,kickoff_at.lte.${kickoffCutoff}`)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
