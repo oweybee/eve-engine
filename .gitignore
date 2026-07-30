@@ -13,6 +13,10 @@ node_modules
 
 # env copies / shell accidents
 .env.*
+# ...but example/templates must ship — they're the setup instructions.
+!.env.example
+!*.env.example
+!scripts/*/.env.example
 "cat .env"
 _csv_cache.csv.gz
 
