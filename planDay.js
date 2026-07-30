@@ -278,17 +278,20 @@ async function upsertMatches(supabase, fixtures, { extraCols } = {}) {
   const CHUNK = 500;
   const shortName = n => n.length > 12 ? n.split(' ').slice(0, 2).join(' ') : n;
 
-  // 1. Leagues — a handful, resolved (and cached) one upsert each.
-  const leagueIdByName = new Map();
+  // 1. Leagues — a handful, resolved (and cached) one upsert each. League
+  //    identity is (name, country): names collide across countries (two
+  //    Premier Leagues, two Serie As, three Super Leagues — migration 044).
+  const leagueKey = l => `${l.name}|${l.country}`;
+  const leagueIdByKey = new Map();
   for (const f of fixtures) {
     const league = f._league ?? TRACKED_LEAGUES[0];
-    if (leagueIdByName.has(league.name)) continue;
+    if (leagueIdByKey.has(leagueKey(league))) continue;
     const { data, error } = await supabase
       .from('leagues')
-      .upsert({ name: league.name, country: league.country }, { onConflict: 'name' })
+      .upsert({ name: league.name, country: league.country }, { onConflict: 'name,country' })
       .select('id').single();
     if (error) { console.warn(`[plan] upsertLeague(${league.name}): ${error.message}`); continue; }
-    leagueIdByName.set(league.name, data.id);
+    leagueIdByKey.set(leagueKey(league), data.id);
   }
 
   // 2. Teams — unique by name (bulk upsert rejects in-batch duplicates), chunked.
@@ -315,7 +318,7 @@ async function upsertMatches(supabase, fixtures, { extraCols } = {}) {
   for (const f of fixtures) {
     const fixtureId = f.fixture.id;
     const league    = f._league ?? TRACKED_LEAGUES[0];
-    const leagueId  = leagueIdByName.get(league.name);
+    const leagueId  = leagueIdByKey.get(leagueKey(league));
     const homeId    = teamIdByName.get(f.teams?.home?.name ?? `home_${fixtureId}`);
     const awayId    = teamIdByName.get(f.teams?.away?.name ?? `away_${fixtureId}`);
     if (!leagueId || !homeId || !awayId) continue;
