@@ -80,6 +80,13 @@ jobs:
       LAMBDA_BOARD_ENABLED:      ${{ vars.LAMBDA_BOARD_ENABLED || 'true' }}
       # onnxruntime-node postinstall fetches CUDA extras we don't need
       ONNXRUNTIME_NODE_INSTALL_CUDA: 'skip'
+      # The Odds API — UK soft-book BREADTH (complements API-Football).
+      # Sized for the 100k-credit tier; the guard stops at ODDS_API_RESERVE.
+      ODDS_API_KEY:              ${{ secrets.ODDS_API_KEY }}
+      ODDS_API_REGIONS:          ${{ vars.ODDS_API_REGIONS || 'uk' }}
+      ODDS_API_MARKETS_PREMATCH: ${{ vars.ODDS_API_MARKETS_PREMATCH || 'h2h,totals' }}
+      ODDS_API_MARKETS_INPLAY:   ${{ vars.ODDS_API_MARKETS_INPLAY || 'h2h' }}
+      ODDS_API_RESERVE:          ${{ vars.ODDS_API_RESERVE || '2000' }}
       SHARPNESS_MULTI_BOOK:      ${{ vars.SHARPNESS_MULTI_BOOK  }}
       SHARPNESS_SINGLE_BOOK:     ${{ vars.SHARPNESS_SINGLE_BOOK }}
       MULTI_BOOK_THRESHOLD:      ${{ vars.MULTI_BOOK_THRESHOLD  }}
@@ -135,6 +142,13 @@ jobs:
             fi
           done
           exit $LOOP_EXIT
+
+      # Soft-book breadth sweep. Sparse by design: API-Football supplies the
+      # frequency, this supplies the books. Never fails the pipeline.
+      - name: Ingest odds — The Odds API (soft-book breadth)
+        id: odds_api
+        continue-on-error: true
+        run: node ingestOddsApi.js
 
       - name: Compute API predictive values
         id: api_compute
