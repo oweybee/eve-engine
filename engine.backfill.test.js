@@ -7,7 +7,7 @@
  */
 'use strict';
 const assert = require('assert');
-const { currentSeasonYear, outcomeOf, leagueDaysByMonth,
+const { currentSeasonYear, outcomeOf, leagueDaysByMonth, fetchSeason,
         FINISHED } = require('./backfillSeasonFixtures');
 
 let passed = 0;
@@ -155,4 +155,68 @@ test('a realistic month is far cheaper than a per-fixture count implies', () => 
   assert.ok(m.get('2026-09') * 6 === fixtures.length);
 });
 
-console.log(`\n${passed} backfill test(s) passed`);
+// ── paging + the HTTP-200 error envelope ────────────────────────────────────
+// A season loaded short is the failure this whole script exists to prevent: the
+// pacer would divide the monthly pool by a calendar missing matchdays and
+// quietly overspend. So paging must be followed, and API-Football's habit of
+// reporting errors with HTTP 200 must not read as "no fixtures".
+
+function asyncTest(n, f) {
+  return f().then(() => { passed++; console.log(`  ✓ ${n}`); })
+            .catch(e => { console.error(`  ✗ ${n}: ${e.message}`); process.exitCode = 1; });
+}
+
+const page = (current, total, items) => ({ paging: { current, total }, response: items, errors: [] });
+
+(async () => {
+  await asyncTest('single-page season costs one call', async () => {
+    const calls = [];
+    const got = await fetchSeason(39, 2026, async p => {
+      calls.push(p);
+      return page(1, 1, [at(39, '2026-08-15T14:00:00+00:00')]);
+    });
+    assert.strictEqual(got.calls, 1);
+    assert.strictEqual(got.pages, 1);
+    assert.strictEqual(got.fixtures.length, 1);
+    assert.ok(calls[0].includes('league=39') && calls[0].includes('season=2026'));
+  });
+
+  await asyncTest('a paged season is followed to the end, not truncated', async () => {
+    const seen = [];
+    const got = await fetchSeason(39, 2026, async p => {
+      const n = parseInt(p.match(/page=(\d+)/)[1], 10);
+      seen.push(n);
+      return page(n, 3, [at(39, `2026-0${n}-15T14:00:00+00:00`),
+                         at(39, `2026-0${n}-16T14:00:00+00:00`)]);
+    });
+    assert.deepStrictEqual(seen, [1, 2, 3], 'must request every page');
+    assert.strictEqual(got.fixtures.length, 6, 'all pages accumulated');
+    assert.strictEqual(got.calls, 3);
+  });
+
+  await asyncTest('missing paging envelope is treated as a single page', async () => {
+    const got = await fetchSeason(39, 2026, async () => ({ response: [at(39, '2026-08-15T14:00:00+00:00')] }));
+    assert.strictEqual(got.calls, 1);
+    assert.strictEqual(got.fixtures.length, 1);
+  });
+
+  await asyncTest('HTTP 200 + errors throws instead of looking like an empty season', async () => {
+    // This is the plan-gated-season case: API-Football answers 200 with an empty
+    // response and an error string. Silently treating it as "league didn't run"
+    // would hide a subscription limit behind a plausible-looking result.
+    await assert.rejects(
+      () => fetchSeason(39, 2015, async () => ({
+        paging: { current: 1, total: 1 }, response: [],
+        errors: { plan: 'Free plans do not have access to this season.' },
+      })),
+      /Free plans do not have access/);
+  });
+
+  await asyncTest('errors as an array is handled too (the API uses both shapes)', async () => {
+    await assert.rejects(
+      () => fetchSeason(39, 2026, async () => ({ response: [], errors: ['Bad league id'] })),
+      /Bad league id/);
+  });
+
+  console.log(`\n${passed} backfill test(s) passed`);
+})();

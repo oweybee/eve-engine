@@ -10,10 +10,17 @@
  * loaded it divides the pool against the real football ahead.
  *
  * WHY IT'S CHEAP
- * `/fixtures?league={id}&season={year}` returns an ENTIRE season in ONE request.
- * So the whole tracked set costs ~1 request per league — 40 requests for every
- * fixture in a season, versus planDay's per-date-per-league polling. This is by
- * far the cheapest data in the pipeline.
+ * `/fixtures?league={id}&season={year}` returns an ENTIRE season in one response
+ * (paging is followed if the API ever says otherwise). So the whole tracked set
+ * costs ~1 request per league — ~40 requests for every fixture in a season,
+ * versus planDay's per-date-per-league polling. By far the cheapest data in the
+ * pipeline, which is why loading every season we care about is affordable.
+ *
+ * SEASON AVAILABILITY IS PLAN-GATED
+ * How far back `--seasons` can reach depends on the API-Football subscription,
+ * not on this script. A season the plan doesn't cover comes back as HTTP 200
+ * with an `errors` payload and an empty response — indistinguishable from "this
+ * league didn't run" unless you read `errors`, which fetchSeason does.
  *
  * WHAT IT WRITES
  * Reuses planDay's upsertMatches for leagues/teams/matches (single source of
@@ -104,6 +111,39 @@ function httpGet(path) {
 }
 
 /**
+ * Fetch every page of a fixtures query.
+ *
+ * API-Football wraps every response in `paging: {current, total}`. A league+season
+ * query normally comes back as a single page, but "normally" is not a guarantee we
+ * can lean on here: a silently truncated season is precisely the failure this
+ * script exists to prevent — the pacer would divide the monthly pool by a
+ * calendar missing half its matchdays and quietly overspend. So follow paging
+ * whenever the API says there's more, and surface how many pages it took.
+ *
+ * Also surfaces `errors`, which API-Football returns with HTTP 200 — a plan that
+ * doesn't cover a requested season comes back as an EMPTY response with an error
+ * string, not a 4xx, so without this it looks identical to "league didn't run".
+ */
+async function fetchSeason(leagueId, season, get = httpGet) {
+  const all = [];
+  let page = 1, pages = 1, calls = 0;
+  do {
+    const json = await get(`/fixtures?league=${leagueId}&season=${season}&page=${page}`);
+    calls++;
+    const errs = json?.errors;
+    const errList = Array.isArray(errs) ? errs : Object.values(errs ?? {});
+    if (errList.length) {
+      // HTTP 200 + errors = plan/param problem. Loud, because it mimics "no fixtures".
+      throw new Error(`API error: ${errList.join('; ')}`);
+    }
+    all.push(...(json.response ?? []));
+    pages = json?.paging?.total ?? 1;
+    page++;
+  } while (page <= pages);
+  return { fixtures: all, calls, pages };
+}
+
+/**
  * Finished fixtures need their scoreline written too — the schema rejects
  * status='completed' without goals, and these rows also feed computeElo and the
  * training exports.
@@ -142,7 +182,8 @@ async function main() {
   }
 
   console.log(`[backfill] ${leagues.length} league(s) × ${resolvedSeasons.length} season(s) ` +
-              `= ${leagues.length * resolvedSeasons.length} request(s)`);
+              `≈ ${leagues.length * resolvedSeasons.length} request(s) (one per season per ` +
+              `league, plus any extra pages)`);
   console.log(`[backfill] seasons: ${resolvedSeasons.join(', ')}`);
 
   const supabase = DRY ? null : getClient();
@@ -155,13 +196,15 @@ async function main() {
     if (rateLimited) break;
     for (const league of leagues) {
       if (rateLimited) break;
-      let json;
+      let fixtures, pages;
       try {
-        json = await httpGet(`/fixtures?league=${league.id}&season=${season}`);
-        apiCalls++;
+        const got = await fetchSeason(league.id, season);
+        fixtures = got.fixtures;
+        pages = got.pages;
+        apiCalls += got.calls;
       } catch (e) {
         console.log(`  warn ${league.name} ${season}: ${e.message}`);
-        if (/429|quota|limit/i.test(e.message)) {
+        if (/429|quota|limit|too many/i.test(e.message)) {
           console.log('[backfill] rate limited — stopping early; re-run later to continue ' +
                       '(upserts are idempotent on external_id)');
           rateLimited = true;
@@ -169,9 +212,9 @@ async function main() {
         }
         continue;
       }
-      const fixtures = json.response ?? [];
       if (!fixtures.length) {
-        console.log(`  ${league.name} ${season}: none (league may not run this season)`);
+        console.log(`  ${league.name} ${season}: none (league may not run this season, ` +
+                    `or your plan doesn't cover it)`);
         continue;
       }
 
@@ -187,7 +230,8 @@ async function main() {
       totalFixtures += tagged.length;
       allFixtures.push(...tagged);
       const finished = tagged.filter(f => outcomeOf(f)).length;
-      console.log(`  ${league.name} ${season}: ${tagged.length} fixtures (${finished} finished)`);
+      console.log(`  ${league.name} ${season}: ${tagged.length} fixtures (${finished} finished)` +
+                  (pages > 1 ? ` [${pages} pages]` : ''));
 
       if (DRY) continue;
       const n = await upsertMatches(supabase, tagged);
@@ -231,4 +275,4 @@ if (require.main === module) {
   main().catch(err => { console.error('[backfill] FATAL:', err.message); process.exit(1); });
 }
 
-module.exports = { currentSeasonYear, outcomeOf, leagueDaysByMonth, FINISHED };
+module.exports = { currentSeasonYear, outcomeOf, leagueDaysByMonth, fetchSeason, FINISHED };
