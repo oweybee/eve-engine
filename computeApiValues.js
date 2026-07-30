@@ -40,9 +40,16 @@ const SIGNAL_DEDUP_MINUTES  = parseInt(process.env.SIGNAL_DEDUP_MINUTES  || '60'
 const ODDS_MAX_AGE_HOURS    = parseFloat(process.env.ODDS_MAX_AGE_HOURS   || '24');
 const MAX_PLAUSIBLE_EDGE    = parseFloat(process.env.MAX_PLAUSIBLE_EDGE   || '0.15');
 
+// Upper bound on how far ahead we'll ask for scheduled/live matches. See the
+// matching guard + comment in computeValues.js: without this, a full-season
+// fixture backfill balloons matchIds into the thousands and the odds query's
+// .in(matchIds) filter below fails with "Bad Request" (URL too large).
+const COMPUTE_LOOKAHEAD_DAYS = parseFloat(process.env.COMPUTE_LOOKAHEAD_DAYS || '3');
+
 // ── 1. Fetch matches with odds + predictions ──────────────────────────────────
 
 async function fetchMatchesForApiComputation(supabase) {
+  const kickoffCutoff = new Date(Date.now() + COMPUTE_LOOKAHEAD_DAYS * 24 * 3_600_000).toISOString();
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -52,6 +59,7 @@ async function fetchMatchesForApiComputation(supabase) {
       league:leagues ( id, name )
     `)
     .in('status', ['scheduled', 'live'])
+    .or(`kickoff_at.is.null,kickoff_at.lte.${kickoffCutoff}`)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForApiComputation[matches]: ${matchError.message}`);
