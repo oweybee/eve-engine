@@ -128,7 +128,13 @@ async function fetchSeason(leagueId, season, get = httpGet) {
   const all = [];
   let page = 1, pages = 1, calls = 0;
   do {
-    const json = await get(`/fixtures?league=${leagueId}&season=${season}&page=${page}`);
+    // NEVER send `page` on the first request: /fixtures rejects unknown fields
+    // with HTTP 200 + "The Page field do not exist." — which fetchSeason then
+    // (correctly) throws on, so a bare `&page=1` made EVERY league fail. The
+    // param only exists at all as the follow-up mechanism should the API ever
+    // report paging.total > 1.
+    const pageArg = page > 1 ? `&page=${page}` : '';
+    const json = await get(`/fixtures?league=${leagueId}&season=${season}${pageArg}`);
     calls++;
     const errs = json?.errors;
     const errList = Array.isArray(errs) ? errs : Object.values(errs ?? {});
@@ -188,6 +194,7 @@ async function main() {
 
   const supabase = DRY ? null : getClient();
   let totalFixtures = 0, totalUpserted = 0, totalResults = 0, apiCalls = 0;
+  let failedLeagues = 0, attemptedLeagues = 0;
   let rateLimited = false;
   const mismatches = [];
   const allFixtures = [];
@@ -197,12 +204,14 @@ async function main() {
     for (const league of leagues) {
       if (rateLimited) break;
       let fixtures, pages;
+      attemptedLeagues++;
       try {
         const got = await fetchSeason(league.id, season);
         fixtures = got.fixtures;
         pages = got.pages;
         apiCalls += got.calls;
       } catch (e) {
+        failedLeagues++;
         console.log(`  warn ${league.name} ${season}: ${e.message}`);
         if (/429|quota|limit|too many/i.test(e.message)) {
           console.log('[backfill] rate limited — stopping early; re-run later to continue ' +
@@ -269,6 +278,15 @@ async function main() {
 
   console.log(`\n[backfill] the Odds API pacer can now divide its monthly pool against ` +
               `real fixture calendars instead of a calendar-time estimate.`);
+
+  // A run where EVERY league errored produced nothing — that must fail the job
+  // loudly rather than leave a green check over an empty calendar. (This is
+  // exactly how the `page` regression shipped: 40 warnings, 0 fixtures, exit 0.)
+  // Partial failures stay warnings: one plan-gated cup must not fail the cron.
+  if (attemptedLeagues > 0 && failedLeagues === attemptedLeagues && !rateLimited) {
+    console.error(`\n[backfill] FATAL: all ${attemptedLeagues} league fetch(es) failed — nothing loaded.`);
+    process.exit(1);
+  }
 }
 
 if (require.main === module) {
