@@ -1,0 +1,88 @@
+name: Backfill Season Fixtures
+
+# Loads WHOLE-SEASON fixture lists into `matches`.
+#
+# WHY THIS EXISTS SEPARATELY FROM plan-day.yml
+# planDay.js fetches date-by-date, 3 days ahead — enough to schedule polling, but
+# it means the database never knows the shape of the season. lib/oddsApiBudget.js
+# paces the monthly Odds API credit pool against "league-days" (distinct
+# (league, date) pairs, which is how The Odds API actually bills), and without a
+# full calendar it has to fall back to a calendar-time estimate. This script
+# loads the real thing.
+#
+# COST
+# `/fixtures?league={id}&season={year}` returns an entire season in ONE request,
+# so all 40 tracked leagues cost ~40 requests per season — trivial against the
+# 75k/day allowance, and by far the cheapest data in the pipeline.
+#
+# CADENCE
+# Monthly on the 1st: fixtures get rescheduled constantly (TV picks, cup
+# replays, postponements), so a season loaded in August is stale by October. The
+# upserts are idempotent on external_id, so re-running only corrects drift.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: 'Comma-separated start years (blank = current season)'
+        type: string
+        default: ''
+      leagues:
+        description: 'Comma-separated corpus keys, e.g. epl,e1 (blank = all tracked)'
+        type: string
+        default: ''
+      dry_run:
+        description: 'Fetch and report the league-day calendar without writing'
+        type: boolean
+        default: false
+  schedule:
+    # 1st of the month, 04:30 UTC — before plan-day.yml at 05:00, so the day's
+    # planning already sees a corrected calendar.
+    - cron: '30 4 1 * *'
+
+concurrency:
+  group: backfill-fixtures-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    name: Load full season fixture lists
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+      # Only used to print the credits-per-league-day division in the summary.
+      ODDS_API_MONTHLY_CREDITS:  ${{ vars.ODDS_API_MONTHLY_CREDITS || '100000' }}
+      ODDS_API_RESERVE:          ${{ vars.ODDS_API_RESERVE || '2000' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Backfill fixtures
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.seasons }}" ]; then
+            ARGS="$ARGS --seasons ${{ inputs.seasons }}"
+          fi
+          if [ -n "${{ inputs.leagues }}" ]; then
+            ARGS="$ARGS --leagues ${{ inputs.leagues }}"
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          echo "node backfillSeasonFixtures.js$ARGS"
+          node backfillSeasonFixtures.js $ARGS

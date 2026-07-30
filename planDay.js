@@ -387,7 +387,13 @@ async function main() {
   console.log('\n[planDay] done');
 }
 
-main().catch(err => {
-  console.error('[planDay] fatal:', err.message);
-  process.exit(1);
-});
+// Only auto-run as a script — so backfillSeasonFixtures.js (and tests) can reuse
+// upsertMatches/fetchFixturesForDate without kicking off a full planning run.
+if (require.main === module) {
+  main().catch(err => {
+    console.error('[planDay] fatal:', err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { upsertMatches, fetchFixturesForDate, calcPlan, TRACKED_LEAGUES };
