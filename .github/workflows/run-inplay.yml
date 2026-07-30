@@ -68,5 +68,9 @@ jobs:
       - name: Compute in-play values
         run: node computeInplayValues.js
 
+      - name: Capture in-play market series (for the live chart)
+        continue-on-error: true
+        run: node captureInplaySeries.js
+
       - name: Post in-play signals to Telegram
         run: node postToX.js

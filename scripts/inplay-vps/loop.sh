@@ -21,6 +21,7 @@ while true; do
   START=$(date +%s)
   node ingestLiveOdds.js      || echo "[inplay-worker] ingest step failed (continuing)"
   node computeInplayValues.js || echo "[inplay-worker] compute step failed (continuing)"
+  node captureInplaySeries.js || echo "[inplay-worker] series step failed (continuing)"
   node postToX.js             || echo "[inplay-worker] post step failed (continuing)"
   ELAPSED=$(( $(date +%s) - START ))
   SLEEP=$(( INTERVAL - ELAPSED ))
