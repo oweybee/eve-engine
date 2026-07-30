@@ -119,7 +119,7 @@ async function loadPlan(supabase) {
  * Called AFTER the fixture loop completes (P1-5 fix).
  * A failed loop leaves the plan untouched so the scheduler retries.
  */
-async function advancePlan(supabase, plan) {
+async function advancePlan(supabase, plan, polledIds = []) {
   const nextRunAt  = new Date(Date.now() + plan.interval_minutes * 60 * 1000);
   const nextHour   = nextRunAt.getUTCHours();
   const effectiveEnd = ACTIVE_END_HOUR === 24 ? 0 : ACTIVE_END_HOUR;
@@ -127,11 +127,29 @@ async function advancePlan(supabase, plan) {
     ? nextRunAt.getUTCDate() > new Date().getUTCDate()
     : nextHour >= effectiveEnd;
 
+  // Advance the per-fixture schedule for everything we just polled, each by its
+  // OWN tier interval. Without this the fixtures stay due forever and the tiering
+  // silently collapses back to polling everything every run.
+  let scheduleUpdate;
+  if (plan.fixture_schedule && polledIds.length) {
+    scheduleUpdate = { ...plan.fixture_schedule };
+    const nowMs = Date.now();
+    for (const id of polledIds) {
+      const cur = scheduleUpdate[String(id)];
+      if (!cur?.everyMin) continue;
+      scheduleUpdate[String(id)] = {
+        ...cur,
+        nextPollAt: new Date(nowMs + cur.everyMin * 60 * 1000).toISOString(),
+      };
+    }
+  }
+
   const { error } = await supabase
     .from('engine_plan')
     .update({
       next_run_at:    outsideWindow ? null : nextRunAt.toISOString(),
       runs_completed: plan.runs_completed + 1,
+      ...(scheduleUpdate ? { fixture_schedule: scheduleUpdate } : {}),
     })
     .eq('date', plan.date);
 
@@ -472,12 +490,32 @@ async function ingest() {
 
   // ── It's time to run ──────────────────────────────────────────────────────
   console.log(`\n[ingest] run ${plan.runs_completed + 1}/${plan.runs_planned} — ${now.toISOString()}`);
-  console.log(`[ingest] ${plan.fixture_ids.length} fixture(s): ${plan.fixture_ids.join(', ')}`);
+
+  // ── Tiered polling: only fetch fixtures that are DUE ──────────────────────
+  // planDay writes a per-fixture schedule (lib/pollBudget.js): a game in its
+  // closing 3h is due every 5 min, one three days out every 12h. Polling only
+  // what's due is what makes 40 leagues affordable — previously every fixture
+  // was fetched on every run. No schedule (legacy plan) → poll everything.
+  const schedule = plan.fixture_schedule ?? null;
+  const dueIds = schedule
+    ? plan.fixture_ids.filter(id => {
+        const s = schedule[String(id)];
+        if (!s?.nextPollAt) return true;             // unscheduled → poll
+        return new Date(s.nextPollAt).getTime() <= now.getTime();
+      })
+    : plan.fixture_ids;
+
+  if (schedule && !dueIds.length) {
+    console.log(`[ingest] 0 of ${plan.fixture_ids.length} fixture(s) due — advancing schedule only`);
+    await advancePlan(supabase, plan);
+    return;
+  }
+  console.log(`[ingest] ${dueIds.length}/${plan.fixture_ids.length} fixture(s) due: ${dueIds.join(', ')}`);
 
   // ── Bulk prefetch phase (2 queries replace ~50 serial reads) ──────────────
 
   // Bulk 1: resolve all fixture API IDs → Supabase match UUIDs
-  const externalIds = plan.fixture_ids.map(String);
+  const externalIds = dueIds.map(String);
   const fixtureToMatchId = await prefetchMatchIds(supabase, externalIds);
 
   // Bulk 2: latest odds per (matchId, bookmaker, market) for all known matches
@@ -489,7 +527,7 @@ async function ingest() {
   // Cache the league DB id so we only upsert it once per run.
   let cachedLeagueId = null;
 
-  const summary = { fixtures: plan.fixture_ids.length, oddsInserted: 0, errors: 0 };
+  const summary = { fixtures: dueIds.length, oddsInserted: 0, errors: 0 };
 
   // ── Phase 1: fetch every fixture's odds in parallel (bounded) ──────────────
   // Was a serial fetch + sleep(200) between fixtures, so the network round-trips
@@ -598,7 +636,8 @@ async function ingest() {
   // an incomplete run as complete.
   if (!DRY_RUN) {
     try {
-      await advancePlan(supabase, plan);
+      // dueIds = exactly what this run polled → each advances by its own tier
+      await advancePlan(supabase, plan, dueIds);
     } catch (err) {
       // advancePlan failure is non-fatal to the odds data already written,
       // but we must surface it — the scheduler is now in an undefined state.
