@@ -194,6 +194,7 @@ function calcPlan(fixtures, today) {
       next_run_at:      null,
       runs_planned:     0,
       runs_completed:   0,
+      created_at:       new Date().toISOString(),
     };
   }
 
@@ -309,16 +310,28 @@ async function main() {
   // P1-3 fix: early-exit if a plan for today already exists.
   // Without this, every accidental re-run (or workflow retry) burns DAYS_AHEAD
   // API credits re-fetching the same fixtures and overwrites runs_completed → 0.
+  //
+  // Exception: a 0-fixture plan is retried after EMPTY_PLAN_RETRY_MINUTES.
+  // A zero-fixture day is otherwise permanent — if the upstream fetch returned
+  // no fixtures because of a transient outage/rate-limit rather than a genuine
+  // rest day, this was locking out odds ingestion for the rest of the day with
+  // no way to recover once the API came back.
+  const EMPTY_PLAN_RETRY_MINUTES = 60;
   if (!DRY_RUN) {
     const supabaseEarly = getSupabase();
     const { data: existing } = await supabaseEarly
       .from('engine_plan')
-      .select('date, fixture_ids, runs_planned, runs_completed')
+      .select('date, fixture_ids, runs_planned, runs_completed, created_at')
       .eq('date', today)
       .single();
     if (existing) {
-      console.log(`[planDay] plan for ${today} already exists (${existing.fixture_ids?.length ?? 0} fixtures, ${existing.runs_completed}/${existing.runs_planned} runs) — skipping`);
-      return;
+      const isEmpty = !existing.fixture_ids?.length;
+      const ageMinutes = (Date.now() - new Date(existing.created_at).getTime()) / 60_000;
+      if (!isEmpty || ageMinutes < EMPTY_PLAN_RETRY_MINUTES) {
+        console.log(`[planDay] plan for ${today} already exists (${existing.fixture_ids?.length ?? 0} fixtures, ${existing.runs_completed}/${existing.runs_planned} runs) — skipping`);
+        return;
+      }
+      console.log(`[planDay] plan for ${today} is empty and ${Math.round(ageMinutes)}min old — retrying fetch`);
     }
   }
 
