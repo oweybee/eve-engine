@@ -241,6 +241,15 @@ function calcPlan(fixtures, today) {
   const now = new Date();
   const nextRunAt = firstRun < now ? now : firstRun;
 
+  // Derived purely for the log lines below — the tiered budgetPlan above is
+  // what actually drives scheduling (fixtureSchedule/intervalMins/availableRuns).
+  // These two used to be real inputs back when polling was a single flat
+  // interval; kept as a rough "budget spent" summary now that it's tiered.
+  const runBudget  = DAILY_BUDGET - plannerCost;
+  const costPerRun = budgetPlan.covered > 0
+    ? Math.round(budgetPlan.cost.prematch / budgetPlan.covered)
+    : 0;
+
   console.log(`[plan] ${today} (+${DAYS_AHEAD - 1} days ahead)`);
   console.log(`  fixtures:       ${fixtureIds.length} across ${DAYS_AHEAD} days (ids: ${fixtureIds.join(', ')})`);
   console.log(`  budget:         ${DAILY_BUDGET} req/day − ${plannerCost} planner = ${runBudget} for runs`);
