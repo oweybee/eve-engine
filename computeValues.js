@@ -62,7 +62,21 @@ const MAX_PLAUSIBLE_EDGE = parseFloat(process.env.MAX_PLAUSIBLE_EDGE || '0.30');
 // Skip re-signal if same odds seen within this window (avoid spam)
 const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
+// Odds are only ever ingested for the DAYS_AHEAD window planDay.js plans
+// (default 3 days — see planDay.js). Since the whole-season backfill (#59),
+// `matches` also holds every future fixture for quota planning, so an
+// unbounded `status='scheduled'` query now returns thousands of rows with no
+// odds at all. Beyond ballooning matchIds for no benefit, the resulting
+// odds `.in(match_id, matchIds)` lookup exceeded PostgREST's URL length limit
+// and failed outright with a 400. Bound to a window around "now" — wide
+// enough to cover the planning horizon plus recently-finished live matches.
+const COMPUTE_WINDOW_HOURS_PAST = parseFloat(process.env.COMPUTE_WINDOW_HOURS_PAST || '6');
+const COMPUTE_WINDOW_DAYS_AHEAD = parseFloat(process.env.COMPUTE_WINDOW_DAYS_AHEAD || '5');
+
 async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
+  const windowStart = new Date(Date.now() - COMPUTE_WINDOW_HOURS_PAST * 3_600_000).toISOString();
+  const windowEnd   = new Date(Date.now() + COMPUTE_WINDOW_DAYS_AHEAD * 86_400_000).toISOString();
+
   // Pre-match engine: scheduled only. In-play matches are handled by
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
@@ -76,6 +90,8 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .gte('kickoff_at', windowStart)
+    .lte('kickoff_at', windowEnd)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
