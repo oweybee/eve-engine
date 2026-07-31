@@ -28,6 +28,17 @@ const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5',    
 const USE_UNIFORM_ALPHA   = (process.env.USE_UNIFORM_ALPHA || '').toLowerCase() === 'true';
 const ODDS_MAX_AGE_HOURS  = parseFloat(process.env.ODDS_MAX_AGE_HOURS || '24');
 
+// How far ahead a 'scheduled' match can kick off and still be considered for
+// pricing. Without this bound, fetchMatchesForComputation pulled in every
+// 'scheduled' row regardless of date — fine when that set was ~100-200 rows,
+// but season-backfill (#59/#60) inserted whole future seasons as 'scheduled',
+// growing it past 9,000 rows. The resulting .in('match_id', matchIds) filter
+// on the odds query then serialised a 9,000+ UUID list into the request,
+// which PostgREST rejected outright with 400 Bad Request on every single
+// compute cycle. Bounding to the near-term horizon keeps the id list sized to
+// what's actually being priced (matches planDay.js's own DAYS_AHEAD window).
+const MATCH_HORIZON_HOURS = parseFloat(process.env.MATCH_HORIZON_HOURS || '96');
+
 const ALPHA_HOME    = parseFloat(process.env.ALPHA_HOME    || '0.034');
 const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
 const ALPHA_AWAY    = parseFloat(process.env.ALPHA_AWAY    || '0.037');
@@ -67,6 +78,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  const horizonIso = new Date(Date.now() + MATCH_HORIZON_HOURS * 3_600_000).toISOString();
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -76,6 +88,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .or(`kickoff_at.is.null,kickoff_at.lte.${horizonIso}`)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
