@@ -111,18 +111,25 @@ async function fetchFixtures(supabase) {
   const ids = matches.map(m => m.id);
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const odds = [];
-  for (let from = 0; ; from += 1000) {
-    const { data, error: e } = await supabase
-      .from('odds')
-      .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', ids)
-      .gte('fetched_at', freshCutoff)
-      .order('id', { ascending: true })
-      .range(from, from + 999);
-    if (e) throw new Error(`modelBoard[odds]: ${e.message}`);
-    if (!data?.length) break;
-    odds.push(...data);
-    if (data.length < 1000) break;
+  // ids is chunked (see computeValues.js for the same fix): thousands of
+  // 'scheduled' matches in a single .in('match_id', ids) builds a query
+  // string PostgREST rejects with 400 Bad Request.
+  const ID_CHUNK = 150;
+  for (let mi = 0; mi < ids.length; mi += ID_CHUNK) {
+    const idChunk = ids.slice(mi, mi + ID_CHUNK);
+    for (let from = 0; ; from += 1000) {
+      const { data, error: e } = await supabase
+        .from('odds')
+        .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
+        .in('match_id', idChunk)
+        .gte('fetched_at', freshCutoff)
+        .order('id', { ascending: true })
+        .range(from, from + 999);
+      if (e) throw new Error(`modelBoard[odds]: ${e.message}`);
+      if (!data?.length) break;
+      odds.push(...data);
+      if (data.length < 1000) break;
+    }
   }
   const byMatch = new Map();
   for (const o of odds) {

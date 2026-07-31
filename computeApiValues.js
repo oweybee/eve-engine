@@ -63,22 +63,30 @@ async function fetchMatchesForApiComputation(supabase) {
   // Odds is a snapshot history — a plain .in() is capped at 1000 rows by
   // PostgREST and silently truncated the slate so most matches got no odds.
   // Restrict to the freshness window and page through in 1000-row chunks.
+  // matchIds is also chunked (see computeValues.js for the same fix): the
+  // fleet carries thousands of 'scheduled'/'live' matches, and a single
+  // .in('match_id', matchIds) over all of them builds a multi-hundred-KB
+  // query string that PostgREST rejects with 400 Bad Request.
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
+  const MATCH_ID_CHUNK = 150;
   const fetchAllOdds = async () => {
     const rows = [];
     const PAGE = 1000;
-    for (let from = 0; ; from += PAGE) {
-      const { data, error } = await supabase
-        .from('odds')
-        .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
-        .in('match_id', matchIds)
-        .gte('fetched_at', freshCutoff)
-        .order('id', { ascending: true })
-        .range(from, from + PAGE - 1);
-      if (error) throw new Error(`fetchMatchesForApiComputation[odds]: ${error.message}`);
-      if (!data?.length) break;
-      rows.push(...data);
-      if (data.length < PAGE) break;
+    for (let mi = 0; mi < matchIds.length; mi += MATCH_ID_CHUNK) {
+      const idChunk = matchIds.slice(mi, mi + MATCH_ID_CHUNK);
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase
+          .from('odds')
+          .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
+          .in('match_id', idChunk)
+          .gte('fetched_at', freshCutoff)
+          .order('id', { ascending: true })
+          .range(from, from + PAGE - 1);
+        if (error) throw new Error(`fetchMatchesForApiComputation[odds]: ${error.message}`);
+        if (!data?.length) break;
+        rows.push(...data);
+        if (data.length < PAGE) break;
+      }
     }
     return rows;
   };
