@@ -89,21 +89,32 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // (only a handful of games ever priced). We (a) restrict to the freshness
   // window the consensus uses anyway, cutting volume sharply, and (b) page
   // through in 1000-row chunks so every match's odds are returned.
+  //
+  // matchIds is also chunked (MATCH_ID_CHUNK) before hitting the .in() filter:
+  // with the scheduled-match backlog now in the thousands, a single .in() call
+  // over the full id list built a request URL past PostgREST/PostgREST's proxy
+  // size limit and failed outright with "Bad Request" — silently zeroing every
+  // match's odds and halting the pipeline (this is what was observed 2026-07-31
+  // from ~07:20 UTC: fetchMatchesForComputation[odds]: Bad Request on every tick).
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const oddsData = [];
   const ODDS_PAGE = 1000;
-  for (let from = 0; ; from += ODDS_PAGE) {
-    const { data, error: oddsError } = await supabase
-      .from('odds')
-      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', matchIds)
-      .gte('fetched_at', freshCutoff)
-      .order('id', { ascending: true })
-      .range(from, from + ODDS_PAGE - 1);
-    if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
-    if (!data?.length) break;
-    oddsData.push(...data);
-    if (data.length < ODDS_PAGE) break;
+  const MATCH_ID_CHUNK = 200;
+  for (let c = 0; c < matchIds.length; c += MATCH_ID_CHUNK) {
+    const idChunk = matchIds.slice(c, c + MATCH_ID_CHUNK);
+    for (let from = 0; ; from += ODDS_PAGE) {
+      const { data, error: oddsError } = await supabase
+        .from('odds')
+        .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
+        .in('match_id', idChunk)
+        .gte('fetched_at', freshCutoff)
+        .order('id', { ascending: true })
+        .range(from, from + ODDS_PAGE - 1);
+      if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
+      if (!data?.length) break;
+      oddsData.push(...data);
+      if (data.length < ODDS_PAGE) break;
+    }
   }
 
   const oddsByMatch = {};
