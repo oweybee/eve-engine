@@ -28,6 +28,13 @@ const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5',    
 const USE_UNIFORM_ALPHA   = (process.env.USE_UNIFORM_ALPHA || '').toLowerCase() === 'true';
 const ODDS_MAX_AGE_HOURS  = parseFloat(process.env.ODDS_MAX_AGE_HOURS || '24');
 
+// How far out a 'scheduled' match can be and still be considered for pricing.
+// ingestOdds.js only actively polls out to ~72h (lib/pollBudget.js's farthest
+// tier), so nothing further out has odds worth fetching anyway — this just
+// keeps the match id list (and therefore the `odds` .in() query below) from
+// growing unbounded as backfillSeasonFixtures.js loads whole-season fixtures.
+const COMPUTE_HORIZON_DAYS = parseFloat(process.env.COMPUTE_HORIZON_DAYS || '7');
+
 const ALPHA_HOME    = parseFloat(process.env.ALPHA_HOME    || '0.034');
 const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
 const ALPHA_AWAY    = parseFloat(process.env.ALPHA_AWAY    || '0.037');
@@ -67,6 +74,18 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  //
+  // Bounded to kickoff_at <= horizon: backfillSeasonFixtures.js (added 2026-07-30)
+  // loads whole-season calendars, so `matches` now carries thousands of
+  // status='scheduled' rows months out with no odds ever priced against them.
+  // An unbounded fetch put every one of those ids into the .in('match_id', …)
+  // filter below, and past ~9,000 ids the resulting query string exceeded what
+  // PostgREST/the gateway accepts, so every call failed with a flat "Bad
+  // Request" — silently killing computeValues.js and captureBaseline.js on
+  // every cycle. The horizon only trims far-future scheduled rows; it can't
+  // exclude live matches since their kickoff_at already lies in the past.
+  const horizonCutoff = new Date(
+    Date.now() + COMPUTE_HORIZON_DAYS * 24 * 3_600_000).toISOString();
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -76,6 +95,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .lte('kickoff_at', horizonCutoff)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
