@@ -234,8 +234,9 @@ async function main() {
                   (pages > 1 ? ` [${pages} pages]` : ''));
 
       if (DRY) continue;
-      const n = await upsertMatches(supabase, tagged);
-      totalUpserted += (n ?? 0);
+      // upsertMatches returns the Set of fixture ids that now have a match row.
+      const ok = await upsertMatches(supabase, tagged);
+      totalUpserted += (ok instanceof Set ? ok.size : (ok ?? 0));
       totalResults += await applyResults(supabase, tagged);
     }
   }

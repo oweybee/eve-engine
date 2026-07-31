@@ -149,11 +149,24 @@ async function run() {
 
   const candidates = [];
   let skippedUnmatched = 0, skippedLeague = 0, priced = 0;
+  let skippedNoKickoff = 0, skippedPast = 0;
+  const unmappedLeagues = new Map();
 
   for (const m of fixtures) {
-    if (new Date(m.kickoff_at) <= new Date()) continue;  // never past kickoff
+    // A null kickoff means the match row is a stub, not a real fixture. Left to
+    // the comparison below it would read as the 1970 epoch — i.e. always "past
+    // kickoff" — and vanish silently. Count it: a large number here means
+    // something upstream is writing matches without a kickoff time, which is
+    // exactly how this board sat at zero signals while looking healthy.
+    if (!m.kickoff_at) { skippedNoKickoff++; continue; }
+    if (new Date(m.kickoff_at) <= new Date()) { skippedPast++; continue; }
     const leagueKey = mapLeague(m.league?.name);
-    if (!leagueKey) { skippedLeague++; continue; }
+    if (!leagueKey) {
+      skippedLeague++;
+      const n = m.league?.name ?? '(no league)';
+      unmappedLeagues.set(n, (unmappedLeagues.get(n) ?? 0) + 1);
+      continue;
+    }
     const s = summariseOdds(m.oddsRows);
     if (!(s.home.median > 1 && s.draw.median > 1 && s.away.median > 1)) continue;
 
@@ -192,8 +205,16 @@ async function run() {
       });
     }
   }
-  console.log(`[modelBoard] priced=${priced} skipped_league=${skippedLeague} ` +
+  console.log(`[modelBoard] priced=${priced} no_kickoff=${skippedNoKickoff} ` +
+              `past=${skippedPast} skipped_league=${skippedLeague} ` +
               `skipped_unmatched=${skippedUnmatched} candidates=${candidates.length}`);
+  if (unmappedLeagues.size) {
+    // Naming the leagues we threw away turns "the board is empty" into a
+    // one-line diagnosis — add a LEAGUE_PATTERNS entry or fix the upstream row.
+    const top = [...unmappedLeagues.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+    console.log(`[modelBoard] unmapped leagues: ` +
+                top.map(([n, c]) => `${n} (${c})`).join(', '));
+  }
   if (!candidates.length) return;
 
   // Dedup: skip if the same selection was signalled at ~the same price recently.

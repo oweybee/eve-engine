@@ -280,6 +280,12 @@ async function upsertMatches(supabase, fixtures) {
     return data.id;
   }
 
+  // Fixture ids whose match row now definitely exists. The caller plans against
+  // THIS set, not the raw API response: a fixture that failed to upsert (a team
+  // or league upsert error) used to stay in engine_plan.fixture_ids anyway, and
+  // ingestOdds would then fail to resolve it and mint a placeholder match.
+  const ok = new Set();
+
   let upserted = 0;
   for (const f of fixtures) {
     const fixtureId = f.fixture.id;
@@ -312,9 +318,15 @@ async function upsertMatches(supabase, fixtures) {
     }, { onConflict: 'external_id' });
 
     if (me) console.warn(`[plan] upsertMatch(${fixtureId}): ${me.message}`);
-    else upserted++;
+    else { upserted++; ok.add(fixtureId); }
   }
   console.log(`[plan] upserted ${upserted}/${fixtures.length} match records`);
+  if (upserted < fixtures.length) {
+    console.warn(`[plan] ⚠ ${fixtures.length - upserted} fixture(s) have NO match row — ` +
+                 `they are excluded from the plan so ingestOdds never sees an ` +
+                 `unresolvable id`);
+  }
+  return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -362,21 +374,26 @@ async function main() {
     process.exit(1);
   }
 
-  const plan = calcPlan(fixtures, today);
-
   if (DRY_RUN) {
-    console.log('\n[plan] dry-run — would save:', JSON.stringify(plan, null, 2));
+    console.log('\n[plan] dry-run — would save:',
+                JSON.stringify(calcPlan(fixtures, today), null, 2));
     return;
   }
 
   const supabase = getSupabase();
 
-  // Upsert match records with real team names so ingestOdds can link odds correctly
+  // Upsert match records with real team names so ingestOdds can link odds
+  // correctly. This runs BEFORE calcPlan so the plan can be restricted to
+  // fixtures that actually have a match row — see the note in upsertMatches.
+  let planned = fixtures;
   try {
-    await upsertMatches(supabase, fixtures);
+    const ok = await upsertMatches(supabase, fixtures);
+    if (ok instanceof Set) planned = fixtures.filter(f => ok.has(f.fixture.id));
   } catch (err) {
     console.warn(`[plan] upsertMatches failed: ${err.message}`);
   }
+
+  const plan = calcPlan(planned, today);
   try {
     await savePlan(supabase, plan);
   } catch (err) {
