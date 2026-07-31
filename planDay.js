@@ -243,8 +243,7 @@ function calcPlan(fixtures, today) {
 
   console.log(`[plan] ${today} (+${DAYS_AHEAD - 1} days ahead)`);
   console.log(`  fixtures:       ${fixtureIds.length} across ${DAYS_AHEAD} days (ids: ${fixtureIds.join(', ')})`);
-  console.log(`  budget:         ${DAILY_BUDGET} req/day − ${plannerCost} planner = ${runBudget} for runs`);
-  console.log(`  cost/run:       ${costPerRun} req (1 per fixture)`);
+  console.log(`  daily budget:   ${DAILY_BUDGET} req/day − ${plannerCost} planner reserved`);
   console.log(`  available runs: ${availableRuns}`);
   console.log(`  active window:  ${ACTIVE_START_HOUR}:00–${ACTIVE_END_HOUR === 24 ? '00:00+1' : ACTIVE_END_HOUR + ':00'} UTC (${activeMinutes} min)`);
   console.log(`  interval:       every ${intervalMins} min`);
