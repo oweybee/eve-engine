@@ -89,21 +89,38 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // (only a handful of games ever priced). We (a) restrict to the freshness
   // window the consensus uses anyway, cutting volume sharply, and (b) page
   // through in 1000-row chunks so every match's odds are returned.
+  //
+  // matchIds itself must also be chunked: it's interpolated into the request as
+  // a PostgREST `.in(match_id, (id1,id2,...))` filter, and once enough
+  // competitions are tracked (e.g. adding the Europa League on top of the
+  // Champions/Conference League fixture pool) the scheduled-match count can
+  // grow large enough that the generated URL trips the proxy's request-size
+  // limit, failing the whole cycle with a bare 400 "Bad Request" — distinct
+  // from the per-request row cap above, which PostgREST truncates silently
+  // instead of rejecting.
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
+  const MATCH_ID_CHUNK = 200;
+  const matchIdChunks = [];
+  for (let i = 0; i < matchIds.length; i += MATCH_ID_CHUNK) {
+    matchIdChunks.push(matchIds.slice(i, i + MATCH_ID_CHUNK));
+  }
+
   const oddsData = [];
   const ODDS_PAGE = 1000;
-  for (let from = 0; ; from += ODDS_PAGE) {
-    const { data, error: oddsError } = await supabase
-      .from('odds')
-      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', matchIds)
-      .gte('fetched_at', freshCutoff)
-      .order('id', { ascending: true })
-      .range(from, from + ODDS_PAGE - 1);
-    if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
-    if (!data?.length) break;
-    oddsData.push(...data);
-    if (data.length < ODDS_PAGE) break;
+  for (const idChunk of matchIdChunks) {
+    for (let from = 0; ; from += ODDS_PAGE) {
+      const { data, error: oddsError } = await supabase
+        .from('odds')
+        .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
+        .in('match_id', idChunk)
+        .gte('fetched_at', freshCutoff)
+        .order('id', { ascending: true })
+        .range(from, from + ODDS_PAGE - 1);
+      if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
+      if (!data?.length) break;
+      oddsData.push(...data);
+      if (data.length < ODDS_PAGE) break;
+    }
   }
 
   const oddsByMatch = {};
