@@ -28,6 +28,16 @@ const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5',    
 const USE_UNIFORM_ALPHA   = (process.env.USE_UNIFORM_ALPHA || '').toLowerCase() === 'true';
 const ODDS_MAX_AGE_HOURS  = parseFloat(process.env.ODDS_MAX_AGE_HOURS || '24');
 
+// How far out a 'scheduled' match still counts as computable. Without this bound,
+// fetchMatchesForComputation pulled every scheduled match in the table (9,667+,
+// spanning over a year ahead) into a single `.in('match_id', matchIds)` odds
+// query — the resulting URL exceeded PostgREST's request-size limit and every
+// call failed with a 400 ("fetchMatchesForComputation[odds]: Bad Request").
+// Matches this far out are never plan-gated for odds ingestion anyway (see
+// planDay.js DAYS_AHEAD), so they never have odds rows to compute against.
+const MATCH_LOOKAHEAD_DAYS = parseFloat(process.env.MATCH_LOOKAHEAD_DAYS || '4');
+const MATCH_LOOKBACK_HOURS = parseFloat(process.env.MATCH_LOOKBACK_HOURS || '6');
+
 const ALPHA_HOME    = parseFloat(process.env.ALPHA_HOME    || '0.034');
 const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
 const ALPHA_AWAY    = parseFloat(process.env.ALPHA_AWAY    || '0.037');
@@ -67,6 +77,9 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  const lookback  = new Date(Date.now() - MATCH_LOOKBACK_HOURS * 3_600_000).toISOString();
+  const lookahead = new Date(Date.now() + MATCH_LOOKAHEAD_DAYS * 86_400_000).toISOString();
+
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -76,6 +89,8 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .gte('kickoff_at', lookback)
+    .lte('kickoff_at', lookahead)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
