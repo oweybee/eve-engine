@@ -97,8 +97,10 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // that size blows past the URL length limit — PostgREST/the CDN in front of
   // it rejects the whole request with a bare "Bad Request" (no useful detail).
   // Chunk the IN-list itself, not just the output page, so list size scales
-  // with the input regardless of how many scheduled matches exist.
-  const MATCH_ID_CHUNK = 300;
+  // with the input regardless of how many scheduled matches exist. 150 UUIDs
+  // (~5.5KB of ids alone) stays well clear of the ~8KB request-line limit
+  // common to default nginx/CDN configs in front of PostgREST.
+  const MATCH_ID_CHUNK = 150;
   for (let c = 0; c < matchIds.length; c += MATCH_ID_CHUNK) {
     const idChunk = matchIds.slice(c, c + MATCH_ID_CHUNK);
     for (let from = 0; ; from += ODDS_PAGE) {
