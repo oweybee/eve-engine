@@ -90,11 +90,19 @@ function supermodelEdge(p, bestOdds) {
 // Skip re-signal if same odds seen within this window (avoid spam)
 const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
+// How far ahead a "scheduled" match still counts as pre-match business for this
+// engine. The `matches` table now holds a whole season backfilled ahead of time
+// (kickoffs up to a year out), so an unbounded scan of every 'scheduled' row
+// pulled thousands of un-priced matches into the odds .in(matchIds) lookup below
+// and blew past PostgREST's request-size limit on every run.
+const COMPUTE_HORIZON_HOURS = parseFloat(process.env.COMPUTE_HORIZON_HOURS || '168');
+
 async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // Pre-match engine: scheduled only. In-play matches are handled by
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  const horizonCutoff = new Date(Date.now() + COMPUTE_HORIZON_HOURS * 3_600_000).toISOString();
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -104,6 +112,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .lte('kickoff_at', horizonCutoff)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
