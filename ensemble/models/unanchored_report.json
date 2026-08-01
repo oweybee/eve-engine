@@ -1,0 +1,81 @@
+{
+  "rows": [
+    {
+      "model": "Market (opening)",
+      "ece": 0.0077,
+      "log_loss": 0.5852,
+      "bets": 47608,
+      "roi_pct": -2.85,
+      "win_pct": 25.7,
+      "mean_clv_pp": 4.09
+    },
+    {
+      "model": "Anchored \u03bb",
+      "ece": 0.006,
+      "log_loss": 0.5854,
+      "bets": 48460,
+      "roi_pct": -1.34,
+      "win_pct": 31.0,
+      "mean_clv_pp": 3.7
+    },
+    {
+      "model": "Unanchored \u03bb",
+      "ece": 0.004,
+      "log_loss": 0.5925,
+      "bets": 60239,
+      "roi_pct": -3.14,
+      "win_pct": 28.6,
+      "mean_clv_pp": 3.71
+    }
+  ],
+  "n_test": 52718,
+  "features_anchored": [
+    "m_home",
+    "m_draw",
+    "m_away",
+    "elo_home",
+    "elo_away",
+    "elo_diff",
+    "h_gf",
+    "h_ga",
+    "a_gf",
+    "a_ga",
+    "h_xg",
+    "a_xg",
+    "has_xg",
+    "lg_home_gf",
+    "lg_away_gf",
+    "lg_draw",
+    "sv_home",
+    "sv_away",
+    "sv_diff",
+    "sv_has"
+  ],
+  "features_unanchored": [
+    "elo_home",
+    "elo_away",
+    "elo_diff",
+    "h_gf",
+    "h_ga",
+    "a_gf",
+    "a_ga",
+    "h_xg",
+    "a_xg",
+    "has_xg",
+    "lg_home_gf",
+    "lg_away_gf",
+    "lg_draw",
+    "sv_home",
+    "sv_away",
+    "sv_diff",
+    "sv_has"
+  ],
+  "disagreement_vs_anchored_pp": {
+    "mean": 3.5808879810574736,
+    "p90": 8.536528154114512
+  },
+  "disagreement_vs_market_pp": {
+    "mean": 3.7159008350806095,
+    "p90": 8.584788670267518
+  }
+}
