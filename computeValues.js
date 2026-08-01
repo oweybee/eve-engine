@@ -109,14 +109,17 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
   if (!matchData?.length) return [];
 
-  const matchIds = matchData.map(m => m.id);
-
   // Fetch odds paginated. `odds` is a snapshot history (thousands of rows across
   // the slate), and a plain .in() is capped at 1000 rows by PostgREST — which
   // silently truncated the result so most matches got ZERO odds and were skipped
-  // (only a handful of games ever priced). We (a) restrict to the freshness
-  // window the consensus uses anyway, cutting volume sharply, and (b) page
-  // through in 1000-row chunks so every match's odds are returned.
+  // (only a handful of games ever priced). We restrict to the freshness window
+  // the consensus uses anyway (which also keeps the result small — only a
+  // couple hundred matches ever have odds this fresh, out of thousands of
+  // scheduled fixtures), page through in 1000-row chunks, and join to matchData
+  // by id afterward. Do NOT add an .in('match_id', matchData.map(...)) filter
+  // here — matchData now covers the full future schedule (thousands of rows),
+  // and embedding all of those ids blows the request past PostgREST's URL
+  // length limit (400 Bad Request).
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const oddsData = [];
   const ODDS_PAGE = 1000;
@@ -124,7 +127,6 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
     const { data, error: oddsError } = await supabase
       .from('odds')
       .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', matchIds)
       .gte('fetched_at', freshCutoff)
       .order('id', { ascending: true })
       .range(from, from + ODDS_PAGE - 1);

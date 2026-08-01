@@ -57,12 +57,16 @@ async function fetchMatchesForApiComputation(supabase) {
   if (matchError) throw new Error(`fetchMatchesForApiComputation[matches]: ${matchError.message}`);
   if (!matchData?.length) return [];
 
-  const matchIds    = matchData.map(m => m.id);
-  const externalIds = matchData.map(m => m.external_id).filter(Boolean);
-
   // Odds is a snapshot history — a plain .in() is capped at 1000 rows by
   // PostgREST and silently truncated the slate so most matches got no odds.
-  // Restrict to the freshness window and page through in 1000-row chunks.
+  // Restrict to the freshness window and page through in 1000-row chunks, then
+  // join to matchData by id afterward. Do NOT filter by .in('match_id', ...)
+  // here — matchData covers the full future schedule (thousands of rows), and
+  // embedding all of those ids blows the request past PostgREST's URL length
+  // limit (400 Bad Request). Same reasoning for match_predictions below, though
+  // that table is small enough (low hundreds of rows) that it's a non-issue in
+  // practice — left unfiltered rather than reintroducing an id list that could
+  // grow into the same trap.
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const fetchAllOdds = async () => {
     const rows = [];
@@ -71,7 +75,6 @@ async function fetchMatchesForApiComputation(supabase) {
       const { data, error } = await supabase
         .from('odds')
         .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
-        .in('match_id', matchIds)
         .gte('fetched_at', freshCutoff)
         .order('id', { ascending: true })
         .range(from, from + PAGE - 1);
@@ -87,8 +90,7 @@ async function fetchMatchesForApiComputation(supabase) {
     fetchAllOdds(),
     supabase
       .from('match_predictions')
-      .select('fixture_id, pct_home, pct_draw, pct_away, advice, winner_team')
-      .in('fixture_id', externalIds),
+      .select('fixture_id, pct_home, pct_draw, pct_away, advice, winner_team'),
   ]);
 
   if (predResult.error) throw new Error(`fetchMatchesForApiComputation[preds]: ${predResult.error.message}`);
