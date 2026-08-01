@@ -551,15 +551,23 @@ function summarisePhase(rows, { includeClv }) {
 }
 
 /**
- * Recompute BOTH performance rows from the settled history:
- *   singleton_key='current' phase='prematch' — the CLV-tracked headline
- *   singleton_key='inplay'  phase='inplay'    — yield/strike-rate, no CLV
- * Keeping them separate is what stops in-play picks from skewing CLV.
+ * Recompute the performance rows from the settled history:
+ *   singleton_key='current'    phase='prematch' — the CLV-tracked headline
+ *   singleton_key='inplay'     phase='inplay'   — yield/strike-rate, no CLV
+ *   singleton_key='supermodel' phase='prematch' — the learning model, alone
+ *
+ * Keeping them separate is what stops in-play picks from skewing CLV, and — as
+ * of 1 Aug — what stops the learning model from being scored inside a headline
+ * it has not earned. The supermodel began publishing value_signals on that date
+ * after months of driving nothing; folding an unproven forecast into the number
+ * the entire product's credibility rests on would corrupt the one figure a
+ * sceptic checks. It accrues its own record in public instead, and its trust
+ * weight rises on that evidence or not at all.
  */
 async function calculatePerformance(supabase) {
   const { data, error } = await supabase
     .from('value_signals')
-    .select('result, detected_odds, detected_edge, detected_mes, clv, phase, detected_at, match_id, market, market_line');
+    .select('result, detected_odds, detected_edge, detected_mes, clv, phase, detected_at, match_id, market, market_line, model_architecture');
   if (error) throw new Error(`calculatePerformance(select): ${error.message}`);
 
   const rows = data ?? [];
@@ -572,9 +580,14 @@ async function calculatePerformance(supabase) {
   // longshot picks stay visible on the site as a tool but must never distort the
   // tracked win-rate / yield / ROI. (see lib/signalTier)
   const epochMs = new Date(PERFORMANCE_EPOCH).getTime();
-  const primeRows = prematchRows.filter(r =>
+  const isPrimeSinceEpoch = r =>
     classifyTier({ odds: r.detected_odds, edge: r.detected_edge }).tier === 'prime' &&
-    r.detected_at != null && new Date(r.detected_at).getTime() >= epochMs);
+    r.detected_at != null && new Date(r.detected_at).getTime() >= epochMs;
+
+  // The learning model is scored on its own, never in the headline (see above).
+  const isSupermodel = r => r.model_architecture === 'SUPERMODEL';
+  const primeRows      = prematchRows.filter(r => isPrimeSinceEpoch(r) && !isSupermodel(r));
+  const supermodelRows = prematchRows.filter(r => isPrimeSinceEpoch(r) && isSupermodel(r));
 
   // Collapse mutually-exclusive picks (e.g. home + away on the same match) to a
   // single tracked bet so opposing signals can't wash out the numbers.
@@ -585,16 +598,19 @@ async function calculatePerformance(supabase) {
                      phase: 'prematch', singleton_key: 'current', calculated_at };
   const inplay   = { ...summarisePhase(inplayRows, { includeClv: false }),
                      phase: 'inplay', singleton_key: 'inplay', calculated_at };
+  const supermodel = { ...summarisePhase(dedupeConflicts(supermodelRows), { includeClv: true }),
+                       phase: 'prematch', singleton_key: 'supermodel', calculated_at };
 
   // P0-2 fix: upsert on singleton_key — one authoritative row per phase.
   const { error: insErr } = await supabase
     .from('performance_summary')
-    .upsert([prematch, inplay], { onConflict: 'singleton_key' });
+    .upsert([prematch, inplay, supermodel], { onConflict: 'singleton_key' });
   if (insErr) throw new Error(`calculatePerformance(upsert): ${insErr.message}`);
 
-  console.log('[performance] prematch', JSON.stringify(prematch));
-  console.log('[performance] inplay  ', JSON.stringify(inplay));
-  return { prematch, inplay };
+  console.log('[performance] prematch  ', JSON.stringify(prematch));
+  console.log('[performance] inplay    ', JSON.stringify(inplay));
+  console.log('[performance] supermodel', JSON.stringify(supermodel));
+  return { prematch, inplay, supermodel };
 }
 
 // ---------------------------------------------------------------------------
