@@ -62,11 +62,24 @@ const MAX_PLAUSIBLE_EDGE = parseFloat(process.env.MAX_PLAUSIBLE_EDGE || '0.30');
 // Skip re-signal if same odds seen within this window (avoid spam)
 const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
+// How far out a 'scheduled' match can be and still be worth pricing here.
+// season-backfilled fixtures (whole seasons, months out) also carry
+// status='scheduled', so without this bound matchIds ballooned to thousands of
+// rows and the follow-up `odds.in(match_id, matchIds)` request came back 400
+// Bad Request — no odds ever computed. LOOKBACK covers matches recently
+// kicked off (status can lag into 'live'); LOOKAHEAD covers the near-term
+// slate planDay actually schedules odds polling for.
+const MATCH_LOOKBACK_HOURS  = parseFloat(process.env.MATCH_LOOKBACK_HOURS  || '48');
+const MATCH_LOOKAHEAD_DAYS  = parseFloat(process.env.MATCH_LOOKAHEAD_DAYS  || '4');
+
 async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // Pre-match engine: scheduled only. In-play matches are handled by
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  const kickoffFrom = new Date(Date.now() - MATCH_LOOKBACK_HOURS * 3_600_000).toISOString();
+  const kickoffTo   = new Date(Date.now() + MATCH_LOOKAHEAD_DAYS * 86_400_000).toISOString();
+
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -76,6 +89,8 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .gte('kickoff_at', kickoffFrom)
+    .lte('kickoff_at', kickoffTo)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
