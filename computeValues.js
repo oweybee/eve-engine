@@ -92,18 +92,28 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const oddsData = [];
   const ODDS_PAGE = 1000;
-  for (let from = 0; ; from += ODDS_PAGE) {
-    const { data, error: oddsError } = await supabase
-      .from('odds')
-      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', matchIds)
-      .gte('fetched_at', freshCutoff)
-      .order('id', { ascending: true })
-      .range(from, from + ODDS_PAGE - 1);
-    if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
-    if (!data?.length) break;
-    oddsData.push(...data);
-    if (data.length < ODDS_PAGE) break;
+  // `.in('match_id', matchIds)` goes out as a GET query string. A full-season
+  // backfill can leave ~10k rows with status='scheduled', and a match_id list
+  // that size blows past the URL length limit — PostgREST/the CDN in front of
+  // it rejects the whole request with a bare "Bad Request" (no useful detail).
+  // Chunk the IN-list itself, not just the output page, so list size scales
+  // with the input regardless of how many scheduled matches exist.
+  const MATCH_ID_CHUNK = 300;
+  for (let c = 0; c < matchIds.length; c += MATCH_ID_CHUNK) {
+    const idChunk = matchIds.slice(c, c + MATCH_ID_CHUNK);
+    for (let from = 0; ; from += ODDS_PAGE) {
+      const { data, error: oddsError } = await supabase
+        .from('odds')
+        .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
+        .in('match_id', idChunk)
+        .gte('fetched_at', freshCutoff)
+        .order('id', { ascending: true })
+        .range(from, from + ODDS_PAGE - 1);
+      if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
+      if (!data?.length) break;
+      oddsData.push(...data);
+      if (data.length < ODDS_PAGE) break;
+    }
   }
 
   const oddsByMatch = {};
