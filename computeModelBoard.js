@@ -164,14 +164,17 @@ async function fetchFixtures(supabase) {
   if (error) throw new Error(`modelBoard[matches]: ${error.message}`);
   if (!matches?.length) return [];
 
-  const ids = matches.map(m => m.id);
+  // Do NOT filter by .in('match_id', matches.map(...)) here — `matches` covers
+  // the full future schedule (thousands of rows), and embedding all of those
+  // ids blows the request past PostgREST's URL length limit (400 Bad Request).
+  // The freshness filter below + the in-memory join a few lines down already
+  // narrow this to the couple hundred matches that actually have live odds.
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const odds = [];
   for (let from = 0; ; from += 1000) {
     const { data, error: e } = await supabase
       .from('odds')
       .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', ids)
       .gte('fetched_at', freshCutoff)
       .order('id', { ascending: true })
       .range(from, from + 999);
