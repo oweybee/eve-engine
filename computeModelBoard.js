@@ -164,14 +164,12 @@ async function fetchFixtures(supabase) {
   if (error) throw new Error(`modelBoard[matches]: ${error.message}`);
   if (!matches?.length) return [];
 
-  const ids = matches.map(m => m.id);
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const odds = [];
   for (let from = 0; ; from += 1000) {
     const { data, error: e } = await supabase
       .from('odds')
       .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', ids)
       .gte('fetched_at', freshCutoff)
       .order('id', { ascending: true })
       .range(from, from + 999);
