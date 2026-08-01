@@ -63,35 +63,53 @@ async function fetchMatchesForApiComputation(supabase) {
   // Odds is a snapshot history — a plain .in() is capped at 1000 rows by
   // PostgREST and silently truncated the slate so most matches got no odds.
   // Restrict to the freshness window and page through in 1000-row chunks.
+  //
+  // matchIds is also chunked before hitting .in(): the whole-season fixture
+  // backfill pushed status in ('scheduled','live') past 9,000 rows, and one
+  // .in() over every id serialises past PostgREST's request-line limit,
+  // returning 400 Bad Request for the whole call.
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
+  const MATCH_ID_CHUNK = 200;
   const fetchAllOdds = async () => {
     const rows = [];
     const PAGE = 1000;
-    for (let from = 0; ; from += PAGE) {
-      const { data, error } = await supabase
-        .from('odds')
-        .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
-        .in('match_id', matchIds)
-        .gte('fetched_at', freshCutoff)
-        .order('id', { ascending: true })
-        .range(from, from + PAGE - 1);
-      if (error) throw new Error(`fetchMatchesForApiComputation[odds]: ${error.message}`);
-      if (!data?.length) break;
-      rows.push(...data);
-      if (data.length < PAGE) break;
+    for (let mi = 0; mi < matchIds.length; mi += MATCH_ID_CHUNK) {
+      const idChunk = matchIds.slice(mi, mi + MATCH_ID_CHUNK);
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase
+          .from('odds')
+          .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
+          .in('match_id', idChunk)
+          .gte('fetched_at', freshCutoff)
+          .order('id', { ascending: true })
+          .range(from, from + PAGE - 1);
+        if (error) throw new Error(`fetchMatchesForApiComputation[odds]: ${error.message}`);
+        if (!data?.length) break;
+        rows.push(...data);
+        if (data.length < PAGE) break;
+      }
     }
     return rows;
   };
 
-  const [oddsData, predResult] = await Promise.all([
-    fetchAllOdds(),
-    supabase
-      .from('match_predictions')
-      .select('fixture_id, pct_home, pct_draw, pct_away, advice, winner_team')
-      .in('fixture_id', externalIds),
-  ]);
+  const fetchAllPredictions = async () => {
+    const rows = [];
+    for (let ei = 0; ei < externalIds.length; ei += MATCH_ID_CHUNK) {
+      const idChunk = externalIds.slice(ei, ei + MATCH_ID_CHUNK);
+      const { data, error } = await supabase
+        .from('match_predictions')
+        .select('fixture_id, pct_home, pct_draw, pct_away, advice, winner_team')
+        .in('fixture_id', idChunk);
+      if (error) throw new Error(`fetchMatchesForApiComputation[preds]: ${error.message}`);
+      rows.push(...(data ?? []));
+    }
+    return rows;
+  };
 
-  if (predResult.error) throw new Error(`fetchMatchesForApiComputation[preds]: ${predResult.error.message}`);
+  const [oddsData, predictions] = await Promise.all([
+    fetchAllOdds(),
+    fetchAllPredictions(),
+  ]);
 
   const oddsByMatch = {};
   for (const o of oddsData) {
@@ -100,7 +118,7 @@ async function fetchMatchesForApiComputation(supabase) {
   }
 
   const predByExternal = {};
-  for (const p of (predResult.data ?? [])) {
+  for (const p of predictions) {
     predByExternal[p.fixture_id] = p;
   }
 
