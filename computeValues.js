@@ -27,6 +27,7 @@ const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '2',    
 const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5',    10);
 const USE_UNIFORM_ALPHA   = (process.env.USE_UNIFORM_ALPHA || '').toLowerCase() === 'true';
 const ODDS_MAX_AGE_HOURS  = parseFloat(process.env.ODDS_MAX_AGE_HOURS || '24');
+const COMPUTE_HORIZON_DAYS = parseFloat(process.env.COMPUTE_HORIZON_DAYS || '4');
 
 const ALPHA_HOME    = parseFloat(process.env.ALPHA_HOME    || '0.034');
 const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
@@ -95,6 +96,14 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  // 'scheduled' now covers the whole-season fixture backfill (thousands of
+  // rows), not just the near-term slate — an unbounded fetch here turns into
+  // an oversized matchIds list below, and the odds .in() filter built from it
+  // comes back "Bad Request". Only matches within the compute horizon can have
+  // fresh odds anyway (ingestOdds.js is plan-gated to DAYS_AHEAD), so bound to
+  // that window.
+  const horizonCutoff = new Date(Date.now() + COMPUTE_HORIZON_DAYS * 86_400_000).toISOString();
+
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -104,6 +113,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .lte('kickoff_at', horizonCutoff)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
