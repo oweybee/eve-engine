@@ -90,11 +90,24 @@ function supermodelEdge(p, bestOdds) {
 // Skip re-signal if same odds seen within this window (avoid spam)
 const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
+// How far the pipeline actually plans/prices fixtures (planDay's DAYS_AHEAD),
+// plus margin, and how far back a 'live' match could have kicked off. Bounds
+// `matches` by kickoff_at so a season-long backlog of `status='scheduled'`
+// rows (e.g. from a full-season backfill) can't blow the row count past what
+// a single .in(match_id, ...) request against `odds` can carry — an
+// unbounded fetch here previously sent thousands of match ids on one
+// PostgREST GET and the request line was rejected outright (400 Bad Request),
+// taking down every compute cycle.
+const MATCH_LOOKAHEAD_DAYS  = parseFloat(process.env.MATCH_LOOKAHEAD_DAYS  || '10');
+const MATCH_LOOKBACK_HOURS  = parseFloat(process.env.MATCH_LOOKBACK_HOURS || '6');
+
 async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // Pre-match engine: scheduled only. In-play matches are handled by
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  const lookbackCutoff  = new Date(Date.now() - MATCH_LOOKBACK_HOURS * 3_600_000).toISOString();
+  const lookaheadCutoff = new Date(Date.now() + MATCH_LOOKAHEAD_DAYS * 86_400_000).toISOString();
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -104,6 +117,8 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .gte('kickoff_at', lookbackCutoff)
+    .lte('kickoff_at', lookaheadCutoff)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
@@ -117,21 +132,33 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // (only a handful of games ever priced). We (a) restrict to the freshness
   // window the consensus uses anyway, cutting volume sharply, and (b) page
   // through in 1000-row chunks so every match's odds are returned.
+  //
+  // matchIds also has to go out as a literal `.in('match_id', [...])` list on
+  // the request line, so it's chunked too — the kickoff_at bound above keeps
+  // this small in practice (hundreds, not the thousands a season backfill can
+  // put in `matches`), but chunking removes the dependency on that tuning: an
+  // unbounded id list here is what previously blew the request past the
+  // gateway's line-length limit and turned into a flat 400 Bad Request that
+  // took down every compute cycle, not just truncated results.
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const oddsData = [];
   const ODDS_PAGE = 1000;
-  for (let from = 0; ; from += ODDS_PAGE) {
-    const { data, error: oddsError } = await supabase
-      .from('odds')
-      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', matchIds)
-      .gte('fetched_at', freshCutoff)
-      .order('id', { ascending: true })
-      .range(from, from + ODDS_PAGE - 1);
-    if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
-    if (!data?.length) break;
-    oddsData.push(...data);
-    if (data.length < ODDS_PAGE) break;
+  const MATCH_ID_CHUNK = 150;
+  for (let c = 0; c < matchIds.length; c += MATCH_ID_CHUNK) {
+    const idChunk = matchIds.slice(c, c + MATCH_ID_CHUNK);
+    for (let from = 0; ; from += ODDS_PAGE) {
+      const { data, error: oddsError } = await supabase
+        .from('odds')
+        .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
+        .in('match_id', idChunk)
+        .gte('fetched_at', freshCutoff)
+        .order('id', { ascending: true })
+        .range(from, from + ODDS_PAGE - 1);
+      if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
+      if (!data?.length) break;
+      oddsData.push(...data);
+      if (data.length < ODDS_PAGE) break;
+    }
   }
 
   const oddsByMatch = {};
