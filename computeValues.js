@@ -28,6 +28,15 @@ const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5',    
 const USE_UNIFORM_ALPHA   = (process.env.USE_UNIFORM_ALPHA || '').toLowerCase() === 'true';
 const ODDS_MAX_AGE_HOURS  = parseFloat(process.env.ODDS_MAX_AGE_HOURS || '24');
 
+// Upper bound on how far ahead a 'scheduled' match can be to enter computation.
+// The whole-season backfill (#59/#60) populated `matches` with thousands of
+// scheduled rows months out; an unbounded status filter pulled all of them into
+// the subsequent `.in('match_id', matchIds)` odds query and blew past
+// PostgREST's URL length limit ("Bad Request"). A kickoff already in the past
+// (live matches slipping in via the ['scheduled','live'] caller) always passes
+// this bound trivially, so it only trims the far-future backlog.
+const COMPUTE_MATCH_WINDOW_HOURS = parseFloat(process.env.COMPUTE_MATCH_WINDOW_HOURS || '96');
+
 const ALPHA_HOME    = parseFloat(process.env.ALPHA_HOME    || '0.034');
 const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
 const ALPHA_AWAY    = parseFloat(process.env.ALPHA_AWAY    || '0.037');
@@ -67,6 +76,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  const windowCutoff = new Date(Date.now() + COMPUTE_MATCH_WINDOW_HOURS * 3_600_000).toISOString();
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -76,6 +86,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .lte('kickoff_at', windowCutoff)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
