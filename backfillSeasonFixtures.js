@@ -236,9 +236,12 @@ async function main() {
       if (DRY) continue;
       // Two calls, not one: bulk upserts need uniform keys per batch, and only
       // finished fixtures carry the scoreline columns.
+      // upsertMatches now returns the SET of external_ids that landed (so planDay
+      // can exclude the rest from its plan); size is the count either way.
+      const sizeOf = r => (r instanceof Set ? r.size : (r ?? 0));
       const pending = tagged.filter(f => !outcomeOf(f));
-      totalUpserted += (await upsertMatches(supabase, pending)) ?? 0;
-      const nFinished = (await upsertMatches(supabase, finished, { extraCols: resultCols })) ?? 0;
+      totalUpserted += sizeOf(await upsertMatches(supabase, pending));
+      const nFinished = sizeOf(await upsertMatches(supabase, finished, { extraCols: resultCols }));
       totalUpserted += nFinished;
       totalResults  += nFinished;
     }

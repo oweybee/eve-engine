@@ -411,44 +411,6 @@ function makeShortName(name) {
   return overrides[name] ?? (name.length > 14 ? name.split(' ').slice(0, 2).join(' ') : name);
 }
 
-async function upsertLeague(supabase, name, country) {
-  // League identity is (name, country) — names collide across countries
-  // (migration 044), and 'name' alone is no longer a unique constraint.
-  const { data, error } = await supabase
-    .from('leagues')
-    .upsert({ name, country }, { onConflict: 'name,country' })
-    .select('id').single();
-  if (error) throw new Error(`upsertLeague: ${error.message}`);
-  return data.id;
-}
-
-async function upsertTeam(supabase, name) {
-  const { data, error } = await supabase
-    .from('teams')
-    .upsert({ name, short_name: makeShortName(name) }, { onConflict: 'name' })
-    .select('id').single();
-  if (error) throw new Error(`upsertTeam: ${error.message}`);
-  return data.id;
-}
-
-async function upsertMatch(supabase, { externalId, homeTeamId, awayTeamId, leagueId, kickoffAt }) {
-  const { data, error } = await supabase
-    .from('matches')
-    .upsert(
-      {
-        external_id:  externalId,
-        home_team_id: homeTeamId,
-        away_team_id: awayTeamId,
-        league_id:    leagueId,
-        kickoff_at:   kickoffAt,
-        status:       'scheduled',
-      },
-      { onConflict: 'external_id' },
-    )
-    .select('id').single();
-  if (error) throw new Error(`upsertMatch: ${error.message}`);
-  return data.id;
-}
 
 // ---------------------------------------------------------------------------
 // Main
@@ -527,9 +489,8 @@ async function ingest() {
   console.log(`[ingest] prefetch: ${fixtureToMatchId.size}/${externalIds.length} matches in DB, ${lastOddsMap.size} last-odds entries loaded`);
 
   // Cache the league DB id so we only upsert it once per run.
-  let cachedLeagueId = null;
 
-  const summary = { fixtures: dueIds.length, oddsInserted: 0, errors: 0 };
+  const summary = { fixtures: dueIds.length, oddsInserted: 0, unresolved: 0, errors: 0 };
 
   // ── Phase 1: fetch every fixture's odds in parallel (bounded) ──────────────
   // Was a serial fetch + sleep(200) between fixtures, so the network round-trips
@@ -550,8 +511,8 @@ async function ingest() {
     FETCH_CONCURRENCY,
   );
 
-  // ── Phase 2: process results SERIALLY — the shared match/odds Maps and
-  // cachedLeagueId are mutated here, so this must not run concurrently.
+  // ── Phase 2: process results SERIALLY — the shared match/odds Maps are
+  // mutated here, so this must not run concurrently.
   for (const { fixtureId, bookmakers } of fetched) {
     try {
       if (bookmakers === null) continue; // fetch already failed and was counted
@@ -574,23 +535,37 @@ async function ingest() {
         continue;
       }
 
-      // Resolve match UUID — use pre-fetched Map, create on-demand if missing
-      let matchId = fixtureToMatchId.get(extIdStr);
-      if (!matchId && !DRY_RUN) {
-        if (!cachedLeagueId) {
-          cachedLeagueId = await upsertLeague(supabase, 'FIFA World Cup', 'International');
-        }
-        const homeTeamId = await upsertTeam(supabase, `team_home_${fixtureId}`);
-        const awayTeamId = await upsertTeam(supabase, `team_away_${fixtureId}`);
-        matchId = await upsertMatch(supabase, {
-          externalId:  extIdStr,
-          homeTeamId,
-          awayTeamId,
-          leagueId:    cachedLeagueId,
-          kickoffAt:   null,
-        });
-        fixtureToMatchId.set(extIdStr, matchId);
-        console.log(`  [match] created placeholder match for fixture ${fixtureId} → ${matchId}`);
+      // Resolve match UUID from the pre-fetched Map.
+      //
+      // We used to MINT a placeholder here when the id didn't resolve — a
+      // hardcoded 'FIFA World Cup' league, `team_home_<id>` names and a null
+      // kickoff. That made sense when the engine only covered the World Cup and
+      // odds could legitimately arrive before the fixture row. It is actively
+      // destructive now:
+      //
+      //   • the placeholder is keyed on the REAL external_id, so the next run
+      //     resolves to it and the row never self-heals — odds pile onto a fake
+      //     match indefinitely;
+      //   • every downstream model is starved. computeModelBoard's mapLeague()
+      //     has no pattern for 'FIFA World Cup', and `team_home_1490361` matches
+      //     no club in the λ bundle, so the fixture is skipped twice over;
+      //   • a null kickoff_at reads as the 1970 epoch, i.e. permanently
+      //     "past kickoff", which silently drops the fixture from the board.
+      //
+      // On 2026-07-30 this minted 111 placeholders in a single day and they
+      // absorbed every odds row the pipeline fetched.
+      //
+      // An unresolvable id now means planDay failed to create the match (its
+      // upsertMatches `continue`s on a failed team/league upsert while still
+      // listing the id in the plan). The honest response is to skip it loudly so
+      // the gap is visible, and let planDay/backfillSeasonFixtures create the row
+      // properly on their next pass.
+      const matchId = fixtureToMatchId.get(extIdStr);
+      if (!matchId) {
+        summary.unresolved++;
+        console.log(`  [skip] fixture ${fixtureId} — no match row (planDay has not ` +
+                    `created it); not minting a placeholder`);
+        continue;
       }
 
       // Insert rows where prices have moved — O(1) Map lookup per row
