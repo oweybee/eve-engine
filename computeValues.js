@@ -27,6 +27,12 @@ const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '2',    
 const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5',    10);
 const USE_UNIFORM_ALPHA   = (process.env.USE_UNIFORM_ALPHA || '').toLowerCase() === 'true';
 const ODDS_MAX_AGE_HOURS  = parseFloat(process.env.ODDS_MAX_AGE_HOURS || '24');
+// Matches this far beyond kickoff are out of scope for pre-match/in-play value
+// detection. Without this bound, fetchMatchesForComputation() pulls in every
+// status='scheduled' row — including a full season backfilled months out —
+// and the follow-up .in('match_id', matchIds) odds query grows to thousands of
+// UUIDs, blowing past PostgREST's URL length limit (400 Bad Request) on every run.
+const MATCH_WINDOW_DAYS   = parseFloat(process.env.MATCH_WINDOW_DAYS   || '4');
 
 const ALPHA_HOME    = parseFloat(process.env.ALPHA_HOME    || '0.034');
 const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
@@ -67,6 +73,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  const windowEnd = new Date(Date.now() + MATCH_WINDOW_DAYS * 86_400_000).toISOString();
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -76,6 +83,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .lte('kickoff_at', windowEnd)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
