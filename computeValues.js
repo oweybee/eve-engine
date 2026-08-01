@@ -59,6 +59,34 @@ const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD || '0.005');
 // MAX_PLAUSIBLE_EDGE: above this, drop the edge rather than publish value.
 const MAX_PLAUSIBLE_EDGE = parseFloat(process.env.MAX_PLAUSIBLE_EDGE || '0.30');
 
+// The learning model speaks at a HIGHER bar than the consensus. The consensus is
+// market-anchored — it is the market disagreeing with itself, so a 0.5% edge is
+// still information. A forecast has no such anchor: a thin gap is far more
+// likely to be model noise than a mispriced market, so the supermodel only
+// publishes where it disagrees by an amount worth acting on.
+const SUPERMODEL_EV_THRESHOLD = parseFloat(process.env.SUPERMODEL_EV_THRESHOLD || '0.03');
+
+/**
+ * Should the learning model publish a signal on this outcome, and at what edge?
+ *
+ * Pulled out as a pure function because it is the whole editorial policy for a
+ * model that had never spoken before: it decides what an unproven forecast is
+ * allowed to claim. Returns { edge, publish, reason } — `reason` is why it
+ * stayed quiet, which is the interesting case.
+ */
+function supermodelEdge(p, bestOdds) {
+  const odds = parseFloat(bestOdds);
+  if (!Number.isFinite(odds) || odds <= 1) return { edge: null, publish: false, reason: 'no price' };
+  if (!Number.isFinite(p) || p <= 0 || p > 1) return { edge: null, publish: false, reason: 'no probability' };
+
+  const edge = parseFloat((p * odds - 1).toFixed(6));
+  // Below the bar the model is not disagreeing, it is rounding.
+  if (edge < SUPERMODEL_EV_THRESHOLD) return { edge, publish: false, reason: 'below threshold' };
+  // Above the cap it is not value, it is an out-of-distribution input.
+  if (edge > MAX_PLAUSIBLE_EDGE) return { edge, publish: false, reason: 'implausible' };
+  return { edge, publish: true, reason: null };
+}
+
 // Skip re-signal if same odds seen within this window (avoid spam)
 const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
@@ -332,22 +360,34 @@ async function upsertComputedValues(supabase, rows) {
   if (error) throw new Error(`upsertComputedValues: ${error.message}`);
 }
 
-async function insertValueSignals(supabase, rows, phase = 'prematch') {
+/**
+ * @param architecture which model these signals are attributed to. The consensus
+ *   path passes the default; the learning model passes 'SUPERMODEL' with its own
+ *   edge fields, because a signal has to say WHICH machine made its claim — the
+ *   frontend buckets market-vs-market against model-vs-market on exactly this.
+ * @param fields  per-outcome column names, so the supermodel can supply its own
+ *   edge/value columns without pretending to be the consensus.
+ */
+async function insertValueSignals(
+  supabase, rows, phase = 'prematch',
+  architecture = 'MARKET_CONSENSUS',
+  fields = { edge: o => `${o}_edge`, value: o => `${o}_value`, mes: 'max_edge_score' },
+) {
   const candidates = [];
 
   for (const row of rows) {
     for (const outcome of ['home', 'draw', 'away']) {
-      if (!row[`${outcome}_value`]) continue;
-      const edge = row[`${outcome}_edge`];
+      if (!row[fields.value(outcome)]) continue;
+      const edge = row[fields.edge(outcome)];
       candidates.push({
         match_id:           row.match_id,
         outcome,
         detected_odds:      row[`best_${outcome}_odds`],
         detected_edge:      edge,
-        detected_mes:       row.max_edge_score,
+        detected_mes:       row[fields.mes] ?? null,
         bookmaker:          row[`best_${outcome}_book`],
         kickoff_at:         row._kickoff_at ?? null,
-        model_architecture: 'MARKET_CONSENSUS',
+        model_architecture: architecture,
         phase,
         _edge:              edge,
         _odds:              row[`best_${outcome}_odds`],
@@ -366,6 +406,7 @@ async function insertValueSignals(supabase, rows, phase = 'prematch') {
   const { data: recent, error: selErr } = await supabase
     .from('value_signals')
     .select('match_id, outcome, detected_odds')
+    .eq('model_architecture', architecture)
     .in('match_id', matchIds)
     .gte('detected_at', dedupCutoff);
   if (selErr) throw new Error(`insertValueSignals(select): ${selErr.message}`);
@@ -619,6 +660,10 @@ async function main() {
   // gated by lib/halftimeFeatures.buildPrematchVector: it fills a row only where
   // the retrained supermodel is in distribution (known league incl. Allsvenskan/
   // MLS, warm ELO, real form) — otherwise the columns stay null, never guessed.
+  // Rows the learning model found a publishable edge on. A Set because one row
+  // can carry up to three outcomes and must only be handed over once.
+  const smCandidateRows = new Set();
+
   try {
     const infer = require('./ensemble/inference');
     if (infer.ensembleAvailable?.()) {
@@ -646,6 +691,36 @@ async function main() {
         r.row.ensemble_draw_prob = probs.draw;
         r.row.ensemble_away_prob = probs.away;
         filled++;
+
+        // ── The learning model now PUBLISHES ────────────────────────────────
+        // Until now these probabilities were written and never used: they drove
+        // no signal, no edge and no conviction, and reached the product only as
+        // a "model certainty" readout on the match page. The most sophisticated
+        // thing in the stack was decorative.
+        //
+        // It is priced exactly like every other model — EV against the best
+        // available price — and it is deliberately held to a HIGHER bar than the
+        // consensus (SUPERMODEL_EV_THRESHOLD, default 3% vs the consensus 0.5%).
+        // The consensus is market-anchored and can be trusted at thin margins; a
+        // forecast has no such anchor, so it only speaks when it disagrees with
+        // the market by an amount worth acting on. Its edges are capped by the
+        // same MAX_PLAUSIBLE_EDGE guard, and its signals carry their own
+        // architecture so the product can score them separately and never fold
+        // an unproven model into a headline it has not earned.
+        for (const outcome of ['home', 'draw', 'away']) {
+          const { edge, publish, reason } = supermodelEdge(probs[outcome], r.row[`best_${outcome}_odds`]);
+          if (reason === 'implausible') {
+            console.warn(
+              `[supermodel] dropped implausible edge ${(edge * 100).toFixed(0)}% on ${outcome} ` +
+              `(model ${(probs[outcome] * 100).toFixed(1)}% vs best ${r.row[`best_${outcome}_odds`]}) ` +
+              `— out-of-distribution input`
+            );
+          }
+          if (!publish) continue;
+          r.row[`_sm_${outcome}_edge`]  = edge;
+          r.row[`_sm_${outcome}_value`] = true;
+          smCandidateRows.add(r.row);
+        }
       }
       console.log(`[ensemble] pre-match model probs written for ${filled}/${live.length} match(es)`);
     }
@@ -657,6 +732,24 @@ async function main() {
 
   if (valueRows.length) {
     await insertValueSignals(supabase, valueRows);
+  }
+  if (smCandidateRows.size) {
+    try {
+      const n = await insertValueSignals(
+        supabase, [...smCandidateRows], 'prematch', 'SUPERMODEL',
+        // The learning model's own columns. detected_mes is null: MES is
+        // risk-adjusted and trust-weighted per architecture, and the frontend
+        // recomputes it — the engine's match-level score is the consensus's.
+        // Underscore-prefixed so upsertComputedValues strips them: these are
+        // transport between the two steps, not columns on computed_values.
+        { edge: o => `_sm_${o}_edge`, value: o => `_sm_${o}_value`, mes: '__none__' },
+      );
+      console.log(`[supermodel] published ${n} signal(s) from ${smCandidateRows.size} match(es)`);
+    } catch (err) {
+      console.error('[supermodel] signal insert failed (consensus unaffected):', err.message);
+    }
+  } else {
+    console.log('[supermodel] no publishable edges this cycle');
   }
   if (secondaryCandidates.length) {
     try { await insertSecondarySignals(supabase, secondaryCandidates); }
@@ -678,6 +771,7 @@ if (require.main === module) {
 // Exported so computeInplayValues.js can reuse the consensus core and the
 // signal-insert helpers (with phase='inplay') instead of duplicating them.
 module.exports = {
+  supermodelEdge,
   fetchMatchesForComputation,
   computeConsensus,
   computeMatch,
