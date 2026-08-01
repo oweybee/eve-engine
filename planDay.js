@@ -241,6 +241,15 @@ function calcPlan(fixtures, today) {
   const now = new Date();
   const nextRunAt = firstRun < now ? now : firstRun;
 
+  // Diagnostics only — the real schedule is budgetPlan above, which already
+  // reserved plannerCost. These two are the §15 formula's intermediate terms,
+  // logged so a run's budget arithmetic is auditable from the job output. They
+  // were referenced here without ever being declared, so every planDay run died
+  // with `runBudget is not defined` AFTER upserting fixtures but BEFORE writing
+  // the schedule — which silently took the whole ingest/compute pipeline down.
+  const runBudget  = DAILY_BUDGET - plannerCost;
+  const costPerRun = fixtureIds.length;   // one odds request per fixture
+
   console.log(`[plan] ${today} (+${DAYS_AHEAD - 1} days ahead)`);
   console.log(`  fixtures:       ${fixtureIds.length} across ${DAYS_AHEAD} days (ids: ${fixtureIds.join(', ')})`);
   console.log(`  budget:         ${DAILY_BUDGET} req/day − ${plannerCost} planner = ${runBudget} for runs`);
