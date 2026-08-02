@@ -27,6 +27,7 @@ const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '2',    
 const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5',    10);
 const USE_UNIFORM_ALPHA   = (process.env.USE_UNIFORM_ALPHA || '').toLowerCase() === 'true';
 const ODDS_MAX_AGE_HOURS  = parseFloat(process.env.ODDS_MAX_AGE_HOURS || '24');
+const MATCH_LOOKAHEAD_DAYS = parseFloat(process.env.MATCH_LOOKAHEAD_DAYS || '4');
 
 const ALPHA_HOME    = parseFloat(process.env.ALPHA_HOME    || '0.034');
 const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
@@ -95,6 +96,13 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  // Bound by kickoff_at: without this, every far-future fixture ever backfilled
+  // (season-long backfills run months ahead) stays status='scheduled' and rides
+  // along in matchIds below. That blew the .in('match_id', matchIds) odds query
+  // past PostgREST's URL limit (9,627 scheduled matches, only ~100 of them
+  // within the next few days) and made every compute run fail with a Bad
+  // Request. Pre-match value detection only ever needs the near-term slate.
+  const lookaheadCutoff = new Date(Date.now() + MATCH_LOOKAHEAD_DAYS * 86_400_000).toISOString();
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -104,6 +112,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .lte('kickoff_at', lookaheadCutoff)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
