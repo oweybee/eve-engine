@@ -95,6 +95,16 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  //
+  // Bounded to the near-term horizon: backfillSeasonFixtures.js now plants
+  // whole-season fixtures as 'scheduled' (9,600+ rows outstanding), and nothing
+  // that far out has odds yet — ingestOdds.js only ever prices what planDay.js
+  // put in the plan window. Without this bound matchIds below grows to every
+  // scheduled match in the DB, and the .in('match_id', matchIds) odds query
+  // built from it exceeds the request URL limit and comes back 400 Bad Request,
+  // failing every compute cycle outright.
+  const COMPUTE_HORIZON_DAYS = parseFloat(process.env.COMPUTE_HORIZON_DAYS || '10');
+  const horizonCutoff = new Date(Date.now() + COMPUTE_HORIZON_DAYS * 86_400_000).toISOString();
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -104,6 +114,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .lte('kickoff_at', horizonCutoff)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
