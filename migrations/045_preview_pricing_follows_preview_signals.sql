@@ -1,6 +1,11 @@
 -- 045_preview_pricing_follows_preview_signals.sql
 --
--- ⚠️  STAGED FOR REVIEW — NOT YET APPLIED TO PRODUCTION.  ⚠️
+-- APPLIED AND VERIFIED IN PRODUCTION, 2 Aug 2026. Verified as `anon`:
+--   before → 5 signals · 5 pricing rows ·  0 pricing rows for those signals
+--   after  → 5 signals · 15 pricing rows · 10 pricing rows for those signals
+--            (5 of 5 previewed signals now open their match detail)
+-- The paid boundary held: anon still reads 15 of 359 pricing rows, 5 of 337
+-- signals.
 --
 -- PROBLEM: the free preview is INCOHERENT, and it breaks every match link on
 -- /signals for free and anonymous visitors.
