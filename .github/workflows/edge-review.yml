@@ -64,9 +64,12 @@ jobs:
         shell: bash
         env:
           DAYS: ${{ inputs.days || '1' }}
-          # A manual dispatch that unticks `write` must not still write. The
-          # scheduled run has no inputs at all, so an empty value means write.
-          NO_WRITE: ${{ inputs.write == false && '--no-write' || '' }}
+          # Suppress the write ONLY on a manual dispatch that unticked the box.
+          # Testing `inputs.write == false` directly would break the scheduled
+          # run: on a schedule `inputs` is empty, and GitHub casts '' and false
+          # both to 0 when comparing across types — so the comparison is true
+          # and every nightly snapshot would be silently skipped.
+          NO_WRITE: ${{ (github.event_name == 'workflow_dispatch' && inputs.write != true) && '--no-write' || '' }}
         run: |
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           node edgeReview.js --days="$DAYS" $NO_WRITE | tee -a "$GITHUB_STEP_SUMMARY"
