@@ -90,11 +90,21 @@ function supermodelEdge(p, bestOdds) {
 // Skip re-signal if same odds seen within this window (avoid spam)
 const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
+// How far out a "scheduled" match is even worth pricing. Season-fixture backfills
+// (#59) put tens of thousands of scheduled rows kicking off a year out into
+// `matches`; those can't have odds yet (ingestOddsApi's own horizon is 72h), but
+// without this bound every one of them still landed in `matchIds` below, and a
+// ~9,700-id `.in()` filter is a URL far past what PostgREST/the gateway accepts —
+// the odds query 400'd on every single compute cycle. 7 days is a wide buffer
+// past the ingest horizon so no match that could plausibly have odds is dropped.
+const MATCH_HORIZON_HOURS = parseFloat(process.env.MATCH_HORIZON_HOURS || '168');
+
 async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // Pre-match engine: scheduled only. In-play matches are handled by
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  const horizonCutoff = new Date(Date.now() + MATCH_HORIZON_HOURS * 3_600_000).toISOString();
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -104,6 +114,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .lte('kickoff_at', horizonCutoff)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
