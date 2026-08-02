@@ -120,18 +120,29 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const oddsData = [];
   const ODDS_PAGE = 1000;
-  for (let from = 0; ; from += ODDS_PAGE) {
-    const { data, error: oddsError } = await supabase
-      .from('odds')
-      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', matchIds)
-      .gte('fetched_at', freshCutoff)
-      .order('id', { ascending: true })
-      .range(from, from + ODDS_PAGE - 1);
-    if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
-    if (!data?.length) break;
-    oddsData.push(...data);
-    if (data.length < ODDS_PAGE) break;
+  // `.in('match_id', matchIds)` inlines every id into the request's query string.
+  // That's fine for a normal slate, but the monthly fixture backfill can leave
+  // thousands of 'scheduled' rows in play at once (seen: 9645), and the encoded
+  // id list alone then exceeds the gateway's URL length limit — a 400 Bad
+  // Request that aborts computation entirely regardless of how far out those
+  // fixtures are. Chunk the id list so each request stays a safe size; this is
+  // independent of the odds row pagination below.
+  const ID_CHUNK = 200;
+  for (let i = 0; i < matchIds.length; i += ID_CHUNK) {
+    const idChunk = matchIds.slice(i, i + ID_CHUNK);
+    for (let from = 0; ; from += ODDS_PAGE) {
+      const { data, error: oddsError } = await supabase
+        .from('odds')
+        .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
+        .in('match_id', idChunk)
+        .gte('fetched_at', freshCutoff)
+        .order('id', { ascending: true })
+        .range(from, from + ODDS_PAGE - 1);
+      if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
+      if (!data?.length) break;
+      oddsData.push(...data);
+      if (data.length < ODDS_PAGE) break;
+    }
   }
 
   const oddsByMatch = {};
