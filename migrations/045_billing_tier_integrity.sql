@@ -1,9 +1,15 @@
 -- 045_billing_tier_integrity.sql
 --
--- ⚠️  STAGED FOR REVIEW — NOT YET APPLIED TO PRODUCTION.  ⚠️
---     Apply with the Supabase SQL editor / CLI. Verified by running the
---     statements below inside a transaction against production and rolling
---     back; see the verification block at the foot of this file.
+-- APPLIED to production 2026-08-02, and re-verified live afterwards (every
+-- check below run against production inside a transaction and rolled back):
+--   • service_role can write tier='plus'                        → succeeds
+--   • a plus user with an EXPIRED trial reads the full dataset  → 341 signals,
+--     37,592 predictions, 308 recommendations, 26 accas
+--   • a member self-granting tier='edge'                        → permission denied
+--   • a member extending their own trial_ends_at                → permission denied
+--   • naming tier in an INSERT at signup                        → permission denied
+--   • first sign-in inserting {id, email}                       → succeeds, lands on 'free'
+-- Profile rows were unchanged by the verification (2 'edge', 10 'free').
 --
 -- PROBLEM 1 (Critical — paid upgrades cannot be granted). The two-tier collapse
 -- to free/plus happened in the frontend only. The database still carries the
