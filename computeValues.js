@@ -90,11 +90,28 @@ function supermodelEdge(p, bestOdds) {
 // Skip re-signal if same odds seen within this window (avoid spam)
 const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
+// Bounds how far out (and how far back) a 'scheduled'/'live' match can be and
+// still be pulled into computation. backfillSeasonFixtures.js (added for the
+// Odds API monthly pacer) loads WHOLE SEASONS of fixtures into `matches` as
+// status='scheduled' — tens of thousands of rows, most of them months away.
+// Without this window, matchIds here balloons to the entire backfilled season,
+// and the paginated odds query below builds a `.in('match_id', matchIds)` filter
+// over all of them — a URL far past PostgREST/Supabase's request-size limit,
+// which fails every call with a flat "Bad Request" and silently kills the whole
+// pipeline (no odds, no compute, nothing). Real pre-match candidates only ever
+// come from planDay's DAYS_AHEAD-bounded plan, so this window is generous
+// without being unbounded.
+const MATCH_WINDOW_DAYS_AHEAD = parseFloat(process.env.MATCH_WINDOW_DAYS_AHEAD || '10');
+const MATCH_WINDOW_DAYS_BACK  = parseFloat(process.env.MATCH_WINDOW_DAYS_BACK  || '2');
+
 async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // Pre-match engine: scheduled only. In-play matches are handled by
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  const windowStart = new Date(Date.now() - MATCH_WINDOW_DAYS_BACK  * 86_400_000).toISOString();
+  const windowEnd   = new Date(Date.now() + MATCH_WINDOW_DAYS_AHEAD * 86_400_000).toISOString();
+
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -104,6 +121,8 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .gte('kickoff_at', windowStart)
+    .lte('kickoff_at', windowEnd)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
