@@ -1,0 +1,73 @@
+# ───────────────────────────────────────────────────────────────────────
+# MaxEdge EVE — Daily Edge Review
+#
+# Re-derives the profitable edge band from the settled book and compares it
+# against the PRIME box hard-coded in lib/signalTier.js. The box came from a
+# single Jun 15 – Jul 3 back-test and has never been re-checked on results it
+# was not fitted to; this job does that check every morning and records the
+# answer to edge_calibration so the DRIFT is visible, not just today's number.
+#
+# It never edits a threshold. The output is the evidence for a human edit.
+#
+# Runs at 08:15 UTC — after the overnight fixtures have been settled by
+# fetchResults.js (which runs on every 5-minute engine tick) and after the
+# 08:03 telemetry job, so the two do not contend.
+# ───────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Daily Edge Review
+
+on:
+  schedule:
+    - cron: '15 8 * * *'
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Settled-results window to list, in days'
+        type: string
+        default: '1'
+      write:
+        description: 'Persist the snapshot row to edge_calibration'
+        type: boolean
+        default: true
+
+concurrency:
+  group: edge-review-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  edge-review:
+    name: Daily Edge Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run edge review
+        shell: bash
+        env:
+          DAYS: ${{ inputs.days || '1' }}
+          # A manual dispatch that unticks `write` must not still write. The
+          # scheduled run has no inputs at all, so an empty value means write.
+          NO_WRITE: ${{ inputs.write == false && '--no-write' || '' }}
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          node edgeReview.js --days="$DAYS" $NO_WRITE | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

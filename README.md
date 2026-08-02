@@ -32,6 +32,56 @@ pipeline on a tighter cadence (`*/5`). See "In-play signals" below.
 
 ---
 
+## Daily edge review — learning the sweet-spot edge from results
+
+`.github/workflows/edge-review.yml` runs `node edgeReview.js` at 08:15 UTC and
+answers, every morning, the question the PRIME box is currently guessing at:
+**which edge band actually pays?**
+
+**Why it exists.** The PRIME box in `lib/signalTier.js` — odds 1.40–3.00, edge
+4–10% — was chosen as the best-performing cell of a matrix computed over
+Jun 15 – Jul 3. That is a fine way to *form* a hypothesis and a bad way to
+*hold* one: the maximum of many noisy estimates is biased upward, so a band
+picked that way is expected to look worse afterwards even when it is genuinely
+the best band. Until it is measured on results it did not come from, its
+numbers are an estimate wearing the costume of a finding.
+
+Each run prints, and stores to `edge_calibration` (migration 045):
+
+1. **What settled**, fixture by fixture, with the edge each pick carried, its
+   tier, its P&L and its CLV — plus a per-tier summary for the window.
+2. **The edge carried by winners vs losers.** Asked for directly, and printed
+   next to the losers' distribution on purpose: if the two are the same, the
+   edge number is not separating outcomes and no band will fix that.
+3. **The edge response** — strike, yield and a bootstrap interval per band,
+   inside the PRIME odds window and across all prices.
+4. **The box in-sample vs out-of-sample**, split at `PERFORMANCE_EPOCH`. This
+   is the headline: rows before the epoch are the window the box was fitted on
+   and cannot confirm it; only the rows after it can.
+5. **A sweep of every edge band**, ranked by a Šidák-corrected lower bound on
+   yield rather than by yield, so a band that looks spectacular on nine bets
+   cannot win, and picking the best of ~100 boxes is priced in.
+6. **A verdict** — `insufficient` / `hold` / `advisory` / `shift` — with the
+   number of settled bets still needed before it could change.
+
+**It never edits a threshold.** Moving the PRIME box is a human edit to
+`lib/signalTier.js`; this job produces the evidence for or against it. A band
+that re-fits itself nightly would chase every bad weekend and stop being a band.
+
+```bash
+node edgeReview.js                 # yesterday's results + full calibration
+node edgeReview.js --days=7        # widen the settled-results window
+node edgeReview.js --no-write      # print only, no snapshot row
+node edgeReview.js --json          # machine-readable
+```
+
+Because the snapshot is a **history, not a singleton**, the useful signal
+accrues over weeks: whether the same band keeps winning as the sample grows, or
+whether the "optimum" wanders — which is itself the answer (no resolvable sweet
+spot yet, hold the box).
+
+---
+
 ## In-play signals
 
 The pre-match engine and the in-play engine are **separate pipelines that share
