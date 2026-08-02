@@ -1,10 +1,11 @@
 -- 047_free_fixture_preview.sql
 --
--- ⚠️  STAGED FOR REVIEW — NOT YET APPLIED TO PRODUCTION.  ⚠️
---     Apply from the Supabase SQL editor once you are happy with the window
---     sizes (see free_fixture_limit() below). Read the VERIFY block at the foot
---     first — this changes what an anonymous visitor can read, and the failure
---     mode it risks is not a leak, it is an EMPTY free experience.
+-- APPLIED to production 2026-08-02, on the founder's go-ahead, and verified in
+-- rolled-back transactions as the `anon` role before and after:
+--   matches 49,351 -> 40 · odds 87,748 -> 822 · odds_snapshots 477,066 -> 4,037
+--   computed_values UNCHANGED at 10 — this migration must not move 034's numbers
+--   league_directory narrows to 14 for free readers, and the frontend no longer
+--   quotes its row count — see the note in the policy block
 --
 -- PROBLEM. Migration 034 gated the four premium tables — value_signals,
 -- computed_values, recommendations, suggested_accas — at five rows for free and
@@ -59,9 +60,9 @@
 -- service-role key, which bypasses RLS entirely.
 --
 -- WHAT IS DELIBERATELY LEFT OPEN:
---   • teams, leagues, league_directory — reference data. No intelligence lives
---     in them, and league_directory feeds the competition count the upsell
---     itself quotes ("Plus opens all 43 competitions").
+--   • teams and leagues — reference data with no intelligence in them.
+--     league_directory is a VIEW over `matches` and narrows with it; see the
+--     note in the policy block for why that was left to narrow.
 --   • performance_summary — the public record. §3.1's rule is that aggregates
 --     stay real even inside the paywall, and "proof accruing in public" that
 --     the public cannot read is not proof.
@@ -73,7 +74,8 @@ begin;
 -- client is filtering a window it was actually given, rather than showing an
 -- empty rail whenever the next few kickoffs happen to be filtered out.
 create or replace function public.free_fixture_limit()
-returns integer language sql immutable as $$ select 20 $$;
+returns integer language sql immutable
+set search_path = public, pg_catalog as $$ select 20 $$;
 
 -- ── The priced set: matches carrying preview intelligence ────────────────────
 -- SECURITY DEFINER and owner-run for the same reason 034's helpers are: an
@@ -188,7 +190,37 @@ create policy "tiered_read_match_stats" on public.match_stats
   for select to anon, authenticated
   using ( current_tier() <> 'free' or fixture_id in (select public.preview_fixture_external_ids()) );
 
+-- ── league_directory: TRIED AND REVERTED, on purpose ────────────────────────
+-- `league_directory` is `select … from matches m join leagues l … group by l.id`
+-- carrying `security_invoker=true`, so it runs with the CALLER's row access and
+-- bounding `matches` bounds it too: a free reader's directory holds the ~14
+-- leagues their 40 preview fixtures belong to, not the 43 the engine covers.
+--
+-- This migration first set `security_invoker=false` so the catalogue stayed
+-- whole — it holds only league ids, names, countries and fixture counts, which
+-- is the same category as `teams` and `leagues`, both left open here. That was
+-- reverted within the hour: Supabase's linter raises `security_definer_view`
+-- at ERROR level for it, and a standing ERROR on a view that bypasses RLS is
+-- the wrong thing to leave in the advisor list for whoever reads it next —
+-- especially to serve a number.
+--
+-- So the catalogue narrows for free readers and the FRONTEND stops quoting it.
+-- The fixture board's padlocked line read "Plus opens all {N} competitions" and
+-- would have advertised 14; it now reads "every competition the engine covers".
+-- Same rule the preview notes already follow: a total we cannot trust at this
+-- tier is a total we do not state.
+
 commit;
+
+-- 047a — applied minutes later, as a correction. Both came from the Supabase
+-- linter after 047 landed:
+--
+--   alter view public.league_directory set (security_invoker = true);
+--   -- 047 had briefly set this to false; see the note above for why it went back.
+--
+--   create or replace function public.free_preview_limit()   -- 034's, unpinned since July
+--   returns integer language sql immutable
+--   set search_path = public, pg_catalog as $$ select 5 $$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- VERIFY. Run this before and after; it rolls itself back either way.
