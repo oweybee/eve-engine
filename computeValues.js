@@ -27,6 +27,7 @@ const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '2',    
 const COMPUTE_CONCURRENCY = parseInt(process.env.COMPUTE_CONCURRENCY || '5',    10);
 const USE_UNIFORM_ALPHA   = (process.env.USE_UNIFORM_ALPHA || '').toLowerCase() === 'true';
 const ODDS_MAX_AGE_HOURS  = parseFloat(process.env.ODDS_MAX_AGE_HOURS || '24');
+const COMPUTE_LOOKAHEAD_DAYS = parseFloat(process.env.COMPUTE_LOOKAHEAD_DAYS || '14');
 
 const ALPHA_HOME    = parseFloat(process.env.ALPHA_HOME    || '0.034');
 const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
@@ -95,6 +96,13 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  // Bounded to the near-term slate: the season backfill (#59) populates
+  // 'scheduled' rows for entire seasons many months out, and an unbounded
+  // matchIds list below blows past PostgREST's URL length limit on the odds
+  // .in() query (400 Bad Request), silently killing every compute cycle.
+  // No fixture is priced this far out anyway — planDay only ever plans
+  // DAYS_AHEAD=3.
+  const lookaheadCutoff = new Date(Date.now() + COMPUTE_LOOKAHEAD_DAYS * 86_400_000).toISOString();
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -104,6 +112,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .or(`kickoff_at.lte.${lookaheadCutoff},kickoff_at.is.null`)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
