@@ -117,6 +117,15 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // (only a handful of games ever priced). We (a) restrict to the freshness
   // window the consensus uses anyway, cutting volume sharply, and (b) page
   // through in 1000-row chunks so every match's odds are returned.
+  //
+  // matchIds is NOT applied server-side here: `scheduled` now spans ~9,600
+  // matches (far-future fixtures that were never settled), and embedding all
+  // of their ids in `.in('match_id', matchIds)` builds a GET URL long enough
+  // that PostgREST/the proxy in front of it rejects it outright (400 Bad
+  // Request), which took the whole odds compute step down. The freshness
+  // window alone already bounds this to a few thousand rows, so we filter
+  // by matchIds in memory instead once the page is in hand.
+  const matchIdSet = new Set(matchIds);
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const oddsData = [];
   const ODDS_PAGE = 1000;
@@ -124,7 +133,6 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
     const { data, error: oddsError } = await supabase
       .from('odds')
       .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', matchIds)
       .gte('fetched_at', freshCutoff)
       .order('id', { ascending: true })
       .range(from, from + ODDS_PAGE - 1);
@@ -136,6 +144,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
 
   const oddsByMatch = {};
   for (const o of oddsData) {
+    if (!matchIdSet.has(o.match_id)) continue;
     if (!oddsByMatch[o.match_id]) oddsByMatch[o.match_id] = [];
     oddsByMatch[o.match_id].push(o);
   }
