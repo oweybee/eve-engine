@@ -17,6 +17,7 @@ const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { formatLiveState } = require('./lib/inplay');
 const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
+const { isPublished, withheldReason } = require('./lib/publication');
 
 const DRY_RUN = process.env.DRY_RUN === '1';
 const CHANNEL = 'telegram';
@@ -76,7 +77,7 @@ async function fetchRecentSignals(supabase) {
     .from('value_signals')
     .select(`
       id, match_id, market, market_line, outcome, detected_odds, detected_edge, detected_mes, bookmaker,
-      kickoff_at, detected_at, signal_category, is_mover, phase,
+      kickoff_at, detected_at, signal_category, is_mover, phase, model_architecture,
       match:matches (
         goals_home, goals_away, minute,
         home_team:teams!matches_home_team_id_fkey ( name ),
@@ -88,7 +89,27 @@ async function fetchRecentSignals(supabase) {
     .gte('kickoff_at', kickoffFloor)
     .order('kickoff_at', { ascending: true });
   if (error) throw new Error(`fetchRecentSignals: ${error.message}`);
-  return data ?? [];
+
+  // THE PUBLICATION GATE (lib/publication.js). Every one of the 369 signals in
+  // the record reached subscribers through this function, and 285 of them came
+  // from architectures the 2026-08-05 audit found were not forecasting
+  // anything — -98.9 units over 338 settled bets. Filtering HERE rather than at
+  // the call sites is deliberate: this is the only door out of the database and
+  // into a channel, so a future caller cannot forget the gate exists.
+  const rows = data ?? [];
+  const backed = rows.filter(r => isPublished(r.model_architecture));
+  if (backed.length !== rows.length) {
+    const byArch = new Map();
+    for (const r of rows) {
+      if (isPublished(r.model_architecture)) continue;
+      const k = r.model_architecture ?? '(null)';
+      byArch.set(k, (byArch.get(k) ?? 0) + 1);
+    }
+    for (const [arch, count] of byArch) {
+      console.log(`[postToX] withheld ${count} ${arch} signal(s): ${withheldReason(arch)}`);
+    }
+  }
+  return backed;
 }
 
 function isMover(signal) { return signal.is_mover === true; }
@@ -115,6 +136,9 @@ function buildMessage(signal) {
   const outcome = signal.outcome.toUpperCase().replace(/_/g, ' ');
   const odds    = signal.detected_odds.toFixed(2);
   const edgePct = (signal.detected_edge * 100).toFixed(1);
+  // detected_mes is null on every row the engine writes now (§2.4 — the
+  // frontend's risk-adjusted computeMes is the single implementation), so this
+  // renders nothing rather than a number nobody can reconcile with the board.
   const mes     = signal.detected_mes != null ? ` | MES: ${signal.detected_mes}/100` : '';
   const book    = signal.bookmaker ?? 'Best price';
   const kickoff = formatKickoff(signal.kickoff_at);
