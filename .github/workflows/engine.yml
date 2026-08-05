@@ -59,10 +59,13 @@ jobs:
   engine:
     name: EVE Engine Tick
     runs-on: ubuntu-latest
-    # 10 min (was 5): the 4-loop odds cycle nearly fills 5 min, so fetchTeamStats
-    # (the last step) was being killed mid-run. It self-caches per team (20h), so
-    # only the first full population is slow; later runs skip fresh teams.
-    timeout-minutes: 10
+    # 20 min (was 10, was 5): every raise has been the same story — the tail of
+    # the pipeline outgrowing the guillotine and fetchTeamStats (the last step)
+    # dying mid-run, which stamps the whole tick "cancelled". At 40 leagues the
+    # odds loop alone runs ~6 min and fetchMatchDetails 1–2, leaving stats ~2 min
+    # at a 10-min cap — not enough to work through a stale backlog even though it
+    # self-caches per team (20h). 20 min still ends well inside the tick cadence.
+    timeout-minutes: 20
 
     env:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
