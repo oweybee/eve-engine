@@ -152,11 +152,20 @@ function aggregateTeamStats(results, fxStats) {
  * fixture endpoint — works days ahead, before lineups are confirmed. Betfair-
  * created matches (external_id like 'bf_123') are skipped; their API twin is
  * resolved via its numeric fixture id.
+ *
+ * Bounded to a 48h kickoff window (same as fetchMatchDetails.js's queryMatches):
+ * the 40-league season backfill left 9,500+ rows with status='scheduled', and
+ * an unbounded status filter here was walking the whole season — one blocking
+ * fixture call plus a 120ms sleep per row — which alone exceeded the job's
+ * 10-minute timeout on every run.
  * @returns {Promise<Map<number, string>>} teamId → teamName
  */
 async function resolveUpcomingTeams(supabase) {
+  const in48h = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
   const { data, error } = await supabase
-    .from('matches').select('id, external_id, status').in('status', ['scheduled', 'live']);
+    .from('matches').select('id, external_id, status')
+    .in('status', ['scheduled', 'live'])
+    .lte('kickoff_at', in48h);
   if (error) throw new Error(`resolveUpcomingTeams: ${error.message}`);
 
   const teams = new Map();
