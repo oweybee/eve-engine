@@ -109,7 +109,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
   if (!matchData?.length) return [];
 
-  const matchIds = matchData.map(m => m.id);
+  const matchIds = new Set(matchData.map(m => m.id));
 
   // Fetch odds paginated. `odds` is a snapshot history (thousands of rows across
   // the slate), and a plain .in() is capped at 1000 rows by PostgREST — which
@@ -117,6 +117,13 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // (only a handful of games ever priced). We (a) restrict to the freshness
   // window the consensus uses anyway, cutting volume sharply, and (b) page
   // through in 1000-row chunks so every match's odds are returned.
+  //
+  // The match filter is applied client-side, NOT as .in('match_id', ...): since
+  // the season backfill, 'scheduled' is the whole season (9,500+ matches), and
+  // inlining that many UUIDs builds a ~350KB request URL the API gateway
+  // rejects with a bare 400 before PostgREST sees it. Odds inside the
+  // freshness window are one slate's worth, so fetching them all and
+  // intersecting here costs at most a page or two of rows we discard.
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const oddsData = [];
   const ODDS_PAGE = 1000;
@@ -124,13 +131,12 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
     const { data, error: oddsError } = await supabase
       .from('odds')
       .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', matchIds)
       .gte('fetched_at', freshCutoff)
       .order('id', { ascending: true })
       .range(from, from + ODDS_PAGE - 1);
     if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
     if (!data?.length) break;
-    oddsData.push(...data);
+    for (const o of data) if (matchIds.has(o.match_id)) oddsData.push(o);
     if (data.length < ODDS_PAGE) break;
   }
 

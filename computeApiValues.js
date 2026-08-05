@@ -57,12 +57,19 @@ async function fetchMatchesForApiComputation(supabase) {
   if (matchError) throw new Error(`fetchMatchesForApiComputation[matches]: ${matchError.message}`);
   if (!matchData?.length) return [];
 
-  const matchIds    = matchData.map(m => m.id);
-  const externalIds = matchData.map(m => m.external_id).filter(Boolean);
+  const matchIds = new Set(matchData.map(m => m.id));
 
   // Odds is a snapshot history — a plain .in() is capped at 1000 rows by
   // PostgREST and silently truncated the slate so most matches got no odds.
   // Restrict to the freshness window and page through in 1000-row chunks.
+  //
+  // Neither query filters by match server-side: since the season backfill,
+  // 'scheduled' is the whole season (9,500+ matches), and a .in() carrying
+  // that many ids builds a request URL far past the API gateway's limit — it
+  // answers a bare 400 before PostgREST sees the query. Both result sets are
+  // small (fresh odds are one slate's worth; match_predictions only ever holds
+  // upcoming fixtures), so we fetch the window whole and intersect client-side
+  // — which the maps below already did anyway.
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const fetchAllOdds = async () => {
     const rows = [];
@@ -71,11 +78,27 @@ async function fetchMatchesForApiComputation(supabase) {
       const { data, error } = await supabase
         .from('odds')
         .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
-        .in('match_id', matchIds)
         .gte('fetched_at', freshCutoff)
         .order('id', { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw new Error(`fetchMatchesForApiComputation[odds]: ${error.message}`);
+      if (!data?.length) break;
+      for (const o of data) if (matchIds.has(o.match_id)) rows.push(o);
+      if (data.length < PAGE) break;
+    }
+    return rows;
+  };
+
+  const fetchAllPredictions = async () => {
+    const rows = [];
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from('match_predictions')
+        .select('fixture_id, pct_home, pct_draw, pct_away, advice, winner_team')
+        .order('fixture_id', { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) throw new Error(`fetchMatchesForApiComputation[preds]: ${error.message}`);
       if (!data?.length) break;
       rows.push(...data);
       if (data.length < PAGE) break;
@@ -83,15 +106,7 @@ async function fetchMatchesForApiComputation(supabase) {
     return rows;
   };
 
-  const [oddsData, predResult] = await Promise.all([
-    fetchAllOdds(),
-    supabase
-      .from('match_predictions')
-      .select('fixture_id, pct_home, pct_draw, pct_away, advice, winner_team')
-      .in('fixture_id', externalIds),
-  ]);
-
-  if (predResult.error) throw new Error(`fetchMatchesForApiComputation[preds]: ${predResult.error.message}`);
+  const [oddsData, predData] = await Promise.all([fetchAllOdds(), fetchAllPredictions()]);
 
   const oddsByMatch = {};
   for (const o of oddsData) {
@@ -100,7 +115,7 @@ async function fetchMatchesForApiComputation(supabase) {
   }
 
   const predByExternal = {};
-  for (const p of (predResult.data ?? [])) {
+  for (const p of predData) {
     predByExternal[p.fixture_id] = p;
   }
 
