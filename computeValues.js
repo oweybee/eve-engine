@@ -33,6 +33,17 @@ const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
 const ALPHA_AWAY    = parseFloat(process.env.ALPHA_AWAY    || '0.037');
 const ALPHA_UNIFORM = parseFloat(process.env.ALPHA_UNIFORM || '0.05');
 
+// Matches too far out never carry fresh odds (ingestion is plan-gated to the
+// near term — see planDay.js DAYS_AHEAD) and get filtered out below anyway
+// (odds.length === 0). But season backfill (#59/#60) put ~9,500 rows in
+// `matches` with status='scheduled' spanning over a year out, and an unbounded
+// fetch here built a matchIds .in() filter big enough to blow PostgREST's URL
+// limit — every compute cycle failed with `fetchMatchesForComputation[odds]:
+// Bad Request` (silent since Aug 2, no matches priced at all). Bounding the
+// initial fetch to a generous horizon keeps behaviour identical for every
+// match that could plausibly have odds while fixing the request size.
+const COMPUTE_HORIZON_DAYS = parseInt(process.env.COMPUTE_HORIZON_DAYS || '10', 10);
+
 // De-vig margin (RELATIVE). The consensus probabilities are de-vigged (the three
 // 1/odds normalised to sum to 1), then shaved by this relative margin as a small
 // safety buffer. Relative — not the old fixed additive alpha — so it scales with
@@ -95,6 +106,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  const horizonCutoff = new Date(Date.now() + COMPUTE_HORIZON_DAYS * 86_400_000).toISOString();
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -104,6 +116,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .lte('kickoff_at', horizonCutoff)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
