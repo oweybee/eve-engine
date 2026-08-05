@@ -178,9 +178,14 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_post != 'true' }}
         run: node postToX.js
 
+      # Settlement must survive a pricing failure. From 3-5 Aug a crash in the
+      # ingest loop skipped this step on every tick, so finished matches stayed
+      # status='live' for days — the board showed two-day-old "live" fixtures
+      # and value_signals never settled. Settling is DB+results-API only; it
+      # has no dependency on the ingest loop having succeeded.
       - name: Settle results
         id: results
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_results != 'true' }}
+        if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.skip_results != 'true') }}
         run: node fetchResults.js
 
       # ELO ladder feeds the in-play half-time supermodel (computeInplayValues
@@ -209,13 +214,17 @@ jobs:
         continue-on-error: true
         run: node recordAccas.js
 
+      # Lineups/stats likewise must not depend on pricing having worked — their
+      # absence 3-5 Aug was this step being skipped after ingest-loop failures.
       - name: Fetch match details (lineups + stats)
         id: details
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: node fetchMatchDetails.js
 
       - name: Team statistics & referee tendencies
         id: teamstats
+        if: ${{ !cancelled() }}
         continue-on-error: true
         shell: bash
         run: |
