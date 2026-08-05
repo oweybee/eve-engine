@@ -164,20 +164,23 @@ async function fetchFixtures(supabase) {
   if (error) throw new Error(`modelBoard[matches]: ${error.message}`);
   if (!matches?.length) return [];
 
-  const ids = matches.map(m => m.id);
+  const ids = new Set(matches.map(m => m.id));
+  // No .in('match_id', ...) here: since the season backfill, 'scheduled' is the
+  // whole season (9,500+ matches) and inlining the ids builds a request URL the
+  // API gateway rejects with a bare 400. Fresh odds are one slate's worth, so
+  // fetch the window whole and intersect client-side.
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const odds = [];
   for (let from = 0; ; from += 1000) {
     const { data, error: e } = await supabase
       .from('odds')
       .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', ids)
       .gte('fetched_at', freshCutoff)
       .order('id', { ascending: true })
       .range(from, from + 999);
     if (e) throw new Error(`modelBoard[odds]: ${e.message}`);
     if (!data?.length) break;
-    odds.push(...data);
+    for (const o of data) if (ids.has(o.match_id)) odds.push(o);
     if (data.length < 1000) break;
   }
   const byMatch = new Map();
