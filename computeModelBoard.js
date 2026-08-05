@@ -166,19 +166,26 @@ async function fetchFixtures(supabase) {
 
   const ids = matches.map(m => m.id);
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
+  // ids is batched going IN to the filter: at full-season fixture volume a
+  // single `.in('match_id', ids)` builds a query string large enough that the
+  // gateway rejects it outright with 400 Bad Request.
   const odds = [];
-  for (let from = 0; ; from += 1000) {
-    const { data, error: e } = await supabase
-      .from('odds')
-      .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', ids)
-      .gte('fetched_at', freshCutoff)
-      .order('id', { ascending: true })
-      .range(from, from + 999);
-    if (e) throw new Error(`modelBoard[odds]: ${e.message}`);
-    if (!data?.length) break;
-    odds.push(...data);
-    if (data.length < 1000) break;
+  const ID_BATCH = 300;
+  for (let mb = 0; mb < ids.length; mb += ID_BATCH) {
+    const idBatch = ids.slice(mb, mb + ID_BATCH);
+    for (let from = 0; ; from += 1000) {
+      const { data, error: e } = await supabase
+        .from('odds')
+        .select('match_id, bookmaker, market, home_odds, draw_odds, away_odds, fetched_at')
+        .in('match_id', idBatch)
+        .gte('fetched_at', freshCutoff)
+        .order('id', { ascending: true })
+        .range(from, from + 999);
+      if (e) throw new Error(`modelBoard[odds]: ${e.message}`);
+      if (!data?.length) break;
+      odds.push(...data);
+      if (data.length < 1000) break;
+    }
   }
   const byMatch = new Map();
   for (const o of odds) {
