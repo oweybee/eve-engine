@@ -95,6 +95,20 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
   // ['scheduled','live'], which silently polluted CLV with post-kickoff edges.)
+  //
+  // The kickoff window is load-bearing, not an optimisation. Season backfill
+  // (#59/#60) put ~10k scheduled fixtures in `matches`; unbounded, their ids
+  // form a .in() list megabytes long and PostgREST answers 400 Bad Request,
+  // which killed every engine tick from 3 Aug. Odds only exist inside the
+  // planner's polling horizon anyway (DAYS_AHEAD ≤ 3, freshness ≤
+  // ODDS_MAX_AGE_HOURS), so bounding to [now − 12h, now + 96h] excludes only
+  // matches the `.filter(m => m.odds.length > 0)` below would drop regardless.
+  // The 12h lookback keeps genuinely in-play fixtures for the ['scheduled',
+  // 'live'] caller without resurrecting zombies stuck 'live' for days.
+  const now = Date.now();
+  const windowStart = new Date(now - 12 * 3_600_000).toISOString();
+  const windowEnd   = new Date(now + 96 * 3_600_000).toISOString();
+
   const { data: matchData, error: matchError } = await supabase
     .from('matches')
     .select(`
@@ -104,6 +118,8 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
       league:leagues ( id, name )
     `)
     .in('status', statuses)
+    .gte('kickoff_at', windowStart)
+    .lte('kickoff_at', windowEnd)
     .order('kickoff_at', { ascending: true });
 
   if (matchError) throw new Error(`fetchMatchesForComputation[matches]: ${matchError.message}`);
@@ -120,18 +136,25 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
   const oddsData = [];
   const ODDS_PAGE = 1000;
-  for (let from = 0; ; from += ODDS_PAGE) {
-    const { data, error: oddsError } = await supabase
-      .from('odds')
-      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', matchIds)
-      .gte('fetched_at', freshCutoff)
-      .order('id', { ascending: true })
-      .range(from, from + ODDS_PAGE - 1);
-    if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
-    if (!data?.length) break;
-    oddsData.push(...data);
-    if (data.length < ODDS_PAGE) break;
+  // Chunk the id list as well as paging the rows: PostgREST encodes .in() into
+  // the request URL, and a few hundred UUIDs is already ~10KB. 150 ids ≈ 5.5KB
+  // stays comfortably under every proxy limit however large the slate gets.
+  const ID_CHUNK = 150;
+  for (let c = 0; c < matchIds.length; c += ID_CHUNK) {
+    const idChunk = matchIds.slice(c, c + ID_CHUNK);
+    for (let from = 0; ; from += ODDS_PAGE) {
+      const { data, error: oddsError } = await supabase
+        .from('odds')
+        .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
+        .in('match_id', idChunk)
+        .gte('fetched_at', freshCutoff)
+        .order('id', { ascending: true })
+        .range(from, from + ODDS_PAGE - 1);
+      if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
+      if (!data?.length) break;
+      oddsData.push(...data);
+      if (data.length < ODDS_PAGE) break;
+    }
   }
 
   const oddsByMatch = {};

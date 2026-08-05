@@ -110,6 +110,11 @@ async function prefetchLatestOdds(supabase, matchIds, since48hIso) {
     .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
     .in('match_id', matchIds)
     .eq('market', 'h2h')
+    // The in-play ingester stores live prices in the same table under a
+    // synthetic bookmaker. A live long-shot (201.00 while 1-1 at 72') must
+    // never enter the PRE-MATCH snapshot series it would otherwise dominate
+    // as "best price".
+    .neq('bookmaker', 'apifootball_live')
     .gte('fetched_at', since48hIso)
     .order('fetched_at', { ascending: false });
   if (error) throw new Error(`prefetchLatestOdds: ${error.message}`);
@@ -222,10 +227,22 @@ async function run() {
 
   let snaps = 0, recs = 0, clvUpdated = 0, writeErrors = 0;
 
+  let skippedPastKickoff = 0;
+
   for (const r of rows) {
     const kickoff    = r.match?.kickoff_at ? new Date(r.match.kickoff_at).getTime() : null;
     const minsToKick = kickoff != null ? (kickoff - now) / 60000 : null;
     const league     = r.match?.league?.name ?? null;
+
+    // The pre-match story ends at kickoff. computed_values rows linger after a
+    // match goes live (nothing deletes them), and this loop used to keep
+    // snapshotting them — labelling anything within 3h AFTER kickoff 'closing'
+    // and backfilling CLV from it. That is exactly the contamination CLV
+    // exists to measure against: the closing line is the last PRE-kickoff
+    // price, never an in-play one. A null kickoff is skipped for the same
+    // reason — with no kickoff there is no way to know the market hasn't
+    // already closed.
+    if (minsToKick == null || minsToKick <= 0) { skippedPastKickoff++; continue; }
 
     const oddsBy = { home: r.best_home_odds, draw: r.best_draw_odds, away: r.best_away_odds };
     const bookBy = { home: r.best_home_book, draw: r.best_draw_book, away: r.best_away_book };
@@ -234,7 +251,7 @@ async function run() {
 
     // ── 1. Snap type — O(1) Set lookup, zero DB calls ────────────────────────
     let snapType = 'current';
-    if (minsToKick != null && minsToKick <= CLOSING_WINDOW_MIN && minsToKick > -180) {
+    if (minsToKick <= CLOSING_WINDOW_MIN) {
       snapType = 'closing';
     } else if (!snapshotExistsSet.has(r.match_id)) {
       snapType = 'open';
@@ -360,7 +377,7 @@ async function run() {
     }
   }
 
-  const summary = { snaps, recs, clvUpdated, writeErrors };
+  const summary = { snaps, recs, clvUpdated, writeErrors, skippedPastKickoff };
   console.log('[snapshot] done:', summary);
 
   if (writeErrors > 0) {

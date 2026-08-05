@@ -73,15 +73,24 @@ jobs:
       - name: Compute in-play values
         run: node computeInplayValues.js
 
+      # The three steps below are independent of the value computation — they
+      # must run even when it fails. From 3-5 Aug a computeInplayValues crash
+      # skipped them on every tick, so live matches had no in-game statistics
+      # and no live market series at all ("Not enough samples yet" on every
+      # match page). continue-on-error alone does not do this: a step is still
+      # SKIPPED after an earlier failure unless its `if` overrides success().
       - name: Ingest live odds — The Odds API (multi-book, h2h)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: node ingestOddsApi.js --inplay
 
       - name: Fetch live match statistics (possession/shots/xG)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: node fetchLiveStats.js
 
       - name: Capture in-play market series (for the live chart)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: node captureInplaySeries.js
 

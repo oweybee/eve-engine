@@ -305,6 +305,24 @@ async function prefetchClosingOdds(supabase, signals) {
   const matchIds = [...new Set(signals.map(s => s.match_id).filter(Boolean))];
   if (!matchIds.length) return new Map();
 
+  // The closing line is the last price BEFORE kickoff. Every row here is
+  // filtered against the match's kickoff, because both source tables can
+  // contain post-kickoff rows: odds_snapshots carried mislabelled 'closing'
+  // rows captured up to 3h into the match (captureSnapshot bug, fixed), and
+  // the odds table holds live Betfair prices. "Latest row" without a kickoff
+  // bound would grade CLV against an in-play price.
+  const kickoffByMatch = new Map(); // matchId → epoch ms
+  for (const s of signals) {
+    const ko = s.kickoff_at ?? s.match?.kickoff_at;
+    const t  = ko ? new Date(ko).getTime() : NaN;
+    if (Number.isFinite(t) && !kickoffByMatch.has(s.match_id)) kickoffByMatch.set(s.match_id, t);
+  }
+  const preKickoff = (matchId, ts) => {
+    const ko = kickoffByMatch.get(matchId);
+    // No known kickoff → cannot prove the price is pre-close; reject it.
+    return Number.isFinite(ko) && new Date(ts).getTime() <= ko;
+  };
+
   // Query 1: closing snapshots for all match+outcome combos
   const { data: snaps } = await supabase
     .from('odds_snapshots')
@@ -321,15 +339,17 @@ async function prefetchClosingOdds(supabase, signals) {
     .eq('bookmaker', 'betfair_ex_uk')
     .order('fetched_at', { ascending: false });
 
-  // Build maps — first row per match_id is latest (DESC order)
+  // Build maps — first PRE-KICKOFF row per key is the true close (DESC order)
   const snapMap    = new Map(); // key: `${matchId}:${outcome}`
-  const betfairMap = new Map(); // key: matchId → latest row
+  const betfairMap = new Map(); // key: matchId → latest pre-kickoff row
 
   for (const s of snaps ?? []) {
+    if (!preKickoff(s.match_id, s.captured_at)) continue;
     const key = `${s.match_id}:${s.selection}`;
     if (!snapMap.has(key)) snapMap.set(key, parseFloat(s.odds));
   }
   for (const r of betfairRows ?? []) {
+    if (!preKickoff(r.match_id, r.fetched_at)) continue;
     if (!betfairMap.has(r.match_id)) betfairMap.set(r.match_id, r);
   }
 
