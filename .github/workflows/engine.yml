@@ -59,10 +59,15 @@ jobs:
   engine:
     name: EVE Engine Tick
     runs-on: ubuntu-latest
-    # 10 min (was 5): the 4-loop odds cycle nearly fills 5 min, so fetchTeamStats
-    # (the last step) was being killed mid-run. It self-caches per team (20h), so
-    # only the first full population is slow; later runs skip fresh teams.
-    timeout-minutes: 10
+    # 15 min (was 10, was 5): the 40-league expansion (30 Jul, 5474bdf) grew the
+    # per-run workload enough that even 10 min now clips fetchTeamStats (the last
+    # step) mid-run — every scheduled run since the Aug 5 #80 fix has completed
+    # as "cancelled" at ~10m20s, never reaching the failure-alert step (it only
+    # fires on `if: failure()`, not on a timeout cancellation) and starving
+    # ingestOdds.js of the completed runs it needs to hit its 5-min plan cadence.
+    # It self-caches per team (20h), so only the first full population is slow;
+    # later runs skip fresh teams.
+    timeout-minutes: 15
 
     env:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
