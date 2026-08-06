@@ -1,5 +1,17 @@
 -- 051_paper_trade_writer.sql
 --
+-- AMENDED 2026-08-05 (ii): every `lower(trim(name))` in this file is now
+-- `public.mx_canonical_team(source, name)`, from migration 053 — WHICH MUST BE
+-- APPLIED BEFORE THIS ONE. The raw name was never a safe team key. Measured on
+-- production, `teams` holds the same club under two spellings 17 times (Leeds /
+-- Leeds United, Hull / Hull City, Wolves / Wolverhampton Wanderers, and so on),
+-- so `mx_team_form` was partitioning those clubs into TWO rolling windows —
+-- each too short to clear the 20-match floor these models need. And only 89 of
+-- the corpus's 164 names matched a feed name at all, so source A and source B
+-- were describing the same clubs under keys that could never meet. 053 takes
+-- both to one key: 114 of 164 corpus names now join, and the feed's 134 names
+-- resolve to 117 clubs.
+--
 -- STAGED, NOT APPLIED. Apply after 050 — it inserts into paper_trades.
 --
 -- Four things were checked against production (project zlbmpeiuhyllxwegtayu) on
@@ -154,7 +166,7 @@ begin
     match_ref, team_key, league_key, match_date, venue, source,
     goals_for, goals_against, sot_for, sot_against,
     corners_for, corners_against, cards_own, cards_match, corners_match, referee)
-  select 'fd:' || mr.id, lower(trim(mr.home_team)), 'FD:' || mr.div, mr.match_date, 'H', 'football_data',
+  select 'fd:' || mr.id, public.mx_canonical_team('football_data', mr.home_team), 'FD:' || mr.div, mr.match_date, 'H', 'football_data',
          mr.fthg, mr.ftag, mr.hst, mr.ast,
          mr.hc, mr.ac,
          mr.hy + coalesce(mr.hr,0),
@@ -167,7 +179,7 @@ begin
     match_ref, team_key, league_key, match_date, venue, source,
     goals_for, goals_against, sot_for, sot_against,
     corners_for, corners_against, cards_own, cards_match, corners_match, referee)
-  select 'fd:' || mr.id, lower(trim(mr.away_team)), 'FD:' || mr.div, mr.match_date, 'A', 'football_data',
+  select 'fd:' || mr.id, public.mx_canonical_team('football_data', mr.away_team), 'FD:' || mr.div, mr.match_date, 'A', 'football_data',
          mr.ftag, mr.fthg, mr.ast, mr.hst,
          mr.ac, mr.hc,
          mr.ay + coalesce(mr.ar,0),
@@ -180,7 +192,7 @@ begin
   insert into public.mx_team_match (
     match_ref, team_key, league_key, match_date, venue, source,
     goals_for, goals_against, sot_for, sot_against, referee)
-  select m.id::text, lower(trim(ht.name)), 'LG:' || m.league_id::text,
+  select m.id::text, public.mx_canonical_team('live_feed', ht.name), 'LG:' || m.league_id::text,
          m.kickoff_at::date, 'H', 'live_feed',
          m.goals_home, m.goals_away,
          m.shots_on_target_home, m.shots_on_target_away, m.referee
@@ -193,7 +205,7 @@ begin
   insert into public.mx_team_match (
     match_ref, team_key, league_key, match_date, venue, source,
     goals_for, goals_against, sot_for, sot_against, referee)
-  select m.id::text, lower(trim(at.name)), 'LG:' || m.league_id::text,
+  select m.id::text, public.mx_canonical_team('live_feed', at.name), 'LG:' || m.league_id::text,
          m.kickoff_at::date, 'A', 'live_feed',
          m.goals_away, m.goals_home,
          m.shots_on_target_away, m.shots_on_target_home, m.referee
@@ -219,7 +231,7 @@ begin
   ), paired as (
     select m.id::text as match_ref, m.kickoff_at::date as md,
            'LG:' || m.league_id::text as lk, m.referee,
-           lower(trim(ht.name)) as home_key, lower(trim(at.name)) as away_key,
+           public.mx_canonical_team('live_feed', ht.name) as home_key, public.mx_canonical_team('live_feed', at.name) as away_key,
            sh.corners as h_corners, sa.corners as a_corners,
            coalesce(sh.yellows,0) + sh.reds as h_cards,
            coalesce(sa.yellows,0) + sa.reds as a_cards,
@@ -366,7 +378,7 @@ begin
   -- ---- CORNERS -----------------------------------------------------------
   with fx as (
     select m.id as match_id, m.external_id, m.kickoff_at,
-           lower(trim(ht.name)) hk, lower(trim(at.name)) ak,
+           public.mx_canonical_team('live_feed', ht.name) hk, public.mx_canonical_team('live_feed', at.name) ak,
            cv.corners_line, cv.corners_over_odds, cv.corners_under_odds
     from matches m
     join teams ht on ht.id = m.home_team_id
@@ -422,7 +434,7 @@ begin
   -- ---- CARDS (with referee tilt where the official is known) --------------
   with fx as (
     select m.id as match_id, m.external_id, m.kickoff_at, m.referee,
-           lower(trim(ht.name)) hk, lower(trim(at.name)) ak,
+           public.mx_canonical_team('live_feed', ht.name) hk, public.mx_canonical_team('live_feed', at.name) ak,
            cv.bookings_line, cv.bookings_over_odds, cv.bookings_under_odds
     from matches m
     join teams ht on ht.id = m.home_team_id
