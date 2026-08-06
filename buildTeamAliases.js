@@ -20,7 +20,15 @@
  *     history is often the difference between a prediction and silence.
  *
  * After mapping: 114 of 164 corpus names join the feed (70%), and the feed's
- * 134 names resolve to 117 clubs.
+ * 134 English names resolve to 117 clubs.
+ *
+ * ACROSS THE WHOLE `teams` TABLE (1,248 rows, verified 2026-08-05): 222 are
+ * PLACEHOLDERS — `team_home_1490361` — which planDay mints when a fixture
+ * arrives with no resolvable team name. They are excluded, because each is
+ * unique and aliasing them would mint 222 one-match "clubs" while a fuzzy pass
+ * merged team_home_1490361 into team_home_1490362 at 0.94. Of the 1,026 real
+ * names, 41 fold unambiguously into a longer name and 5 are refused:
+ * Inter (a prefix of FOUR clubs), Austria, Celta, Dynamo and Independiente.
  *
  * IT REPORTS WHAT IT WOULD NOT GUESS. `Oxford` is left unmapped because the
  * corpus carries both `Oxford City` and `Oxford` (i.e. Oxford United) and the

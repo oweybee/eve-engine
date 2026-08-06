@@ -51,7 +51,35 @@
 --   corpus join.
 --
 -- AFTER MAPPING: 114 of 164 corpus names join the feed (70%, from 54%), and the
--- feed's 134 names resolve to 117 clubs.
+-- feed's 134 English names resolve to 117 clubs.
+--
+-- VERIFIED AGAINST THE WHOLE `teams` TABLE, not just the English subset, on
+-- 2026-08-05:
+--
+--   1,248 rows · 222 PLACEHOLDERS · 1,026 real names
+--   41 unambiguous prefix merges · 5 refused as ambiguous
+--
+-- The 222 placeholders are `team_home_1490361` / `team_away_1490361` — 18% of
+-- the table. planDay mints one whenever a fixture arrives without a resolvable
+-- team name, and they are the E3 defect already on the engine work order. The
+-- job excludes them: each is unique, so aliasing them would mint 222 one-match
+-- "clubs", and a fuzzy pass would score team_home_1490361 against
+-- team_home_1490362 at 0.94 and merge two unrelated fixtures.
+--
+-- The 5 refusals are the reason this file does not use a list of generic words.
+-- Measured across all 1,026 real names, these short names are each a prefix of
+-- MORE THAN ONE longer name:
+--
+--   Inter          → Inter Club d'Escaldes | Inter Miami | Inter Milan | Inter Turku
+--   Austria        → Austria Lustenau | Austria Vienna
+--   Celta          → Celta de Vigo II | Celta Vigo
+--   Dynamo         → Dynamo Dresden | Dynamo Kyiv
+--   Independiente  → Independiente del Valle | Independiente Rivadavia
+--
+-- `Inter` in this feed means Inter Milan. A matcher that resolved it to
+-- whichever candidate sorted first would have attributed Inter Milan's record to
+-- Inter Miami, silently, on three continents. All five are left unresolved and
+-- reported.
 --
 -- WHAT IT REFUSES. `Oxford` is not mapped, because football-data carries both
 -- `Oxford City` and (as `Oxford`) Oxford United, and the feed carries

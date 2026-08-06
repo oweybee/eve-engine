@@ -12,7 +12,7 @@
 'use strict';
 const assert = require('assert');
 const { normalize, tokens, canonicalKey, similarity, bestMatch,
-        buildCanonicalMap } = require('./lib/teamNames');
+        buildCanonicalMap, isPlaceholder } = require('./lib/teamNames');
 
 let passed = 0;
 function test(n, f) {
@@ -179,6 +179,50 @@ test('every emitted alias carries its method, so a fuzzy join is auditable', () 
   for (const a of aliases) {
     assert.ok(['exact', 'prefix', 'fuzzy'].includes(a.method), `bad method ${a.method}`);
     assert.ok(a.canonical_key.length > 0);
+  }
+});
+
+// ── placeholders, measured: 222 of 1,248 rows in `teams` ────────────────────
+
+test('planDay placeholders are not clubs and are never aliased', () => {
+  // 18% of the `teams` table. Each is unique, so aliasing them would mint 222
+  // one-match "clubs" — and a fuzzy pass would score team_home_1490361 against
+  // team_home_1490362 at 0.94 and merge two unrelated fixtures' histories.
+  assert.strictEqual(isPlaceholder('team_home_1490361'), true);
+  assert.strictEqual(isPlaceholder('team_away_1565206'), true);
+  assert.strictEqual(isPlaceholder('  team_home_1  '), true);
+  assert.strictEqual(isPlaceholder('Arsenal'), false);
+  assert.strictEqual(isPlaceholder('Team Home United'), false);
+  assert.strictEqual(isPlaceholder(null), false);
+
+  const { aliases } = resolve([
+    feed('team_home_1490361'), feed('team_away_1490361'), feed('Arsenal'),
+  ]);
+  assert.strictEqual(aliases.length, 1);
+  assert.strictEqual(aliases[0].name, 'Arsenal');
+});
+
+// ── the ambiguity refusals that exist in the REAL feed ──────────────────────
+
+test('every ambiguous prefix in production is refused', () => {
+  // Measured across all 1,026 real feed names on 2026-08-05. These five are the
+  // whole reason the generic-word rule had to go: "Inter" alone is a prefix of
+  // four different clubs on three continents, and merging it into whichever
+  // sorted first would have attributed Inter Milan's record to Inter Miami.
+  const feedNames = [
+    'Inter', 'Inter Club d\'Escaldes', 'Inter Miami', 'Inter Milan', 'Inter Turku',
+    'Austria', 'Austria Lustenau', 'Austria Vienna',
+    'Celta', 'Celta de Vigo II', 'Celta Vigo',
+    'Dynamo', 'Dynamo Dresden', 'Dynamo Kyiv',
+    'Independiente', 'Independiente del Valle', 'Independiente Rivadavia',
+  ];
+  const { keyOf, unmatched } = resolve(feedNames.map(feed));
+  for (const short of ['Inter', 'Austria', 'Celta', 'Dynamo', 'Independiente']) {
+    const k = keyOf.get(`live_feed|${short}`);
+    const merged = feedNames.filter(n => n !== short && keyOf.get(`live_feed|${n}`) === k);
+    assert.deepStrictEqual(merged, [], `${short} must not merge into ${merged.join(', ')}`);
+    assert.match(unmatched.find(u => u.name === short)?.reason ?? '', /ambiguous/,
+      `${short} must be reported as ambiguous`);
   }
 });
 
