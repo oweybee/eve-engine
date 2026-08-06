@@ -32,6 +32,7 @@
 const { getClient } = require('./lib/supabaseClient');
 const inplay         = require('./lib/inplay');
 const { categoryFor } = require('./lib/signalTier');
+const { scoreSignal } = require('./lib/maxedge');
 const sm             = require('./lib/secondaryMarkets');
 const { buildHalftimeVector } = require('./lib/halftimeFeatures');
 const { liveWinProb } = require('./lib/inplayWinProb');
@@ -190,7 +191,12 @@ async function insertModelSignals(supabase, candidates) {
   // (match, market, outcome, model). The unique index handles collisions.
   const { error } = await supabase
     .from('value_signals')
-    .insert(candidates.map(c => ({ market: 'h2h', ...c })));
+    // SUPERMODEL_HALFTIME and the second-half sniper have no row in
+    // model_calibration, so scoreSignal returns nulls for every field and these
+    // rows carry no verdict. That is the fail-closed direction working: an
+    // in-play architecture nobody has measured does not get a score, and the
+    // publication gate keeps it off the site regardless.
+    .insert(candidates.map(c => ({ market: 'h2h', ...c, ...scoreSignal(c) })));
   if (error && !/duplicate key/i.test(error.message)) {
     throw new Error(`insertModelSignals: ${error.message}`);
   }

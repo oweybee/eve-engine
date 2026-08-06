@@ -1,14 +1,30 @@
 /**
  * MaxEdge — Automated Signal Posting (Telegram)
  *
- * Broadcast policy (pre-match): we only ever suggest PRIME signals — the
- * back-tested sweet spot of odds 1.40–3.00 with a 4–10% edge. Value and
- * longshot picks stay visible on the site as a tool, but are never broadcast
- * as a suggested signal and never counted in performance. See lib/signalTier.js.
+ * Broadcast policy (pre-match): a post goes out only when BOTH ladders agree.
+ * The eligibility ladder has to suggest the selection — the back-tested sweet
+ * spot of odds 1.40–3.00 with a 4–10% edge — and the conviction ladder has to
+ * put it on PRIME, meaning MXS >= 65. That is exactly what the site requires
+ * before it prints ◆ PRIME on a row, so the word means one thing in both places.
  *
- *   PRIME          — odds 1.40–3.00 AND edge 4–10%. The only broadcast tier.
+ *   PRIME SIGNAL   — suggested by the ladder AND scored PRIME. The only
+ *                    broadcast bucket, and the only place this word is used.
  *   ODDS MOVEMENT  — is_mover=true (odds shifted on an existing signal)
  *   IN-PLAY        — phase='inplay', routed to the dedicated in-play channel
+ *
+ * WHY THE SECOND CONDITION EXISTS (6 Aug 2026). This channel used to take PRIME
+ * from `classifyTier` alone, which is the ELIGIBILITY ladder. After the
+ * vocabulary unified, PRIME became a rung of the CONVICTION ladder, so a post
+ * could go out reading PRIME for a selection the site badges WATCH — the
+ * collision escaping the product entirely, to the one audience that cannot click
+ * through and check. The engine now writes `mxs_band` at detection
+ * (lib/maxedge.js), so the broadcast can read the same verdict the badge does
+ * instead of asserting one.
+ *
+ * A SIGNAL WITH NO SCORE IS NOT BROADCAST, and that is a policy choice worth
+ * knowing. An architecture with no row in `model_calibration` scores null, and a
+ * null is not PRIME. Silence is the correct output for "we could not measure
+ * this" — the alternative is a post that names a rung nobody computed.
  */
 'use strict';
 
@@ -17,6 +33,7 @@ const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { formatLiveState } = require('./lib/inplay');
 const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
+const { scoreSignal } = require('./lib/maxedge');
 const { isPublished, withheldReason } = require('./lib/publication');
 
 const DRY_RUN = process.env.DRY_RUN === '1';
@@ -114,8 +131,22 @@ async function fetchRecentSignals(supabase) {
 
 function isMover(signal) { return signal.is_mover === true; }
 function isInplay(signal) { return signal.phase === 'inplay'; }
-/** Pre-match signals we actually suggest (and broadcast): the Prime tier. */
+/** Pre-match selections the eligibility ladder suggests. */
 function isSuggested(signal) { return classifyTier(signal).suggested; }
+
+/**
+ * The conviction rung for a signal — the stored one where the engine wrote it,
+ * recomputed from the row otherwise so a backfilled or legacy signal is not
+ * silently unbroadcastable. Same formula either way (lib/maxedge.js).
+ */
+function bandOf(signal) {
+  return signal.mxs_band ?? scoreSignal(signal).mxs_band;
+}
+
+/** Both ladders agree: suggested by the price+edge box AND scored PRIME. */
+function isBroadcastable(signal) {
+  return isSuggested(signal) && bandOf(signal) === 'PRIME';
+}
 
 function formatKickoff(isoStr) {
   if (!isoStr) return 'TBC';
@@ -168,18 +199,24 @@ function buildMessage(signal) {
     hashtags = `#MaxEdge #OddsMove`;
   } else {
     const { tier, notable } = classifyTier(signal);
-    if (tier === 'prime') {
+    const band = bandOf(signal);
+    if (tier === 'prime' && band === 'PRIME') {
+      // PRIME, and it means here exactly what it means on a board row: the
+      // ladder suggests it and the score puts it at or above 65.
       header   = `🟢 *PRIME SIGNAL*`;
-      note     = `_High conviction — our only highly-suggested tier_`;
+      note     = `_Our only backed tier — the ladder suggests it and it scores ${signal.mxs ?? scoreSignal(signal).mxs}/100_`;
       hashtags = `#MaxEdge #Prime #ValueBet`;
     } else if (tier === 'longshot') {
+      // A fact about the price, not a rung: every settled bet at 3.00+ lost.
       header   = notable ? `🎯 *LONGSHOT · NOTABLE EDGE*` : `🎯 *LONGSHOT*`;
-      note     = `_For information only — not a suggested signal_`;
+      note     = `_For information only — not a suggested selection_`;
       hashtags = `#MaxEdge #Longshot`;
     } else {
-      // 'value' (or below-floor) — shown as a tool, never suggested.
-      header   = `⚡ *VALUE SIGNAL*`;
-      note     = `_For information only — not a suggested signal_`;
+      // Positive EV outside the band we back at — shown as a tool, never
+      // suggested. These do not reach the channel; the branch exists because
+      // the message is built before the broadcast filter runs.
+      header   = `⚡ *UNBACKED EDGE*`;
+      note     = `_For information only — not a suggested selection_`;
       hashtags = `#MaxEdge #ValueBet`;
     }
   }
@@ -257,11 +294,11 @@ async function run() {
   const alreadySeen = signals.length - toPost.length;
   console.log(`[postToX] ${toPost.length} new | ${alreadySeen} already posted`);
 
-  // Conflict guard: among the pre-match Primes we'd broadcast this run, keep
+  // Conflict guard: among the pre-match selections we'd broadcast this run, keep
   // only the highest-edge pick per (match, market, line) so we never push two
   // opposing outcomes on the same match. The rest are suppressed below.
-  const broadcastPrimeIds = new Set(
-    dedupeConflicts(toPost.filter(s => !isInplay(s) && !isMover(s) && classifyTier(s).tier === 'prime'))
+  const broadcastableIds = new Set(
+    dedupeConflicts(toPost.filter(s => !isInplay(s) && !isMover(s) && isBroadcastable(s)))
       .map(s => s.id));
 
   if (!toPost.length) { console.log('[postToX] nothing to post'); return { posted: 0, failed: 0, skipped: alreadySeen }; }
@@ -288,9 +325,9 @@ async function run() {
     const messageHash = hashMessage(message);
     const chatId      = telegram ? chatIdForSignal(telegram, signal) : telegram;
 
-    // Broadcast policy: pre-match, we only suggest PRIME signals. Value and
-    // longshot picks remain visible on the site but are never pushed to the
-    // channel. Mark them posted so they aren't reconsidered every run. In-play
+    // Broadcast policy: pre-match, we only broadcast what the ladder suggests.
+    // The wider edges and the longshots remain visible on the site but are
+    // never pushed to the channel. Mark them posted so they aren't reconsidered every run. In-play
     // signals and odds-movement alerts bypass this — they have their own logic.
     if (!isInplay(signal) && !isMover(signal) && tier !== 'prime') {
       console.log(`\n[postToX] skip (${label}, not suggested) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
@@ -299,10 +336,11 @@ async function run() {
       continue;
     }
 
-    // Conflict guard: a Prime that lost the per-match/market tie-break to a
-    // higher-edge opposing pick is suppressed so the two can't cancel out.
-    if (!isInplay(signal) && !isMover(signal) && tier === 'prime' && !broadcastPrimeIds.has(signal.id)) {
-      console.log(`\n[postToX] skip (PRIME conflict, lower edge) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
+    // Conflict guard: a suggested selection that lost the per-match/market
+    // tie-break to a higher-edge opposing pick is suppressed so the two can't
+    // cancel out.
+    if (!isInplay(signal) && !isMover(signal) && isBroadcastable(signal) && !broadcastableIds.has(signal.id)) {
+      console.log(`\n[postToX] skip (backed conflict, lower edge) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
       await markPosted(supabase, signal.id, messageHash, null);
       skippedInfo++;
       continue;
@@ -345,4 +383,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[postToX] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, buildMessage, isSuggested, isMover, isInplay, chatIdForSignal };
+module.exports = { run, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal };

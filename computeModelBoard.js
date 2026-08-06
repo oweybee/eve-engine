@@ -23,6 +23,7 @@
 const { getClient } = require('./lib/supabaseClient');
 const { priceFixture, available } = require('./lib/lambdaBoard');
 const { categoryFor } = require('./lib/signalTier');
+const { scoreSignal } = require('./lib/maxedge');
 
 const ENABLED = process.env.LAMBDA_BOARD_ENABLED === 'true';
 const EV_THRESHOLD = parseFloat(process.env.LAMBDA_EV_THRESHOLD || '0.03');
@@ -261,6 +262,13 @@ async function run() {
         league_tag: opp.leagueTag,
         price_seg: opp.seg,
         signal_category: categoryFor({ odds: bestP.v, edge }),
+        // This path already wrote model_prob and market_prob — it always knew
+        // they were columns, which is what makes the "not a column" comment in
+        // computeValues.js so expensive. The score joins them.
+        ...scoreSignal({
+          detected_odds: bestP.v, detected_edge: edge,
+          model_architecture: 'DIXON_COLES', model_prob: opp.modelP,
+        }),
       });
     }
   }
