@@ -1,5 +1,22 @@
 -- 051_paper_trade_writer.sql
 --
+-- APPLIED to production 2026-08-06, and it needed two changes to run.
+--
+--   1. mx_refresh_team_match() TIMES OUT as written. It calls
+--      mx_canonical_team() once per row over 155,000 football-data rows, and a
+--      per-row subquery at that volume exceeds the statement timeout. Run the
+--      four source inserts as separate statements joining team_alias directly
+--      rather than calling the function per row.
+--
+--   2. The api_stats insert raises 21000 "ON CONFLICT DO UPDATE command cannot
+--      affect row a second time". team_alias is keyed on the RAW name, so
+--      case-variant rows ('Gais' and 'GAIS') both match lower(trim(raw_name))
+--      and the join fans out. public.team_alias_lookup is a DISTINCT ON view
+--      over team_alias that collapses them; join that, not the table.
+--
+-- After the run: 234,442 rows, 869 clubs, 116,096 with corners, 126,696 with
+-- cards, and 104,271 team-matches clearing the 20-match floor for cards.
+--
 -- AMENDED 2026-08-05 (ii): every `lower(trim(name))` in this file is now
 -- `public.mx_canonical_team(source, name)`, from migration 053 — WHICH MUST BE
 -- APPLIED BEFORE THIS ONE. The raw name was never a safe team key. Measured on

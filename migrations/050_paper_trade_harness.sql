@@ -1,5 +1,14 @@
 -- 050_paper_trade_harness.sql
 --
+-- APPLIED to production 2026-08-06. TWO DEFECTS WERE FOUND BY APPLYING IT.
+--
+--   1. `round(100.0 * stddev(clv) / sqrt(...), 2)` in paper_trade_report is a
+--      round(double precision, integer), which Postgres does not have. The view
+--      would not create. stddev() returns double; the cast is now explicit.
+--      Same fault in paper_trade_gate's z-score, fixed the same way.
+--
+-- Both are the kind of thing only running it finds, which is why it was run.
+--
 -- STAGED, NOT APPLIED. Independent of 048 and 049; 051 depends on it.
 --
 -- WHY IT EXISTS. Cards and corners are the strongest discriminators anything in
@@ -173,7 +182,7 @@ select
   round(avg(price_taken), 2)                      as avg_price,
   -- the headline
   round(100.0 * avg(clv), 2)                      as avg_clv_pct,
-  round(100.0 * stddev(clv) / sqrt(nullif(count(clv), 0)), 2) as clv_stderr_pct,
+  round((100.0 * stddev(clv) / sqrt(nullif(count(clv), 0)))::numeric, 2) as clv_stderr_pct,
   round(100.0 * sum(pl_units)
         / nullif(count(*) filter (where result in ('win','loss')), 0), 2) as yield_pct,
   round(avg(hours_to_kickoff), 1)                 as avg_hrs_before_ko,
@@ -210,7 +219,7 @@ language sql stable as $$
     select pt.model, pt.market,
            count(*) filter (where pt.result in ('win','loss')) as n,
            avg(pt.clv)                                          as clv,
-           stddev(pt.clv)                                       as clv_sd,
+           stddev(pt.clv)::numeric                              as clv_sd,
            count(pt.clv)                                        as n_clv,
            sum(pt.pl_units)                                     as pl
     from public.paper_trades pt
