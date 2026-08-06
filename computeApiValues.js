@@ -32,6 +32,7 @@
 
 const { getClient } = require('./lib/supabaseClient');
 const { categoryFor } = require('./lib/signalTier');
+const { scoreSignal } = require('./lib/maxedge');
 
 const MIN_BOOKMAKERS        = parseInt(process.env.MIN_BOOKMAKERS        || '2',  10);
 const COMPUTE_CONCURRENCY   = parseInt(process.env.COMPUTE_CONCURRENCY   || '5',  10);
@@ -394,7 +395,12 @@ async function insertValueSignals(supabase, rows) {
     const signal_category = categoryFor({ odds: curOdds, edge: c._edge });
 
     const { _edge, _odds, _p_api, ...signalRow } = c;
-    toInsert.push({ ...signalRow, signal_category, is_mover });
+    // The verdict, frozen at detection — see lib/maxedge.js. API_PREDICTIVE is
+    // publish=false, so these rows never reach a reader; the score is still
+    // written, because the calibration refresh reads settled history and a row
+    // with no score cannot be re-measured later.
+    const scored = scoreSignal({ ...signalRow, detected_odds: curOdds, detected_edge: c._edge });
+    toInsert.push({ ...signalRow, ...scored, signal_category, is_mover });
   }
 
   console.log(

@@ -1,25 +1,30 @@
 /**
  * MaxEdge — Automated Signal Posting (Telegram)
  *
- * Broadcast policy (pre-match): we only ever broadcast what the ELIGIBILITY
- * ladder suggests — the back-tested sweet spot of odds 1.40–3.00 with a 4–10%
- * edge. The wider edges and the longshots stay visible on the site as a tool,
- * but are never broadcast as a suggested selection and never counted in
- * performance. See lib/signalTier.js.
+ * Broadcast policy (pre-match): a post goes out only when BOTH ladders agree.
+ * The eligibility ladder has to suggest the selection — the back-tested sweet
+ * spot of odds 1.40–3.00 with a 4–10% edge — and the conviction ladder has to
+ * put it on PRIME, meaning MXS >= 65. That is exactly what the site requires
+ * before it prints ◆ PRIME on a row, so the word means one thing in both places.
  *
- *   BACKED         — odds 1.40–3.00 AND edge 4–10%. The only broadcast bucket.
+ *   PRIME SIGNAL   — suggested by the ladder AND scored PRIME. The only
+ *                    broadcast bucket, and the only place this word is used.
  *   ODDS MOVEMENT  — is_mover=true (odds shifted on an existing signal)
  *   IN-PLAY        — phase='inplay', routed to the dedicated in-play channel
  *
- * IT DOES NOT SAY "PRIME", AND THAT IS THE POINT (6 Aug 2026). This channel
- * used to open with "🟢 *PRIME SIGNAL* — High conviction", from `classifyTier`.
- * Since the vocabulary unified, PRIME is a rung of the CONVICTION ladder and
- * means MXS >= 65 — a claim this message cannot make, because the engine holds
- * no MaxEdgeScore at broadcast time (migration 048 is staged, not applied). So
- * a post reading PRIME could go out for a selection the site badges WATCH.
+ * WHY THE SECOND CONDITION EXISTS (6 Aug 2026). This channel used to take PRIME
+ * from `classifyTier` alone, which is the ELIGIBILITY ladder. After the
+ * vocabulary unified, PRIME became a rung of the CONVICTION ladder, so a post
+ * could go out reading PRIME for a selection the site badges WATCH — the
+ * collision escaping the product entirely, to the one audience that cannot click
+ * through and check. The engine now writes `mxs_band` at detection
+ * (lib/maxedge.js), so the broadcast can read the same verdict the badge does
+ * instead of asserting one.
  *
- * A broadcast may only assert what it actually knows. It knows the ladder
- * suggested this selection, so it says that, in the ladder's own language.
+ * A SIGNAL WITH NO SCORE IS NOT BROADCAST, and that is a policy choice worth
+ * knowing. An architecture with no row in `model_calibration` scores null, and a
+ * null is not PRIME. Silence is the correct output for "we could not measure
+ * this" — the alternative is a post that names a rung nobody computed.
  */
 'use strict';
 
@@ -28,6 +33,7 @@ const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { formatLiveState } = require('./lib/inplay');
 const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
+const { scoreSignal } = require('./lib/maxedge');
 const { isPublished, withheldReason } = require('./lib/publication');
 
 const DRY_RUN = process.env.DRY_RUN === '1';
@@ -125,8 +131,22 @@ async function fetchRecentSignals(supabase) {
 
 function isMover(signal) { return signal.is_mover === true; }
 function isInplay(signal) { return signal.phase === 'inplay'; }
-/** Pre-match selections we actually suggest, and therefore broadcast. */
+/** Pre-match selections the eligibility ladder suggests. */
 function isSuggested(signal) { return classifyTier(signal).suggested; }
+
+/**
+ * The conviction rung for a signal — the stored one where the engine wrote it,
+ * recomputed from the row otherwise so a backfilled or legacy signal is not
+ * silently unbroadcastable. Same formula either way (lib/maxedge.js).
+ */
+function bandOf(signal) {
+  return signal.mxs_band ?? scoreSignal(signal).mxs_band;
+}
+
+/** Both ladders agree: suggested by the price+edge box AND scored PRIME. */
+function isBroadcastable(signal) {
+  return isSuggested(signal) && bandOf(signal) === 'PRIME';
+}
 
 function formatKickoff(isoStr) {
   if (!isoStr) return 'TBC';
@@ -179,12 +199,13 @@ function buildMessage(signal) {
     hashtags = `#MaxEdge #OddsMove`;
   } else {
     const { tier, notable } = classifyTier(signal);
-    if (tier === 'prime') {
-      // "BACKED", not "PRIME": this states what the ladder decided, which is
-      // what we know here. See the note at the head of this file.
-      header   = `🟢 *BACKED SELECTION*`;
-      note     = `_The only band we suggest — odds 1.40–3.00 at a 4–10% edge_`;
-      hashtags = `#MaxEdge #ValueBet`;
+    const band = bandOf(signal);
+    if (tier === 'prime' && band === 'PRIME') {
+      // PRIME, and it means here exactly what it means on a board row: the
+      // ladder suggests it and the score puts it at or above 65.
+      header   = `🟢 *PRIME SIGNAL*`;
+      note     = `_Our only backed tier — the ladder suggests it and it scores ${signal.mxs ?? scoreSignal(signal).mxs}/100_`;
+      hashtags = `#MaxEdge #Prime #ValueBet`;
     } else if (tier === 'longshot') {
       // A fact about the price, not a rung: every settled bet at 3.00+ lost.
       header   = notable ? `🎯 *LONGSHOT · NOTABLE EDGE*` : `🎯 *LONGSHOT*`;
@@ -277,7 +298,7 @@ async function run() {
   // only the highest-edge pick per (match, market, line) so we never push two
   // opposing outcomes on the same match. The rest are suppressed below.
   const broadcastableIds = new Set(
-    dedupeConflicts(toPost.filter(s => !isInplay(s) && !isMover(s) && classifyTier(s).tier === 'prime'))
+    dedupeConflicts(toPost.filter(s => !isInplay(s) && !isMover(s) && isBroadcastable(s)))
       .map(s => s.id));
 
   if (!toPost.length) { console.log('[postToX] nothing to post'); return { posted: 0, failed: 0, skipped: alreadySeen }; }
@@ -318,7 +339,7 @@ async function run() {
     // Conflict guard: a suggested selection that lost the per-match/market
     // tie-break to a higher-edge opposing pick is suppressed so the two can't
     // cancel out.
-    if (!isInplay(signal) && !isMover(signal) && tier === 'prime' && !broadcastableIds.has(signal.id)) {
+    if (!isInplay(signal) && !isMover(signal) && isBroadcastable(signal) && !broadcastableIds.has(signal.id)) {
       console.log(`\n[postToX] skip (backed conflict, lower edge) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
       await markPosted(supabase, signal.id, messageHash, null);
       skippedInfo++;
@@ -362,4 +383,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[postToX] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, buildMessage, isSuggested, isMover, isInplay, chatIdForSignal };
+module.exports = { run, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal };

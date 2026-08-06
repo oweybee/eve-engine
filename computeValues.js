@@ -20,6 +20,7 @@
 // The pure exports below have no DB dependency.
 const sm            = require('./lib/secondaryMarkets');
 const { categoryFor } = require('./lib/signalTier');
+const { scoreSignal } = require('./lib/maxedge');
 const { shinDevig } = require('./lib/devig');
 // The whole module, not just the book list: `gate()` is applied to every
 // outcome below so the engine, the match-card API and the backtest all read
@@ -626,7 +627,14 @@ async function insertValueSignals(
     const signal_category = categoryFor({ odds: curOdds, edge: c._edge });
 
     const { _edge, _odds, ...signalRow } = c;
-    toInsert.push({ ...signalRow, signal_category, is_mover });
+    // THE VERDICT, FROZEN AT DETECTION (migration 048's four columns, plus the
+    // two probabilities from 039). Nothing wrote any of these until 6 Aug 2026,
+    // so every row detected after 048's backfill carried a NULL score and the
+    // product had to infer a rung from whatever number a surface happened to
+    // hold. Storing it here is also the more correct of the two options: this is
+    // what the signal was actually judged against, and the market moves.
+    const scored = scoreSignal({ ...signalRow, detected_odds: curOdds, detected_edge: c._edge });
+    toInsert.push({ ...signalRow, ...scored, signal_category, is_mover });
   }
 
   console.log(
@@ -703,9 +711,18 @@ async function insertSecondarySignals(supabase, candidates, phase = 'prematch') 
   for (const c of candidates) {
     if (seen.has(key(c))) continue;
     seen.add(key(c));
-    const { model_prob, ...rest } = c;   // model_prob is internal, not a column
+    // `model_prob` IS a column, and has been since migration 039. This line
+    // read `const { model_prob, ...rest } = c;  // model_prob is internal, not a
+    // column` — so the engine computed the model's own probability, asserted in
+    // a comment that there was nowhere to put it, and dropped it on every
+    // secondary signal ever written. That is why migration 048 found
+    // model_prob/market_prob "NULL on all rows since inception" and had to
+    // recover them arithmetically. Verified against production on 6 Aug 2026:
+    // model_prob and market_prob are numeric(6,4), and prob_gap / model_sigma /
+    // mxs / mxs_band all exist.
     toInsert.push({
-      ...rest,
+      ...c,
+      ...scoreSignal(c),
       phase,
       detected_mes:    null,             // frontend computes risk-adjusted MES
       signal_category: categoryFor({ odds: c.detected_odds, edge: c.detected_edge }),

@@ -7,7 +7,7 @@
 
 const assert = require('assert');
 const inplay = require('./lib/inplay');
-const { buildMessage, isInplay, isSuggested, chatIdForSignal } = require('./postToX');
+const { buildMessage, isInplay, isSuggested, isBroadcastable, bandOf, chatIdForSignal } = require('./postToX');
 const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
 const { extractLiveH2h } = require('./ingestLiveOdds');
 const elo = require('./lib/elo');
@@ -96,24 +96,78 @@ test('in-play message has live header + score', () => {
   assert.ok(m.includes('Live: 0-1 40\''), 'live score');
   assert.ok(m.includes('#InPlay'), 'hashtag');
 });
-test('prematch value signal (odds 2.5 / edge 3%) → VALUE header, info-only, not suggested', () => {
+test('prematch unbacked edge (odds 2.5 / edge 3%) → info-only header, not suggested', () => {
+  // Header renamed from "VALUE SIGNAL" on 6 Aug 2026: VALUE was a word of the
+  // retired conviction ladder, and this row is not a conviction at all — it is
+  // positive EV outside the band we back at.
   const m = buildMessage(prematchSignal);
-  assert.ok(m.includes('VALUE SIGNAL'));
-  assert.ok(m.includes('not a suggested signal'));
+  assert.ok(m.includes('UNBACKED EDGE'));
+  assert.ok(m.includes('not a suggested selection'));
   assert.ok(m.includes('Kickoff:'));
   assert.ok(!m.includes('IN-PLAY'));
   assert.strictEqual(isSuggested(prematchSignal), false);
 });
 
-// Tier classifier + Prime broadcast policy ------------------------------------
-const primeSignal    = { ...prematchSignal, detected_odds: 2.2, detected_edge: 0.06 };
+// Tier classifier + PRIME broadcast policy -----------------------------------
+//
+// SINCE 6 Aug 2026 A BROADCAST NEEDS BOTH LADDERS. `PRIME SIGNAL` means what a
+// ◆ PRIME badge on the site means — the eligibility ladder suggests it AND the
+// conviction ladder scores it 65+ — so the word cannot say one thing in the
+// channel and another on a row. A suggested selection we could not score is
+// not broadcast at all.
+const primeSignal = {
+  ...prematchSignal, detected_odds: 2.2, detected_edge: 0.09,
+  model_architecture: 'DIXON_COLES', mxs: 76, mxs_band: 'PRIME',
+};
 const longshotSignal = { ...prematchSignal, detected_odds: 5.0, detected_edge: 0.07 };
-test('prime box (odds 2.2 / edge 6%) → PRIME header + suggested', () => {
+
+test('prime box + PRIME score → PRIME header, broadcastable', () => {
   assert.strictEqual(classifyTier(primeSignal).tier, 'prime');
   assert.strictEqual(isSuggested(primeSignal), true);
+  assert.strictEqual(isBroadcastable(primeSignal), true);
   const m = buildMessage(primeSignal);
   assert.ok(m.includes('PRIME SIGNAL'), 'header');
-  assert.ok(m.includes('highly-suggested'), 'suggested note');
+  assert.ok(m.includes('backed'), 'backed note');
+  assert.ok(m.includes('76/100'), 'states the score it is claiming');
+});
+
+test('the rung is read from the row, and recomputed when it is absent', () => {
+  // A backfilled or legacy row carries no mxs_band; the same formula fills it
+  // in rather than silently making the signal unbroadcastable.
+  const { mxs, mxs_band, ...unstored } = primeSignal;
+  assert.strictEqual(bandOf(unstored), 'PRIME');
+  assert.strictEqual(isBroadcastable(unstored), true);
+});
+
+test('THE BOX AND THE RUNG DO NOT COINCIDE, and that is the point', () => {
+  // odds 2.2 at a 6% edge is well inside the eligibility ladder's profitable
+  // box, and it scores 62 — WATCH. Measured against production on 6 Aug 2026,
+  // 4 of the 10 published prematch signals in the box clear MXS 65; the other
+  // 6 do not. Under the old policy all 10 were broadcast as "PRIME SIGNAL"
+  // while the site badged six of them WATCH. Requiring both is what stops the
+  // word meaning two things, and a quieter channel is the cost of that.
+  const inBox = { ...primeSignal, detected_edge: 0.06 };
+  delete inBox.mxs; delete inBox.mxs_band;
+  assert.strictEqual(classifyTier(inBox).suggested, true, 'the box suggests it');
+  assert.strictEqual(bandOf(inBox), 'WATCH', 'the score does not back it');
+  assert.strictEqual(isBroadcastable(inBox), false);
+});
+
+test('suggested but scored below PRIME is NOT broadcast', () => {
+  // This is the case the old policy got wrong: the ladder suggests it, so the
+  // channel would have opened with "PRIME SIGNAL" while the site badged WATCH.
+  const watch = { ...primeSignal, mxs: 52, mxs_band: 'WATCH' };
+  assert.strictEqual(isSuggested(watch), true);
+  assert.strictEqual(isBroadcastable(watch), false);
+});
+
+test('suggested but UNSCORABLE is not broadcast either', () => {
+  // An architecture with no row in model_calibration scores null, and null is
+  // not PRIME. Silence is the right output for "we could not measure this".
+  const unscored = { ...primeSignal, model_architecture: 'SUPERMODEL_HALFTIME' };
+  delete unscored.mxs; delete unscored.mxs_band;
+  assert.strictEqual(bandOf(unscored), null);
+  assert.strictEqual(isBroadcastable(unscored), false);
 });
 test('longshot (odds ≥ 3.0) → LONGSHOT header, notable 6–10% flag, never suggested', () => {
   const c = classifyTier(longshotSignal);
