@@ -51,16 +51,22 @@ on:
     #
     # The budget, measured on run 31102483691:
     #   setup (checkout, node, npm, planDay)     12s
-    #   live odds loop            now bounded  ≤420s
-    #   tail (api, board, integrity, settle…)    19s
-    #   fetch match details                      73s
+    #   live odds loop            now bounded  ≤300s (+72s overshoot, see below)
+    #   tail (api, board, integrity, settle…)    16s
+    #   fetch match details       now capped   ≤120s
+    #   team stats + referees     now capped   ≤120s
     #   ────────────────────────────────────────────
-    #   expected                               ~524s  (8m44s)
+    #   worst case                             ~640s  (10m40s)
+    #   typical (measured 31104035153)         ~506s  (8m26s)
     #
-    # Worst case is higher: the budget is checked BETWEEN iterations, so it can
-    # overshoot by one iteration's work (~72s) — it cannot stop mid-compute.
-    # That puts the ceiling near 596s (9m56s), which is what the 12-minute
-    # timeout is sized for.
+    # The loop budget is checked BETWEEN iterations, so it can overshoot by one
+    # iteration's work (~72s) — it cannot stop mid-compute. The two tail caps
+    # are real step timeouts and cannot overshoot.
+    #
+    # An earlier version of this budget was wrong because it was measured on a
+    # run whose tail had been SKIPPED after the loop failed, which made the
+    # tail look like ~92s when fetchTeamStats alone can run 349s+. Measure the
+    # budget on a run that actually finished.
     #
     # Against timeout-minutes: 12 and a 15-minute window, that is slack at both
     # ends. If the loop budget or the tail grows, RAISE THE TIMEOUT AND WIDEN
@@ -202,7 +208,7 @@ jobs:
           # If compute slows down, the loop does fewer iterations instead of
           # overrunning the window — degrade the work, never the schedule.
           LOOPS=${{ github.event.inputs.loop_count || '4' }}
-          BUDGET=${LOOP_BUDGET_SECONDS:-420}
+          BUDGET=${LOOP_BUDGET_SECONDS:-300}
           CYCLE=${LOOP_CYCLE_SECONDS:-55}
           LOOP_EXIT=0
           START=$SECONDS
@@ -302,14 +308,22 @@ jobs:
         continue-on-error: true
         run: node recordAccas.js
 
+      # BOTH TAIL STEPS ARE TIME-BOXED. `continue-on-error` alone does not save
+      # them: it covers a step FAILING, not the job timeout killing it, and the
+      # job timeout takes the whole run down as 'cancelled'. On run 31104035153
+      # this step took 98s and fetchTeamStats then ran 349s and was still going
+      # when the 12-minute job timeout fired. Both self-cache and make partial
+      # progress, so being cut short costs a little freshness and nothing else.
       - name: Fetch match details (lineups + stats)
         id: details
         continue-on-error: true
+        timeout-minutes: 2
         run: node fetchMatchDetails.js
 
       - name: Team statistics & referee tendencies
         id: teamstats
         continue-on-error: true
+        timeout-minutes: 2
         shell: bash
         run: |
           # Rolling last-N form / corners / cards / xG per team. Run every
