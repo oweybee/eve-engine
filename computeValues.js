@@ -556,6 +556,22 @@ async function insertValueSignals(
     }
   }
 
+  // THE DATA-QUALITY REPORT BELONGS HERE, and lived in insertSecondarySignals
+  // from 218d017 until 6 Aug 2026 — a function where `rejected` is not in
+  // scope, so the FIRST secondary-market candidate of every run threw
+  // `ReferenceError: rejected is not defined` before a single row was written.
+  // Production shows the signature exactly: h2h signals kept flowing all day
+  // and totals/BTTS/corners/cards stopped dead at 08:18 UTC, when the commit
+  // landed. Moving it back fixes the crash and restores the reporting the
+  // commit intended, which no run has printed since.
+  if (rejected.size) {
+    const total = [...rejected.values()].reduce((a, b) => a + b, 0);
+    console.log(`[values] data-quality gate rejected ${total} candidate(s) before scoring:`);
+    for (const [reason, count] of [...rejected.entries()].sort((a, b) => b[1] - a[1])) {
+      console.log(`         ${String(count).padStart(4)} × ${reason}`);
+    }
+  }
+
   if (!candidates.length) {
     console.log('[value_signals] no value outcomes');
     return 0;
@@ -698,14 +714,6 @@ async function insertSecondarySignals(supabase, candidates, phase = 'prematch') 
 
   const key  = r => `${r.match_id}|${r.market ?? 'h2h'}|${r.outcome}|${r.model_architecture ?? ''}`;
   const seen = new Set((existing ?? []).map(key));
-
-  if (rejected.size) {
-    const total = [...rejected.values()].reduce((a, b) => a + b, 0);
-    console.log(`[values] data-quality gate rejected ${total} candidate(s) before scoring:`);
-    for (const [reason, count] of [...rejected.entries()].sort((a, b) => b[1] - a[1])) {
-      console.log(`         ${String(count).padStart(4)} × ${reason}`);
-    }
-  }
 
   const toInsert = [];
   for (const c of candidates) {

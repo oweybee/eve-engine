@@ -153,4 +153,70 @@ test('the columns it emits are exactly the ones 048 added, plus 039’s two', ()
     ['market_prob', 'model_prob', 'model_sigma', 'mxs', 'mxs_band', 'prob_gap']);
 });
 
-console.log(`\n  ${passed} passed`);
+/* ── The write paths actually emit it ──────────────────────────────────── */
+
+// scoreSignal working is not the same as the engine WRITING the score, and the
+// difference was a live crash: insertSecondarySignals threw
+// `ReferenceError: rejected is not defined` on its first candidate, so no
+// totals/BTTS/corners/cards signal was written for seven hours on 6 Aug. These
+// drive the real functions with a stub client and read what they would send.
+
+const { insertValueSignals, insertSecondarySignals } = require('./computeValues');
+
+function captureClient() {
+  const rows = [];
+  const q = {
+    select: () => q, in: () => q, eq: () => q, gt: () => q, gte: () => q,
+    lte: () => q, order: () => q, limit: () => q, not: () => q, is: () => q,
+    then: (r) => Promise.resolve({ data: [], error: null }).then(r),
+    insert: (batch) => { rows.push(...batch); return Promise.resolve({ error: null }); },
+  };
+  return { rows, from: () => q };
+}
+
+const SCORED = ['model_prob', 'market_prob', 'prob_gap', 'model_sigma', 'mxs', 'mxs_band'];
+
+(async () => {
+  const c1 = captureClient();
+  await insertValueSignals(c1, [{
+    match_id: '00000000-0000-0000-0000-000000000001',
+    home_value: true, home_edge: 0.09,
+    best_home_odds: 2.20, best_home_book: 'bet365',
+    all_home_odds: { bet365: 2.20, pinnacle: 2.14, williamhill: 2.10, unibet: 2.12 },
+    _bookmakerCount: 18,
+    odds_fetched_at: new Date().toISOString(),
+    _kickoff_at: new Date(Date.now() + 6 * 3600e3).toISOString(),
+  }], 'prematch', 'MARKET_ANCHORED');
+
+  test('the 1X2 path writes every scored column', () => {
+    assert.strictEqual(c1.rows.length, 1);
+    for (const col of SCORED) assert.ok(col in c1.rows[0], `${col} is written`);
+    assert.strictEqual(c1.rows[0].mxs, 76);
+    assert.strictEqual(c1.rows[0].mxs_band, 'PRIME');
+    // Both ladders on one row, and they are allowed to differ.
+    assert.strictEqual(c1.rows[0].signal_category, 'Prime');
+  });
+
+  const c2 = captureClient();
+  await insertSecondarySignals(c2, [{
+    match_id: '00000000-0000-0000-0000-000000000002',
+    outcome: 'over', market: 'totals', market_line: 2.5,
+    detected_odds: 1.91, detected_edge: 0.048,
+    bookmaker: 'bet365', model_architecture: 'DIXON_COLES', model_prob: 0.5487,
+    kickoff_at: new Date(Date.now() + 9 * 3600e3).toISOString(),
+  }], 'prematch');
+
+  test('the secondary path writes them too, and no longer throws', () => {
+    assert.strictEqual(c2.rows.length, 1, 'it inserted rather than throwing');
+    for (const col of SCORED) assert.ok(col in c2.rows[0], `${col} is written`);
+    assert.strictEqual(c2.rows[0].mxs, 59);
+    assert.strictEqual(c2.rows[0].mxs_band, 'WATCH');
+  });
+
+  test('the secondary path keeps the model probability it was handed', () => {
+    // It used to be destructured away on the claim that it was not a column.
+    assert.strictEqual(c2.rows[0].model_prob, 0.5487);
+  });
+
+  console.log(`\n  ${passed} passed`);
+})();
