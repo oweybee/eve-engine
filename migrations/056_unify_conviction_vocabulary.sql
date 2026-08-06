@@ -1,6 +1,21 @@
 -- 056_unify_conviction_vocabulary.sql
 --
--- STAGED, NOT APPLIED. Read the whole header before running it.
+-- APPLIED AND VERIFIED IN PRODUCTION (zlbmpeiuhyllxwegtayu) on 6 Aug 2026.
+--
+-- Pre-flight, before applying: 0 rows carried a legacy signal_category, 0 an
+-- mxs_band outside the four rungs, and 0 rows where mxs_band disagreed with
+-- maxedge_band(mxs). Both guards would have aborted; neither had to.
+--
+-- After applying, both constraints were probed in a rolled-back transaction
+-- rather than reasoned about:
+--   * signal_category = 'Standard'  -> rejected (check_violation)
+--   * mxs_band = 'STRONG'           -> rejected (check_violation)
+--   * a row shaped as the engine now writes one (Prime / DIXON_COLES /
+--     mxs 76 / mxs_band PRIME) -> accepted
+-- Row count unchanged at 455, no probe rows left behind.
+--
+-- The ordering note below about 048 is moot: 048 was already applied when this
+-- ran, so step 2 was a real write rather than the guarded no-op.
 --
 -- WHAT THIS DOES, IN ONE LINE. Finishes the contract migration 033 promised and
 -- bounds the two tier vocabularies the schema carries, so the database can hold
@@ -153,8 +168,12 @@ end $$;
 commit;
 
 -- ---------------------------------------------------------------------------
--- VERIFY (run after applying; both should return zero rows)
+-- VERIFY — run on 6 Aug 2026 immediately after applying. Results inline.
 -- ---------------------------------------------------------------------------
+--
+--   signal_category: Longshot 217 · Value 201 · Prime 37   (455, no others)
+--   mxs_band:        within the four rungs on every non-null row
+--   band vs score:   0 rows where mxs_band <> maxedge_band(mxs)
 --
 --   select signal_category, count(*)
 --     from value_signals group by 1 order by 2 desc;
