@@ -18,6 +18,13 @@ from datetime import datetime, timezone
 import pandas as pd
 from supabase import create_client
 
+# 2026-08-06: fixture_predictions.xg_created / xg_conceded were renamed to
+# sot_x035_derived / sot_against_x035_derived by migration 052. They were never
+# expected goals — they are shots on target x 0.35, exact on 2,444 of 2,444
+# joined rows. team_stats_cache keeps its own xg_created columns; only
+# fixture_predictions was renamed, so only reads/writes of THAT table change.
+
+
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
 if not SUPABASE_URL or not SUPABASE_KEY:
@@ -64,7 +71,11 @@ def load_all_fixtures():
             client.table('fixture_predictions')
             .select('home_team_name, away_team_name, match_kickoff_at, '
                     'home_goals_scored, away_goals_scored, '
-                    'xg_created, xg_conceded, ppda_intensity_index')
+                    # migration 052 renamed these; aliased back so the
+                    # DataFrame keys below are unchanged.
+                    'xg_created:sot_x035_derived, '
+                    'xg_conceded:sot_against_x035_derived, '
+                    'ppda_intensity_index')
             .order('match_kickoff_at', desc=False)
             .range(start, end)
             .execute()

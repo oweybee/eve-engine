@@ -12,7 +12,8 @@ when full shot data became available) and inserts them into:
   2. matches — one labelled row per match with full stats and result.
      Used by train.py as the primary training target.
 
-xG proxy:   HST * 0.35  (home xg_created),  AST * 0.35  (away = home xg_conceded)
+SoT proxy:  HST * 0.35 -> sot_x035_derived,  AST * 0.35 -> sot_against_x035_derived
+            NOT expected goals. Named for what it is since migration 052.
 PPDA proxy: 11.5 baseline (pass counts unavailable in this dataset)
 SOT ratio:  HST / max(HS, 1)  — real value, not hardcoded baseline
 
@@ -36,6 +37,13 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
+
+# 2026-08-06: fixture_predictions.xg_created / xg_conceded were renamed to
+# sot_x035_derived / sot_against_x035_derived by migration 052. They were never
+# expected goals — they are shots on target x 0.35, exact on 2,444 of 2,444
+# joined rows. team_stats_cache keeps its own xg_created columns; only
+# fixture_predictions was renamed, so only reads/writes of THAT table change.
+
 
 import pandas as pd
 import requests
@@ -318,8 +326,8 @@ def build_rows(df, league_key, season, league_id, team_to_id):
             'away_team_name':       away,
             'home_goals_scored':    fthg,
             'away_goals_scored':    ftag,
-            'xg_created':           xg_home,
-            'xg_conceded':          xg_away,
+            'sot_x035_derived':         xg_home,
+            'sot_against_x035_derived': xg_away,
             'ppda_intensity_index': ppda_home,
             'model_architecture':   'DATAHUB_CSV',
             'feature_completeness': False,

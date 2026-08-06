@@ -17,6 +17,13 @@ from datetime import datetime, timezone
 import pandas as pd
 from supabase import create_client
 
+# 2026-08-06: fixture_predictions.xg_created / xg_conceded were renamed to
+# sot_x035_derived / sot_against_x035_derived by migration 052. They were never
+# expected goals — they are shots on target x 0.35, exact on 2,444 of 2,444
+# joined rows. team_stats_cache keeps its own xg_created columns; only
+# fixture_predictions was renamed, so only reads/writes of THAT table change.
+
+
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
 if not SUPABASE_URL or not SUPABASE_KEY:
@@ -84,8 +91,8 @@ def build_game_log(df):
         'away_team_name':   'opponent',
         'home_goals_scored': 'goals_scored',
         'away_goals_scored': 'goals_conceded',
-        'xg_created':        'xg_created',
-        'xg_conceded':       'xg_conceded',
+        'sot_x035_derived':         'xg_created',
+        'sot_against_x035_derived': 'xg_conceded',
     }).assign(
         ppda_index=df['ppda_intensity_index'],
         kickoff_at=df['match_kickoff_at'],
@@ -97,8 +104,8 @@ def build_game_log(df):
         'home_team_name':    'opponent',
         'away_goals_scored': 'goals_scored',
         'home_goals_scored': 'goals_conceded',
-        'xg_conceded':       'xg_created',   # away's xg created = home's xg conceded
-        'xg_created':        'xg_conceded',
+        'sot_against_x035_derived': 'xg_created',   # away's created = home's conceded
+        'sot_x035_derived':         'xg_conceded',
     }).assign(
         ppda_index=(30.0 - df['ppda_intensity_index']).clip(7.5, 15.5),
         kickoff_at=df['match_kickoff_at'],

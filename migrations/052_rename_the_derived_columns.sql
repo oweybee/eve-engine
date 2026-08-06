@@ -1,5 +1,21 @@
 -- 052_rename_the_derived_columns.sql
 --
+-- APPLIED to production 2026-08-06, together with the three Python seeders that
+-- read these columns by name — that coupling is why it waited. Verified after:
+--   matches with stats_source='datahub_csv' and xg_home not null : 0
+--   matches with stats_source='statsbomb'  and xg_home not null : 1,318 (kept)
+--   fixture_predictions old column names remaining               : 0
+--   matches_no_derived_xg CHECK present                          : yes
+--   inplay_baseline.source                                       : market_derived_not_model
+--
+-- The seeders were handled two different ways, on purpose. seed_team_stats.py
+-- aliases the new columns back to the old names IN THE SELECT
+-- (xg_created:sot_x035_derived), so every downstream line is untouched.
+-- seed_world_cup.py uses select(*), so its rename map keys off the new names.
+-- seed_datahub.py — the script that CREATED these values — writes the new names
+-- directly, and its header no longer calls them an xG proxy.
+--
+-- ORIGINAL NOTE FOLLOWS.
 -- STAGED, NOT APPLIED. Independent of 048–051; apply in any order relative to
 -- them. This one is destructive in a way they are not — it NULLs 35,947 values
 -- — so read the whole header before running it, and run it in a branch first.
