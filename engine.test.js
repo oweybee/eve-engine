@@ -187,12 +187,20 @@ console.log('\ncomputeMatch');
 test('no priceable odds → { skipped: true }', () => {
   assert.deepStrictEqual(computeMatch({ id: 'm1', odds: [] }), { skipped: true });
 });
+// Six bettable books, the gate's floor. Below it the "best price" is usually
+// one stale line rather than a real outlier, so a thinner fixture is correctly
+// rejected and cannot be used to test the value path.
+const SIX_BOOKS = (h, d, a) => [
+  row('bet365', h, d, a), row('betvictor', h, d, a), row('unibet_uk', h, d, a),
+  row('betano', h, d, a), row('10bet', h, d, a), row('marathonbet', h, d, a),
+];
+
 test('builds a MARKET_ANCHORED row and flags value on a real edge', () => {
   const match = {
     id: 'm2',
     odds: [
-      row('bet365',      2.10, 3.60, 3.70),
-      row('pinnacle',    2.10, 3.60, 3.70),
+      row('pinnacle', 2.10, 3.60, 3.70),
+      ...SIX_BOOKS(2.10, 3.60, 3.70),
       row('williamhill', 2.35, 3.50, 3.60),
     ],
   };
@@ -208,6 +216,64 @@ test('builds a MARKET_ANCHORED row and flags value on a real edge', () => {
   assert.ok(r.row.max_edge_score > 0 && r.row.max_edge_score <= 100);
   assert.strictEqual(r.row.best_outcome, 'home');
 });
+// ── The gate, at the computed_values layer ──────────────────────────────────
+//
+// Added 6 Aug 2026 after the first live run of the market-anchored path shipped
+// a board of longshots. Swapping fair value to the Shin-de-vigged anchor made
+// the longshot edges MORE precise, not less frequent, and the gate that removes
+// them was sitting in lib/marketAnchor.js with nothing on this path calling it.
+console.log('\ncomputeMatch — the gate');
+
+test('a longshot outside the price ceiling is NOT flagged as value', () => {
+  // The live Harrogate v Solihull row, reproduced: away best 5.75 against a
+  // 21.1% fair probability — a +21.5% edge that is outside the gate on BOTH
+  // the 4.50 price ceiling and the 30% probability floor.
+  const match = {
+    id: 'm-longshot',
+    odds: [
+      row('pinnacle', 1.62, 4.10, 4.90),
+      ...SIX_BOOKS(1.62, 4.10, 4.90),
+      row('williamhill', 1.62, 4.10, 5.75),   // the fat away price, at a 7th book
+    ],
+  };
+  const r = computeMatch(match);
+  // The edge is REAL — that is what makes the test worth having. The gate is
+  // not rejecting noise, it is rejecting a genuine positive-EV longshot,
+  // because that is the bet the settled record says loses.
+  assert.ok(r.consensus.away.edge > 0.03,
+    `the edge should be real and positive, got ${r.consensus.away.edge}`);
+  assert.ok(r.consensus.away.max_odds > 4.50, 'and outside the price ceiling');
+  assert.strictEqual(r.row.away_value, false, 'a 5.75 longshot must not be value');
+  assert.strictEqual(r.row.best_outcome, null, 'and must not become the headline pick');
+  assert.strictEqual(r.hasValue, false);
+});
+
+test('an outcome under the fair-probability floor is NOT flagged', () => {
+  // Inside the price ceiling (4.20 < 4.50) but a 24% fair shot — the floor is
+  // what catches this one, which is why both checks exist.
+  const match = {
+    id: 'm-floor',
+    odds: [
+      row('pinnacle', 1.90, 3.70, 4.40),
+      ...SIX_BOOKS(1.90, 3.70, 4.40),
+      row('williamhill', 1.90, 3.70, 4.45),
+    ],
+  };
+  const r = computeMatch(match);
+  const fairProb = r.consensus.away.p_adj;
+  assert.ok(fairProb < 0.30, `fixture should sit under the floor, got ${fairProb}`);
+  assert.strictEqual(r.row.away_value, false);
+});
+
+test('too few bettable books blocks value however good the price', () => {
+  const match = {
+    id: 'm-thin',
+    odds: [row('pinnacle', 2.10, 3.60, 3.70), row('bet365', 2.60, 3.60, 3.70)],
+  };
+  const r = computeMatch(match);
+  assert.strictEqual(r.hasValue, false, 'two books is under the six-book floor');
+});
+
 test('efficient market → row with no value flags', () => {
   const r = computeMatch({
     id: 'm3',

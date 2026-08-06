@@ -21,7 +21,11 @@
 const sm            = require('./lib/secondaryMarkets');
 const { categoryFor } = require('./lib/signalTier');
 const { shinDevig } = require('./lib/devig');
-const { BETTABLE_BOOKS } = require('./lib/marketAnchor');
+// The whole module, not just the book list: `gate()` is applied to every
+// outcome below so the engine, the match-card API and the backtest all read
+// the same thresholds from one place.
+const ma = require('./lib/marketAnchor');
+const { BETTABLE_BOOKS } = ma;
 const { buildPrematchVector } = require('./lib/halftimeFeatures');
 const { checkQuality, thresholdsFromEnv } = require('./lib/dataQuality');
 
@@ -378,15 +382,54 @@ function computeMatch(match) {
   const draw_edge = draw?.has_edge ? draw.edge : 0;
   const away_edge = away?.has_edge ? away.edge : 0;
 
-  const home_value = !!(home?.has_edge && home.edge >= EV_THRESHOLD);
-  const draw_value = !!(draw?.has_edge && draw.edge >= EV_THRESHOLD);
-  const away_value = !!(away?.has_edge && away.edge >= EV_THRESHOLD);
+  // THE GATE, applied here and not only in lib/marketAnchor.js.
+  //
+  // Swapping fair value to the Shin-de-vigged anchor without also applying the
+  // gate produced precisely the board the architecture exists to prevent. On
+  // the first live run the top four picks by EV were:
+  //
+  //   Harrogate v Solihull   away 5.75  fair prob 21.1%  +21.5%
+  //   Bristol City v Walsall away 8.50  fair prob 13.4%  +13.7%
+  //   NEC v Telstar          away 6.75  fair prob 16.1%   +9.0%
+  //   Burnley v Notts County away 7.00  fair prob 15.5%   +8.2%
+  //
+  // Four longshots, every one of them outside the gate on BOTH the price
+  // ceiling and the probability floor. That is the 49-flagged-longshots /
+  // 1-winner / -70% book, reproduced live. A better fair value makes the
+  // longshot edges MORE precise, not less frequent — the thing that removes
+  // them is the gate, and the gate was still sitting in a module nobody on
+  // this path called.
+  //
+  // `gate()` is imported rather than reimplemented so the engine, the match
+  // card API and the backtest cannot drift. It returns every failure, and the
+  // reasons are kept on the row so "why is the board empty" has an answer.
+  const gateFor = (o) => ma.gate({
+    edge: o?.has_edge ? o.edge : null,
+    fairProb: o?.p_adj,
+    bestPrice: o?.max_odds,
+    booksQuoting: bookmakerCount,
+  });
+  const homeGate = gateFor(home), drawGate = gateFor(draw), awayGate = gateFor(away);
 
-  const edgeMap = { home: home_edge, draw: draw_edge, away: away_edge };
+  // EV_THRESHOLD is kept as a floor beneath the gate rather than replaced by
+  // it: the gate's MIN_EDGE is 2%, EV_THRESHOLD defaults to 0.5%, so the gate
+  // is strictly the tighter of the two and the env var can only tighten
+  // further, never loosen past it.
+  const home_value = !!(homeGate.pass && home.edge >= EV_THRESHOLD);
+  const draw_value = !!(drawGate.pass && draw.edge >= EV_THRESHOLD);
+  const away_value = !!(awayGate.pass && away.edge >= EV_THRESHOLD);
+
+  // best_outcome ranks only outcomes that PASSED. Ranking on raw edge across
+  // all three is how a 13.4%-probability longshot became the headline pick.
+  const edgeMap = {
+    home: home_value ? home_edge : -Infinity,
+    draw: draw_value ? draw_edge : -Infinity,
+    away: away_value ? away_edge : -Infinity,
+  };
   const best_outcome = Object.entries(edgeMap).reduce(
     (best, [k, v]) => (v > edgeMap[best] ? k : best), 'home'
   );
-  const max_edge_val = Math.max(home_edge, draw_edge, away_edge);
+  const max_edge_val = Math.max(edgeMap.home, edgeMap.draw, edgeMap.away);
 
   // Score out of 100: 1% edge = 10 pts, 5% = 50 pts, 10% = 100 pts
   const max_edge_score   = max_edge_val > 0 ? Math.min(100, Math.round(max_edge_val * 1000)) : 0;
