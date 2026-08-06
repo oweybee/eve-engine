@@ -112,6 +112,68 @@ test('Notts County and Nottingham Forest stay two clubs', () => {
   assert.notStrictEqual(keyOf.get('live_feed|Notts County'), keyOf.get('live_feed|Nottingham Forest'));
 });
 
+test('AC Ajaccio never becomes Ajaccio GFCO — the false merge found in audit', () => {
+  // The bug a prefix-only rule shipped. "AC Ajaccio" loses its corporate AC and
+  // becomes `ajaccio`; the only key STARTING with it is `ajacciogfco`, so the
+  // rule saw one candidate and folded two different Corsican clubs together. It
+  // could not see `gazelecajaccio` — the same club as Ajaccio GFCO under another
+  // name — because the shared token is not at the front.
+  const { keyOf } = resolve([
+    feed('AC Ajaccio'), feed('Ajaccio'), feed('Ajaccio GFCO'), feed('Gazélec Ajaccio'),
+  ]);
+  const acAjaccio = keyOf.get('live_feed|AC Ajaccio');
+  assert.strictEqual(keyOf.get('live_feed|Ajaccio'), acAjaccio, 'both name AC Ajaccio');
+  assert.notStrictEqual(acAjaccio, keyOf.get('live_feed|Ajaccio GFCO'));
+  assert.notStrictEqual(acAjaccio, keyOf.get('live_feed|Gazélec Ajaccio'));
+});
+
+test('AC Milan never becomes Inter Milan — why containment alone is worse', () => {
+  // The mirror image. `milan` is CONTAINED in `intermilan` and nothing else, so
+  // a containment-only rule would fold the two clubs that share a stadium and
+  // nothing else. Merging happens on PREFIX; only the refusal uses containment.
+  const { keyOf } = resolve([feed('AC Milan'), feed('Inter Milan')]);
+  assert.notStrictEqual(keyOf.get('live_feed|AC Milan'), keyOf.get('live_feed|Inter Milan'));
+});
+
+test('the original Wimbledon FC is not AFC Wimbledon', () => {
+  // Wimbledon FC moved to Milton Keynes in 2004 and became MK Dons; AFC
+  // Wimbledon is the 2002 fan-founded successor. football-data carries both, and
+  // merging them would credit AFC Wimbledon with a Premier League history it
+  // never had.
+  const { keyOf } = resolve([fd('Wimbledon'), fd('AFC Wimbledon'), feed('AFC Wimbledon'),
+                             fd('Milton Keynes Dons'), feed('Milton Keynes Dons')]);
+  assert.notStrictEqual(keyOf.get('football_data|Wimbledon'), keyOf.get('football_data|AFC Wimbledon'));
+  assert.notStrictEqual(keyOf.get('football_data|Wimbledon'), keyOf.get('football_data|Milton Keynes Dons'));
+  assert.strictEqual(keyOf.get('football_data|AFC Wimbledon'), keyOf.get('live_feed|AFC Wimbledon'));
+});
+
+test('all three production false-merges are refused', () => {
+  // The complete set the containment test catches across both sources, found by
+  // auditing rather than by reasoning. Prefix alone would have merged each of
+  // these pairs, and each pair is two different entities.
+  const cases = [
+    [['AC Ajaccio', 'Ajaccio'], ['Ajaccio GFCO', 'Gazélec Ajaccio']],
+    [['Guinea'], ['Equatorial Guinea', 'Guinea-Bissau']],   // three countries
+    [['Virtus'], ['Vicenza Virtus', 'Virtus Entella']],
+  ];
+  for (const [shorts, longs] of cases) {
+    const { keyOf } = resolve([...shorts, ...longs].map(feed));
+    const shortKey = keyOf.get(`live_feed|${shorts[0]}`);
+    for (const long of longs) {
+      assert.notStrictEqual(shortKey, keyOf.get(`live_feed|${long}`),
+        `${shorts[0]} must not merge into ${long}`);
+    }
+  }
+});
+
+test('a town shared by three clubs merges none of them', () => {
+  const { keyOf } = resolve([feed('Sporting CP'), feed('Sporting Gijon'),
+                             feed('Sporting Kansas City')]);
+  const keys = new Set(['Sporting CP', 'Sporting Gijon', 'Sporting Kansas City']
+    .map(n => keyOf.get(`live_feed|${n}`)));
+  assert.strictEqual(keys.size, 3, 'three clubs, three keys');
+});
+
 // ── the cross-source join, which is what §2.3 asked for ─────────────────────
 
 test('corpus and feed spellings of one club meet', () => {

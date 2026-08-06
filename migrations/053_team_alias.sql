@@ -53,11 +53,12 @@
 -- AFTER MAPPING: 114 of 164 corpus names join the feed (70%, from 54%), and the
 -- feed's 134 English names resolve to 117 clubs.
 --
--- VERIFIED AGAINST THE WHOLE `teams` TABLE, not just the English subset, on
--- 2026-08-05:
+-- FULLY AUDITED against BOTH sources, every name, on 2026-08-05 — not the
+-- English subset, and not by reasoning about the rules but by enumerating the
+-- groups they actually produce:
 --
---   1,248 rows · 222 PLACEHOLDERS · 1,026 real names
---   41 unambiguous prefix merges · 5 refused as ambiguous
+--   1,248 `teams` rows · 222 PLACEHOLDERS excluded · 1,065 distinct clubs
+--   57 short names merged · 33 refused as ambiguous
 --
 -- The 222 placeholders are `team_home_1490361` / `team_away_1490361` — 18% of
 -- the table. planDay mints one whenever a fixture arrives without a resolvable
@@ -66,9 +67,22 @@
 -- "clubs", and a fuzzy pass would score team_home_1490361 against
 -- team_home_1490362 at 0.94 and merge two unrelated fixtures.
 --
--- The 5 refusals are the reason this file does not use a list of generic words.
--- Measured across all 1,026 real names, these short names are each a prefix of
--- MORE THAN ONE longer name:
+-- THREE FALSE MERGES WERE FOUND BY THAT AUDIT, in the matcher's first version.
+-- It folded a short name into the one longer name that STARTED with it, which
+-- is one candidate too few to be safe:
+--
+--   AC Ajaccio  →  Ajaccio GFCO      (Gazélec Ajaccio was invisible to the rule:
+--                                     the shared token is not at the front)
+--   Guinea      →  Guinea-Bissau     (Equatorial Guinea likewise — three countries)
+--   Virtus      →  Virtus Entella    (Vicenza Virtus likewise)
+--
+-- The fix is that merging and refusing use DIFFERENT tests. A short key folds
+-- only into a longer key it PREFIXES, and only when no OTHER key CONTAINS its
+-- tokens anywhere. Containment alone would have been worse still: `milan`, from
+-- "AC Milan", is contained in `intermilan` and nothing else, so it would have
+-- folded AC Milan into Inter Milan.
+--
+-- The 33 refusals include the five prefix ambiguities that exist in the feed:
 --
 --   Inter          → Inter Club d'Escaldes | Inter Miami | Inter Milan | Inter Turku
 --   Austria        → Austria Lustenau | Austria Vienna
@@ -78,8 +92,13 @@
 --
 -- `Inter` in this feed means Inter Milan. A matcher that resolved it to
 -- whichever candidate sorted first would have attributed Inter Milan's record to
--- Inter Miami, silently, on three continents. All five are left unresolved and
--- reported.
+-- Inter Miami, silently, across three continents.
+--
+-- AND ONE MERGE THAT LOOKS WRONG AND IS NOT. `Wimbledon` and `AFC Wimbledon`
+-- stay separate, because Wimbledon FC moved to Milton Keynes in 2004 and AFC
+-- Wimbledon is the 2002 fan-founded successor — merging them would credit AFC
+-- Wimbledon with a Premier League history it never had. That one is held apart
+-- by a curated ALIAS entry, not by a rule.
 --
 -- WHAT IT REFUSES. `Oxford` is not mapped, because football-data carries both
 -- `Oxford City` and (as `Oxford`) Oxford United, and the feed carries
