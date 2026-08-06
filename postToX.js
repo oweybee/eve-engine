@@ -1,14 +1,25 @@
 /**
  * MaxEdge — Automated Signal Posting (Telegram)
  *
- * Broadcast policy (pre-match): we only ever suggest PRIME signals — the
- * back-tested sweet spot of odds 1.40–3.00 with a 4–10% edge. Value and
- * longshot picks stay visible on the site as a tool, but are never broadcast
- * as a suggested signal and never counted in performance. See lib/signalTier.js.
+ * Broadcast policy (pre-match): we only ever broadcast what the ELIGIBILITY
+ * ladder suggests — the back-tested sweet spot of odds 1.40–3.00 with a 4–10%
+ * edge. The wider edges and the longshots stay visible on the site as a tool,
+ * but are never broadcast as a suggested selection and never counted in
+ * performance. See lib/signalTier.js.
  *
- *   PRIME          — odds 1.40–3.00 AND edge 4–10%. The only broadcast tier.
+ *   BACKED         — odds 1.40–3.00 AND edge 4–10%. The only broadcast bucket.
  *   ODDS MOVEMENT  — is_mover=true (odds shifted on an existing signal)
  *   IN-PLAY        — phase='inplay', routed to the dedicated in-play channel
+ *
+ * IT DOES NOT SAY "PRIME", AND THAT IS THE POINT (6 Aug 2026). This channel
+ * used to open with "🟢 *PRIME SIGNAL* — High conviction", from `classifyTier`.
+ * Since the vocabulary unified, PRIME is a rung of the CONVICTION ladder and
+ * means MXS >= 65 — a claim this message cannot make, because the engine holds
+ * no MaxEdgeScore at broadcast time (migration 048 is staged, not applied). So
+ * a post reading PRIME could go out for a selection the site badges WATCH.
+ *
+ * A broadcast may only assert what it actually knows. It knows the ladder
+ * suggested this selection, so it says that, in the ladder's own language.
  */
 'use strict';
 
@@ -114,7 +125,7 @@ async function fetchRecentSignals(supabase) {
 
 function isMover(signal) { return signal.is_mover === true; }
 function isInplay(signal) { return signal.phase === 'inplay'; }
-/** Pre-match signals we actually suggest (and broadcast): the Prime tier. */
+/** Pre-match selections we actually suggest, and therefore broadcast. */
 function isSuggested(signal) { return classifyTier(signal).suggested; }
 
 function formatKickoff(isoStr) {
@@ -169,17 +180,22 @@ function buildMessage(signal) {
   } else {
     const { tier, notable } = classifyTier(signal);
     if (tier === 'prime') {
-      header   = `🟢 *PRIME SIGNAL*`;
-      note     = `_High conviction — our only highly-suggested tier_`;
-      hashtags = `#MaxEdge #Prime #ValueBet`;
+      // "BACKED", not "PRIME": this states what the ladder decided, which is
+      // what we know here. See the note at the head of this file.
+      header   = `🟢 *BACKED SELECTION*`;
+      note     = `_The only band we suggest — odds 1.40–3.00 at a 4–10% edge_`;
+      hashtags = `#MaxEdge #ValueBet`;
     } else if (tier === 'longshot') {
+      // A fact about the price, not a rung: every settled bet at 3.00+ lost.
       header   = notable ? `🎯 *LONGSHOT · NOTABLE EDGE*` : `🎯 *LONGSHOT*`;
-      note     = `_For information only — not a suggested signal_`;
+      note     = `_For information only — not a suggested selection_`;
       hashtags = `#MaxEdge #Longshot`;
     } else {
-      // 'value' (or below-floor) — shown as a tool, never suggested.
-      header   = `⚡ *VALUE SIGNAL*`;
-      note     = `_For information only — not a suggested signal_`;
+      // Positive EV outside the band we back at — shown as a tool, never
+      // suggested. These do not reach the channel; the branch exists because
+      // the message is built before the broadcast filter runs.
+      header   = `⚡ *UNBACKED EDGE*`;
+      note     = `_For information only — not a suggested selection_`;
       hashtags = `#MaxEdge #ValueBet`;
     }
   }
@@ -257,10 +273,10 @@ async function run() {
   const alreadySeen = signals.length - toPost.length;
   console.log(`[postToX] ${toPost.length} new | ${alreadySeen} already posted`);
 
-  // Conflict guard: among the pre-match Primes we'd broadcast this run, keep
+  // Conflict guard: among the pre-match selections we'd broadcast this run, keep
   // only the highest-edge pick per (match, market, line) so we never push two
   // opposing outcomes on the same match. The rest are suppressed below.
-  const broadcastPrimeIds = new Set(
+  const broadcastableIds = new Set(
     dedupeConflicts(toPost.filter(s => !isInplay(s) && !isMover(s) && classifyTier(s).tier === 'prime'))
       .map(s => s.id));
 
@@ -288,9 +304,9 @@ async function run() {
     const messageHash = hashMessage(message);
     const chatId      = telegram ? chatIdForSignal(telegram, signal) : telegram;
 
-    // Broadcast policy: pre-match, we only suggest PRIME signals. Value and
-    // longshot picks remain visible on the site but are never pushed to the
-    // channel. Mark them posted so they aren't reconsidered every run. In-play
+    // Broadcast policy: pre-match, we only broadcast what the ladder suggests.
+    // The wider edges and the longshots remain visible on the site but are
+    // never pushed to the channel. Mark them posted so they aren't reconsidered every run. In-play
     // signals and odds-movement alerts bypass this — they have their own logic.
     if (!isInplay(signal) && !isMover(signal) && tier !== 'prime') {
       console.log(`\n[postToX] skip (${label}, not suggested) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
@@ -299,10 +315,11 @@ async function run() {
       continue;
     }
 
-    // Conflict guard: a Prime that lost the per-match/market tie-break to a
-    // higher-edge opposing pick is suppressed so the two can't cancel out.
-    if (!isInplay(signal) && !isMover(signal) && tier === 'prime' && !broadcastPrimeIds.has(signal.id)) {
-      console.log(`\n[postToX] skip (PRIME conflict, lower edge) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
+    // Conflict guard: a suggested selection that lost the per-match/market
+    // tie-break to a higher-edge opposing pick is suppressed so the two can't
+    // cancel out.
+    if (!isInplay(signal) && !isMover(signal) && tier === 'prime' && !broadcastableIds.has(signal.id)) {
+      console.log(`\n[postToX] skip (backed conflict, lower edge) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
       await markPosted(supabase, signal.id, messageHash, null);
       skippedInfo++;
       continue;

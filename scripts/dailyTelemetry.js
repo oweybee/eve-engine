@@ -122,9 +122,11 @@ async function runDailyTelemetry() {
     const movers = sig.filter(s => s.is_mover).length;
     console.log(`\n🚨 [SIGNALS ENGINE VELOCITY - LAST 24 HOURS]`);
     console.log(`   - Total Value Signals Triggered: ${sig.length}`);
-    console.log(`   - 🟢 Prime Signals:        ${byCat('Prime')}`);
-    console.log(`   - ⚡ Value Signals:        ${byCat('Value')}`);
-    console.log(`   - 🎯 Longshot Signals:     ${byCat('Longshot')}`);
+    // The odds+edge ladder's three buckets. `byCat` reads signal_category, so
+    // the KEYS stay the ladder's own names; the labels say what they mean now.
+    console.log(`   - 🟢 Backed (suggested):   ${byCat('Prime')}`);
+    console.log(`   - ⚡ Unbacked edges:       ${byCat('Value')}`);
+    console.log(`   - 🎯 Longshots:            ${byCat('Longshot')}`);
     console.log(`   - ⇅  Odds Movement:        ${movers}`);
     console.log(`   - — by model: MARKET_CONSENSUS=${consensus} API_PREDICTIVE=${apiPred}`);
   }
