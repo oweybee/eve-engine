@@ -2,15 +2,20 @@
 # MaxEdge EVE Engine  —  live odds pipeline
 #
 # Budget: 75,000 API req/day
-#   288 jobs/day × 4 ingest loops × ~12 fixtures = ~13,824 req/day (18%)
-#   Odds refresh every ~55 seconds during each 5-minute job.
+#   96 jobs/day × up to 4 ingest loops × ~12 fixtures = ~4,608 req/day (6%)
+#   Odds refresh every ~55 seconds across the loop window.
+#
+# CADENCE RULE, learned the hard way on 6 Aug 2026:
+#   bounded loop (≤420s)  <  timeout-minutes (12)  <  cron interval (15 min)
+# Break that ordering and runs are killed mid-flight, which shows up as
+# 'cancelled' and writes nothing — indistinguishable from a quiet slate.
 #
 # Pipeline per job:
 #   (Betfair secondary markets — corners/cards/O-U/BTTS — are ingested from a UK
 #    host, not here; Betfair geo-blocks US runners. See scripts/betfair-vps/.)
 #   Once per job (idempotent early-exit if plan exists):
 #     0. planDay.js       — build / refresh today+3day fixture plan
-#   Loop ×4 (55s gap):
+#   Loop ×4 max, wall-clock bounded, one iteration per ~55s cycle:
 #     1. ingestOdds.js    — pull latest odds; plan-gated (off-hours = no-op)
 #     2. computeValues.js — Kaunitz edge detection; price-change signals
 #     3. captureSnapshot.js — odds time-series for charts
@@ -25,9 +30,47 @@ name: MaxEdge EVE Engine
 
 on:
   schedule:
-    # Every 5 minutes — minimum GitHub Actions interval.
-    # ingestOdds.js self-gates against engine_plan.next_run_at.
-    - cron: '*/5 * * * *'
+    # EVERY 15 MINUTES, AND THE INTERVAL MUST EXCEED THE JOB DURATION.
+    #
+    # This was '*/5' against a job that measured 616s (10m16s) — twice its own
+    # window. Eight of the last eight runs before this change ended
+    # 'cancelled' and the board went stale for an hour at a time.
+    #
+    # The proximate killer was `timeout-minutes: 10`, not the concurrency
+    # group: the runs died between 610s and 633s, mid fetchMatchDetails, which
+    # is the timeout to the second. That distinction is worth keeping, because
+    # 'cancelled' in the run list looks like queue pressure and sends you to
+    # the wrong knob. The queue was a real second-order problem — a job longer
+    # than its interval guarantees a backlog, and only one run may sit pending
+    # per group — but fixing the schedule alone would not have saved a single
+    # run.
+    #
+    # So all three now agree: bounded loop < timeout < cron interval. A
+    # 5-minute schedule that never completes is slower than a 15-minute one
+    # that does.
+    #
+    # The budget, measured on run 31102483691:
+    #   setup (checkout, node, npm, planDay)     12s
+    #   live odds loop            now bounded  ≤420s
+    #   tail (api, board, integrity, settle…)    19s
+    #   fetch match details                      73s
+    #   ────────────────────────────────────────────
+    #   expected                               ~524s  (8m44s)
+    #
+    # Worst case is higher: the budget is checked BETWEEN iterations, so it can
+    # overshoot by one iteration's work (~72s) — it cannot stop mid-compute.
+    # That puts the ceiling near 596s (9m56s), which is what the 12-minute
+    # timeout is sized for.
+    #
+    # Against timeout-minutes: 12 and a 15-minute window, that is slack at both
+    # ends. If the loop budget or the tail grows, RAISE THE TIMEOUT AND WIDEN
+    # THE CRON TOGETHER — the failure is silent either way, because a killed
+    # run writes nothing and looks identical to a quiet slate.
+    #
+    # Cadence is not really set here anyway: ingestOdds.js self-gates against
+    # engine_plan.next_run_at, so it pulls when it is due regardless of how
+    # often the workflow starts. The loop exists to poll across the window.
+    - cron: '*/15 * * * *'
 
   workflow_dispatch:
     inputs:
@@ -59,10 +102,21 @@ jobs:
   engine:
     name: EVE Engine Tick
     runs-on: ubuntu-latest
-    # 10 min (was 5): the 4-loop odds cycle nearly fills 5 min, so fetchTeamStats
-    # (the last step) was being killed mid-run. It self-caches per team (20h), so
-    # only the first full population is slow; later runs skip fresh teams.
-    timeout-minutes: 10
+    # 12 min, and it must sit ABOVE the expected job duration and BELOW the
+    # cron interval. Both halves matter.
+    #
+    # At 10 min it was the thing killing the pipeline. Measured on run
+    # 31102483691: the job ran 616s (10m16s) and was cancelled mid
+    # fetchMatchDetails by this timeout — as were the five runs before it, all
+    # landing between 610s and 633s. That reads as "cancelled" in the run list,
+    # which is easy to misread as concurrency pressure; it was the job simply
+    # running longer than it was allowed to.
+    #
+    # With the loop now bounded at 420s the expected duration is ~527s (8m47s),
+    # so 12 min leaves real slack for a slow tail without ever approaching the
+    # 15-minute cron. fetchTeamStats self-caches per team (20h), so only the
+    # first full population is slow.
+    timeout-minutes: 12
 
     env:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
@@ -130,16 +184,55 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_ingest != 'true' }}
         shell: bash
         run: |
+          # WALL-CLOCK BOUNDED. See the header note on cadence.
+          #
+          # This loop used to sleep a FIXED 55s after each iteration, so its
+          # real period was "work + 55s", not "one iteration per 55s". Measured
+          # on run 31102483691: work ~72s + sleep 55s = ~127s per iteration, so
+          # four iterations took 508s of a 616s job — against a 5-minute cron.
+          # Every run therefore overran its own window, a permanent backlog
+          # formed, and GitHub cancelled the queued run each time a newer one
+          # displaced it. Eight of the last eight runs were cancelled.
+          #
+          # Two changes. The sleep is now the REMAINDER of the cycle, so the
+          # cadence is genuinely one iteration per CYCLE seconds when the work
+          # fits. And the loop stops at a wall-clock BUDGET regardless of how
+          # many iterations it has managed, so the job duration is bounded by
+          # something we choose rather than by how slow compute happened to be.
+          # If compute slows down, the loop does fewer iterations instead of
+          # overrunning the window — degrade the work, never the schedule.
           LOOPS=${{ github.event.inputs.loop_count || '4' }}
+          BUDGET=${LOOP_BUDGET_SECONDS:-420}
+          CYCLE=${LOOP_CYCLE_SECONDS:-55}
           LOOP_EXIT=0
-          for i in $(seq 1 $LOOPS); do
-            echo "--- Loop $i / $LOOPS ---"
+          START=$SECONDS
+
+          for i in $(seq 1 "$LOOPS"); do
+            ELAPSED=$(( SECONDS - START ))
+            if [ "$ELAPSED" -ge "$BUDGET" ]; then
+              echo "Loop budget ${BUDGET}s spent after $(( i - 1 )) iteration(s) — stopping so the job finishes inside its cron window."
+              break
+            fi
+
+            echo "--- Loop $i / $LOOPS (t+${ELAPSED}s of ${BUDGET}s) ---"
+            ITER_START=$SECONDS
             node ingestOdds.js    || LOOP_EXIT=$?
             node computeValues.js || LOOP_EXIT=$?
             node captureSnapshot.js 2>/dev/null || true
+            WORK=$(( SECONDS - ITER_START ))
+
             if [ "$i" -lt "$LOOPS" ]; then
-              echo "Sleeping 55s before next loop..."
-              sleep 55
+              REST=$(( CYCLE - WORK ))
+              # Never sleep past the budget: a sleep that outlives the window
+              # is the overrun, just quieter.
+              LEFT=$(( BUDGET - (SECONDS - START) ))
+              [ "$REST" -gt "$LEFT" ] && REST=$LEFT
+              if [ "$REST" -gt 0 ]; then
+                echo "Work took ${WORK}s; sleeping ${REST}s to complete the ${CYCLE}s cycle..."
+                sleep "$REST"
+              else
+                echo "Work took ${WORK}s, at or over the ${CYCLE}s cycle — continuing without sleep."
+              fi
             fi
           done
           exit $LOOP_EXIT
