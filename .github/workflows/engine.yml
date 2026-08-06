@@ -59,10 +59,14 @@ jobs:
   engine:
     name: EVE Engine Tick
     runs-on: ubuntu-latest
-    # 10 min (was 5): the 4-loop odds cycle nearly fills 5 min, so fetchTeamStats
-    # (the last step) was being killed mid-run. It self-caches per team (20h), so
-    # only the first full population is slow; later runs skip fresh teams.
-    timeout-minutes: 10
+    # 20 min (was 10): the 30 Jul 40-league expansion grew per-tick data volume
+    # roughly 8x (scheduled matches ~120 -> 9,500+), and by 6 Aug the 4-loop
+    # ingest/compute/snapshot step alone was consistently hitting the old 10-min
+    # budget and getting killed before any downstream step (postToX, fetchResults,
+    # fetchTeamStats, the failure-alert step itself) ever ran — silently, since
+    # `if: failure()` doesn't fire on a timeout `cancelled` job. See the "Alert on
+    # pipeline failure" step below, now also gated on `cancelled()`.
+    timeout-minutes: 20
 
     env:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
@@ -227,7 +231,7 @@ jobs:
           node fetchTeamStats.js
 
       - name: Alert on pipeline failure
-        if: failure()
+        if: failure() || cancelled()
         shell: bash
         env:
           WEBHOOK_URL: ${{ secrets.ENGINE_ALERT_WEBHOOK }}
@@ -238,15 +242,16 @@ jobs:
           FAILED_STEPS=""
           [ "${{ steps.plan.outcome }}"        = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- plan (planDay.js)"
           [ "${{ steps.ingest_loop.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- ingest-loop (ingestOdds + computeValues + captureSnapshot)"
+          [ "${{ steps.ingest_loop.outcome }}" = "cancelled" ] && FAILED_STEPS="${FAILED_STEPS}\n- ingest-loop TIMED OUT before completing (ingestOdds + computeValues + captureSnapshot)"
           [ "${{ steps.api_compute.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- api-compute (computeApiValues.js)"
           [ "${{ steps.post.outcome }}"         = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- post-signals (postToX.js)"
           [ "${{ steps.results.outcome }}"      = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- settle-results (fetchResults.js)"
           [ "${{ steps.details.outcome }}"      = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- fetch-details (fetchMatchDetails.js)"
-          [ -z "$FAILED_STEPS" ] && FAILED_STEPS="\n- setup (checkout/node/npm)"
+          [ -z "$FAILED_STEPS" ] && FAILED_STEPS="\n- job cancelled or setup failed (checkout/node/npm) — check the run's overall timing for a timeout"
 
           if [ -n "$WEBHOOK_URL" ]; then
             PAYLOAD=$(printf '{"content":"[FAIL] EVE Engine pipeline failure\nBranch: %s\nRun: %s\nFailed steps:%s"}' \
               "${{ github.ref_name }}" "$RUN_URL" "$FAILED_STEPS")
             curl -s -X POST "$WEBHOOK_URL" -H 'Content-Type: application/json' -d "$PAYLOAD" || true
           fi
-          echo "Pipeline failed — steps:$FAILED_STEPS"
+          echo "Pipeline failed or was cancelled — steps:$FAILED_STEPS"
