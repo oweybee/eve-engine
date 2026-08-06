@@ -21,6 +21,7 @@
 const sm            = require('./lib/secondaryMarkets');
 const { categoryFor } = require('./lib/signalTier');
 const { buildPrematchVector } = require('./lib/halftimeFeatures');
+const { checkQuality, thresholdsFromEnv } = require('./lib/dataQuality');
 
 // Config
 const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '2',    10);
@@ -377,20 +378,44 @@ async function upsertComputedValues(supabase, rows) {
 async function insertValueSignals(
   supabase, rows, phase = 'prematch',
   architecture = 'MARKET_CONSENSUS',
-  fields = { edge: o => `${o}_edge`, value: o => `${o}_value`, mes: 'max_edge_score' },
+  fields = { edge: o => `${o}_edge`, value: o => `${o}_value` },
 ) {
   const candidates = [];
+
+  // THE DATA-QUALITY GATE (§2.6, lib/dataQuality.js). Nothing is scored against
+  // a price we cannot date, that only one book is showing, or that sits far off
+  // the pack. Until now odds_drift_pct and is_volatile were recorded and then
+  // ignored, so part of every published edge was a measurement of data
+  // freshness. Rejections are counted and reported, never silent — a run that
+  // drops everything must look different from a quiet fixture list.
+  const dq = thresholdsFromEnv();
+  const rejected = new Map();
 
   for (const row of rows) {
     for (const outcome of ['home', 'draw', 'away']) {
       if (!row[fields.value(outcome)]) continue;
       const edge = row[fields.edge(outcome)];
+
+      const quality = checkQuality({
+        bestOdds:       row[`best_${outcome}_odds`],
+        allOdds:        row[`all_${outcome}_odds`],
+        booksInMarket:  row._bookmakerCount,
+        oddsFetchedAt:  row.odds_fetched_at,
+      }, dq);
+      if (!quality.ok) {
+        rejected.set(quality.reason, (rejected.get(quality.reason) ?? 0) + 1);
+        continue;
+      }
+
       candidates.push({
         match_id:           row.match_id,
         outcome,
         detected_odds:      row[`best_${outcome}_odds`],
         detected_edge:      edge,
-        detected_mes:       row[fields.mes] ?? null,
+        // Dead on arrival — the insert below overwrites this with null so
+        // the frontend's computeMes() is the only implementation. Left as an
+        // explicit null rather than a value nothing reads (§2.4).
+        detected_mes:       null,
         bookmaker:          row[`best_${outcome}_book`],
         kickoff_at:         row._kickoff_at ?? null,
         model_architecture: architecture,
@@ -536,6 +561,14 @@ async function insertSecondarySignals(supabase, candidates, phase = 'prematch') 
 
   const key  = r => `${r.match_id}|${r.market ?? 'h2h'}|${r.outcome}|${r.model_architecture ?? ''}`;
   const seen = new Set((existing ?? []).map(key));
+
+  if (rejected.size) {
+    const total = [...rejected.values()].reduce((a, b) => a + b, 0);
+    console.log(`[values] data-quality gate rejected ${total} candidate(s) before scoring:`);
+    for (const [reason, count] of [...rejected.entries()].sort((a, b) => b[1] - a[1])) {
+      console.log(`         ${String(count).padStart(4)} × ${reason}`);
+    }
+  }
 
   const toInsert = [];
   for (const c of candidates) {
@@ -748,7 +781,7 @@ async function main() {
         // recomputes it — the engine's match-level score is the consensus's.
         // Underscore-prefixed so upsertComputedValues strips them: these are
         // transport between the two steps, not columns on computed_values.
-        { edge: o => `_sm_${o}_edge`, value: o => `_sm_${o}_value`, mes: '__none__' },
+        { edge: o => `_sm_${o}_edge`, value: o => `_sm_${o}_value` },
       );
       console.log(`[supermodel] published ${n} signal(s) from ${smCandidateRows.size} match(es)`);
     } catch (err) {

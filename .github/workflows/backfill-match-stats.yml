@@ -1,0 +1,107 @@
+name: Backfill Match Statistics
+
+# Pulls /fixtures/statistics for finished fixtures and stores the raw arrays in
+# match_stats — corners, cards and REAL expected goals, for every league we
+# cover rather than just England.
+#
+# WHY IT MATTERS
+# The corners and cards models were the strongest discriminators the 2026-08-05
+# audit produced (over-3.5-cards runs 25.3% → 59.7% across model deciles, a
+# 34.4pp range against 14.5pp for goals). They need ~20 prior matches per team
+# per venue before mx_team_form will let a fixture be priced, and until that
+# history exists the paper-trade clock only runs in England. The feed already
+# returns this data; we had simply never stored it, because fetchLiveStats only
+# catches what happens to be live when it runs.
+#
+# ORDER MATTERS
+# match_stats keys on the API-Football fixture id, so only `matches` rows with a
+# numeric external_id are reachable. The CSV and StatsBomb seeds — the whole
+# historical corpus — carry prefixed ids the API cannot resolve. So load real
+# season calendars FIRST via backfill-fixtures.yml (about 40 cheap calls per
+# season), then run this. The script's preflight says so if you get it wrong,
+# rather than reporting a quiet zero.
+#
+# COST
+# One call per fixture; there is no bulk form. Forty leagues × one season is
+# roughly 14k calls against the 75k/day Ultra allowance shared with odds
+# ingestion and the live loop — hence the budget, the pacing and the fact that
+# the job is fully resumable. Once the backlog is cleared the daily run costs
+# almost nothing: it skips every fixture that already has stats.
+#
+# CADENCE
+# Daily at 03:20 UTC — well clear of plan-day (05:00) and the training jobs
+# (03:00/04:00 Mondays), and in the quiet hours for the live loop. Re-runs are
+# idempotent on (fixture_id, team_side).
+
+on:
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: 'Comma-separated start years (blank = current + previous season)'
+        type: string
+        default: ''
+      leagues:
+        description: 'Comma-separated corpus keys, e.g. epl,e1 (blank = all tracked)'
+        type: string
+        default: ''
+      max_calls:
+        description: 'Hard cap on API calls this run'
+        type: string
+        default: '15000'
+      rpm:
+        description: 'Calls per minute'
+        type: string
+        default: '240'
+      dry_run:
+        description: 'Report what would be fetched, per league, without calling the API'
+        type: boolean
+        default: false
+  schedule:
+    - cron: '20 3 * * *'
+
+concurrency:
+  group: backfill-match-stats-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    name: Fetch historical fixture statistics
+    runs-on: ubuntu-latest
+    # A full season of forty leagues at 240 calls/min is a few hours of wall
+    # clock. The job is resumable, so a timeout truncates it rather than losing
+    # it — but give it room to make real progress in one pass.
+    timeout-minutes: 300
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Backfill match statistics
+        run: |
+          ARGS="--max-calls ${{ inputs.max_calls || '15000' }} --rpm ${{ inputs.rpm || '240' }}"
+          if [ -n "${{ inputs.seasons }}" ]; then
+            ARGS="$ARGS --seasons ${{ inputs.seasons }}"
+          fi
+          if [ -n "${{ inputs.leagues }}" ]; then
+            ARGS="$ARGS --leagues ${{ inputs.leagues }}"
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          echo "node backfillMatchStats.js $ARGS"
+          node backfillMatchStats.js $ARGS

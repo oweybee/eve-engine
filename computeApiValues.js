@@ -336,7 +336,14 @@ async function insertValueSignals(supabase, rows) {
         outcome,
         detected_odds:      odds,
         detected_edge:      edge,
-        detected_mes:       row.max_edge_score ?? null,
+        // §2.4 — ONE CODE PATH PER NUMBER. This used to persist the
+        // MATCH-level max_edge_score onto a per-SELECTION signal, so
+        // detected_mes was stored as 100 on rows the board rendered as 66, 62
+        // and 58: two implementations of the same number, disagreeing in
+        // public. computeValues.js already writes null here and lets the
+        // frontend's risk-adjusted computeMes() be the single implementation.
+        // This is the other one, deleted.
+        detected_mes:       null,
         bookmaker:          row[`best_${outcome}_book`],
         kickoff_at:         row._kickoff_at ?? null,
         model_architecture: 'API_PREDICTIVE',
