@@ -71,6 +71,59 @@ async function selectAll(query, describe) {
   }
 }
 
+/**
+ * How a manual row is recognised. Case- and whitespace-insensitive, because
+ * `mx_canonical_team()` matches on `lower(trim(raw_name))` — so a human who
+ * typed "Man City" must shield the row the job would write as "man city".
+ * Anything else lets the job silently overwrite a human decision.
+ */
+function manualKey(source, rawName) {
+  return `${String(source ?? '').trim()}|${String(rawName ?? '').trim().toLowerCase()}`;
+}
+
+/**
+ * The rows to upsert. Pure, so the two rules that matter can be tested without
+ * a database: a manual row is never overwritten, and every row carries the
+ * columns `team_alias` actually has.
+ */
+function planAliasWrites(aliases, manualKeys, stampedAt) {
+  const shield = manualKeys instanceof Set ? manualKeys : new Set(manualKeys ?? []);
+  return (aliases ?? [])
+    .filter(a => a && a.source && a.name && a.canonical_key)
+    .filter(a => !shield.has(manualKey(a.source, a.name)))
+    .map(a => ({
+      source:        a.source,
+      raw_name:      a.name,
+      canonical_key: a.canonical_key,
+      method:        a.method === 'manual' ? 'exact' : a.method,
+      updated_at:    stampedAt,
+    }));
+}
+
+/**
+ * Upsert in chunks, on the table's own primary key.
+ *
+ * `onConflict: 'source,raw_name'` must match the PRIMARY KEY in migration 053
+ * exactly, or PostgREST returns a 42P10 and the whole run fails — which is the
+ * good outcome. The bad one, before this was extracted and tested, was the
+ * counter: it added `min(CHUNK, remaining)` per iteration whether or not the
+ * upsert touched anything, so a partial write still reported a full one.
+ * It now counts the rows the database says it wrote.
+ */
+async function writeAliases(supabase, rows, chunk = CHUNK) {
+  let written = 0;
+  for (let i = 0; i < (rows?.length ?? 0); i += chunk) {
+    const batch = rows.slice(i, i + chunk);
+    const { data, error } = await supabase
+      .from('team_alias')
+      .upsert(batch, { onConflict: 'source,raw_name' })
+      .select('source');
+    if (error) throw new Error(`teamAliases[upsert @${i}]: ${error.message}`);
+    written += (data ?? []).length;
+  }
+  return written;
+}
+
 async function main() {
   const supabase = getClient();
 
@@ -157,26 +210,13 @@ async function main() {
   const manual = await selectAll(
     () => supabase.from('team_alias').select('source, raw_name').eq('method', 'manual'),
     'teamAliases[manual]');
-  const manualKeys = new Set(manual.map(m => `${m.source}|${String(m.raw_name).toLowerCase()}`));
+  const manualKeys = new Set(manual.map(m => manualKey(m.source, m.raw_name)));
   if (manualKeys.size) {
     console.log(`\n[aliases] preserving ${manualKeys.size} manual row(s) — a human decided those.`);
   }
 
-  const toWrite = aliases
-    .filter(a => !manualKeys.has(`${a.source}|${a.name.toLowerCase()}`))
-    .map(a => ({
-      source: a.source, raw_name: a.name,
-      canonical_key: a.canonical_key, method: a.method,
-      updated_at: new Date().toISOString(),
-    }));
-
-  let written = 0;
-  for (let i = 0; i < toWrite.length; i += CHUNK) {
-    const { error } = await supabase.from('team_alias')
-      .upsert(toWrite.slice(i, i + CHUNK), { onConflict: 'source,raw_name' });
-    if (error) throw new Error(`teamAliases[upsert @${i}]: ${error.message}`);
-    written += Math.min(CHUNK, toWrite.length - i);
-  }
+  const toWrite = planAliasWrites(aliases, manualKeys, new Date().toISOString());
+  const written = await writeAliases(supabase, toWrite);
   console.log(`\n[aliases] wrote ${written} row(s) to team_alias.`);
   console.log(`[aliases] next: select * from public.mx_refresh_team_match();`);
   console.log(`          refresh materialized view public.mx_team_form;`);
@@ -187,4 +227,4 @@ if (require.main === module) {
   main().catch(err => { console.error('[aliases] FATAL:', err.message); process.exit(1); });
 }
 
-module.exports = { main };
+module.exports = { main, planAliasWrites, writeAliases, manualKey };

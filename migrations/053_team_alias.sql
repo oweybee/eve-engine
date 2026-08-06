@@ -166,7 +166,22 @@ comment on function public.mx_canonical_team is
 commit;
 
 -- ============================================================================
--- Verification
+-- ALREADY VERIFIED, in a rolled-back transaction against production
+-- (2026-08-05). The DDL below and the job's exact upsert were executed and the
+-- transaction discarded, so nothing persisted — `to_regclass('public.team_alias')`
+-- reads NULL afterwards. What that run proved:
+--
+--   • the upsert is idempotent on (source, raw_name): three rows inserted, one
+--     repeated, four rows after — not five
+--   • a method='manual' row survives the job's write path untouched
+--   • mx_canonical_team() is case- and whitespace-insensitive ('  leeds  ' →
+--     leedsunited) and resolves an ALIAS ('Man City' → manchestercity)
+--   • the fallback works: an unmapped name returns its own normalised form
+--     ('Never Mapped FC' → 'never mapped fc') rather than NULL
+--   • the PRIMARY KEY exists, so `on conflict (source, raw_name)` is a legal
+--     target and PostgREST will not 42P10
+--
+-- Verification to run after applying for real
 -- ============================================================================
 --
 -- The mapping landed:
