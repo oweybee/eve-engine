@@ -1,19 +1,35 @@
 'use strict';
 
 /**
- * engine.supermodel.test.js — the learning model's editorial policy.
+ * engine.supermodel.test.js — THE LEARNING MODEL MAY NOT PUBLISH.
  *
- * The XGBoost supermodel ran on every cycle for months and published nothing:
- * its probabilities were written to computed_values.ensemble_*_prob and used
- * only for a "model certainty" readout. It now emits value_signals under
- * model_architecture = 'SUPERMODEL'.
+ * This file used to test `supermodelEdge()`, the function that turned the
+ * XGBoost forecast into an edge and wrote a value_signals row above a 3%
+ * threshold. That function was DELETED on 6 Aug 2026 under the market-anchored
+ * ruling, and this suite was rewritten to guard the deletion rather than to
+ * test the thing.
  *
- * `supermodelEdge` is the whole policy for what an unproven forecast is allowed
- * to claim, so it is the thing worth pinning. Zero deps, no DB, no ONNX.
+ * WHY IT WENT. `edge = modelProb · odds − 1` is a model generating a value flag
+ * and an edge number, which rule 1 of the ruling forbids outright. The 3%
+ * threshold was defended as a safeguard — "a forecast has no market anchor, so
+ * it only speaks when it disagrees by an amount worth acting on" — and it was
+ * the precise opposite. Over 44,820 settled selections, model-market
+ * disagreement is anti-predictive: the market is closer to the truth 48.5% of
+ * the time when the two agree, rising monotonically to 65.1% once they are 15pp
+ * apart. A publisher gated on WIDE disagreement is therefore selecting for the
+ * model's worst calls by construction. The bar was the mechanism, not the
+ * brake.
+ *
+ * A test suite is the right place for this because the argument for putting it
+ * back is genuinely appealing — the model is the most sophisticated thing in
+ * the stack and it is now decorative. That is the intended state. If it is ever
+ * to speak again it goes through paper_trade_gate() like everything else: 300
+ * settled bets, CLV above +0.5%, z above 2. Yield never opens it.
  */
 
 const assert = require('assert');
-const { supermodelEdge } = require('./computeValues');
+const fs = require('fs');
+const path = require('path');
 
 let passed = 0, failed = 0;
 function test(label, fn) {
@@ -21,59 +37,81 @@ function test(label, fn) {
   catch (err) { console.error(`  ✗ ${label}\n    ${err.message}`); failed++; }
 }
 
-console.log('\nsupermodelEdge — what the learning model may publish');
+const engine = require('./computeValues');
+const SOURCE = fs.readFileSync(path.join(__dirname, 'computeValues.js'), 'utf8');
 
-test('prices EV against the best available odds', () => {
-  // 40% on a 2.80 price → 0.40 × 2.80 − 1 = +0.12
-  const { edge, publish } = supermodelEdge(0.40, 2.80);
-  assert.strictEqual(edge, 0.12);
-  assert.strictEqual(publish, true);
+console.log('\nsupermodel — the model publisher stays deleted');
+
+test('supermodelEdge is not exported', () => {
+  assert.strictEqual(engine.supermodelEdge, undefined,
+    'supermodelEdge was deleted under the market-anchored ruling — see computeValues.js');
 });
 
-test('stays quiet below the threshold — that is rounding, not disagreement', () => {
-  // 36% on 2.80 → +0.008, an eighth of a percent of EV.
-  const { edge, publish, reason } = supermodelEdge(0.36, 2.80);
-  assert.ok(edge > 0, 'the edge is still positive');
-  assert.strictEqual(publish, false);
-  assert.strictEqual(reason, 'below threshold');
+test('no function computes an edge from a model probability', () => {
+  // The shape, not the name: `p * odds - 1` where p is a forecast. Comments are
+  // stripped first so the explanatory notes about the deletion do not trip it.
+  const code = SOURCE
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/function\s+supermodelEdge/.test(code), 'supermodelEdge must not be redefined');
+  assert.ok(!/_sm_\$\{outcome\}_edge|_sm_\w+_edge/.test(code),
+    'the _sm_*_edge transport columns must not come back');
+  assert.ok(!/SUPERMODEL_EV_THRESHOLD/.test(code),
+    'a model-publishing threshold must not be reintroduced');
 });
 
-test('holds itself to a HIGHER bar than the market consensus', () => {
-  // The consensus publishes from 0.5% EV because it is market-anchored. A
-  // forecast has no anchor, so the same edge must NOT publish here.
-  const consensusWouldPublish = 0.006;
-  const p = (1 + consensusWouldPublish) / 2.80;
-  assert.strictEqual(supermodelEdge(p, 2.80).publish, false);
+test("no value_signals insert carries the SUPERMODEL architecture", () => {
+  const code = SOURCE
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/'SUPERMODEL'/.test(code),
+    'nothing may write a signal under the SUPERMODEL architecture');
 });
 
-test('drops an implausible edge rather than publishing it', () => {
-  // 90% on a 3.00 shot is not value, it is an out-of-distribution input.
-  const { publish, reason } = supermodelEdge(0.90, 3.00);
-  assert.strictEqual(publish, false);
-  assert.strictEqual(reason, 'implausible');
+test('SUPERMODEL is still barred by the publication gate', () => {
+  // Belt and braces: even if a row somehow appeared, it must not reach anyone.
+  const { isPublished, withheldReason } = require('./lib/publication');
+  assert.strictEqual(isPublished('SUPERMODEL'), false);
+  assert.ok(withheldReason('SUPERMODEL').length > 0);
 });
 
-test('a negative edge never publishes', () => {
-  const { edge, publish } = supermodelEdge(0.30, 2.80);
-  assert.ok(edge < 0);
-  assert.strictEqual(publish, false);
+test('SUPERMODEL is model-derived, so it could never carry a score', () => {
+  const { isMarketAnchored, unscoredReason } = require('./lib/edgeSource');
+  assert.strictEqual(isMarketAnchored('SUPERMODEL'), false);
+  assert.ok(/modelProb/.test(unscoredReason('SUPERMODEL')));
 });
 
-test('missing inputs stay quiet instead of coercing to a number', () => {
-  for (const [p, o, why] of [
-    [null, 2.80, 'no probability'],
-    [undefined, 2.80, 'no probability'],
-    [0.40, null, 'no price'],
-    [0.40, 1, 'no price'],       // odds of 1.00 cannot carry value
-    [0, 2.80, 'no probability'], // a zero probability is not a reading
-    [1.4, 2.80, 'no probability'],
-  ]) {
-    const r = supermodelEdge(p, o);
-    assert.strictEqual(r.publish, false, `p=${p} odds=${o} must not publish`);
-    assert.strictEqual(r.reason, why, `p=${p} odds=${o}`);
-    assert.strictEqual(r.edge, null, 'no edge is computed from an unusable input');
+console.log('\nsupermodel — the probabilities are still written (display only)');
+
+test('the ensemble block still fills model probability columns', () => {
+  // Deleting the publisher must NOT have deleted the forecast. Rule 2 permits a
+  // model probability beside the market's; it forbids one beside a price.
+  assert.ok(/ensemble_home_prob/.test(SOURCE),
+    'the display-only model probability columns must still be written');
+});
+
+console.log('\nmarket-anchored — the replacement path');
+
+test('MARKET_ANCHORED is market-derived and may carry a score', () => {
+  const { isMarketAnchored, unscoredReason } = require('./lib/edgeSource');
+  assert.strictEqual(isMarketAnchored('MARKET_ANCHORED'), true);
+  assert.strictEqual(unscoredReason('MARKET_ANCHORED'), '');
+});
+
+test('every model architecture is barred from scoring', () => {
+  const { isMarketAnchored } = require('./lib/edgeSource');
+  for (const arch of ['DIXON_COLES', 'API_PREDICTIVE', 'SUPERMODEL', 'LAMBDA_MC',
+                      'SECOND_HALF_SNIPER', 'INPLAY_MODEL', 'CORNERS_MODEL', 'CARDS_MODEL']) {
+    assert.strictEqual(isMarketAnchored(arch), false, `${arch} must not carry a score`);
   }
 });
 
-console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+test('the edge-source gate fails closed on null and on the unknown', () => {
+  const { isMarketAnchored } = require('./lib/edgeSource');
+  assert.strictEqual(isMarketAnchored(null), false);
+  assert.strictEqual(isMarketAnchored(undefined), false);
+  assert.strictEqual(isMarketAnchored('SOMETHING_NEW'), false);
+});
+
+console.log(`\n${failed === 0 ? '✓' : '✗'} supermodel: ${passed} passed, ${failed} failed\n`);
+process.exit(failed === 0 ? 0 : 1);

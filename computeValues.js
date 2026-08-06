@@ -20,6 +20,8 @@
 // The pure exports below have no DB dependency.
 const sm            = require('./lib/secondaryMarkets');
 const { categoryFor } = require('./lib/signalTier');
+const { shinDevig } = require('./lib/devig');
+const { BETTABLE_BOOKS } = require('./lib/marketAnchor');
 const { buildPrematchVector } = require('./lib/halftimeFeatures');
 const { checkQuality, thresholdsFromEnv } = require('./lib/dataQuality');
 
@@ -34,12 +36,21 @@ const ALPHA_DRAW    = parseFloat(process.env.ALPHA_DRAW    || '0.057');
 const ALPHA_AWAY    = parseFloat(process.env.ALPHA_AWAY    || '0.037');
 const ALPHA_UNIFORM = parseFloat(process.env.ALPHA_UNIFORM || '0.05');
 
-// De-vig margin (RELATIVE). The consensus probabilities are de-vigged (the three
-// 1/odds normalised to sum to 1), then shaved by this relative margin as a small
-// safety buffer. Relative — not the old fixed additive alpha — so it scales with
-// each outcome's probability: a flat ~5.7pp haircut made draws/longshots
-// structurally impossible to flag, whereas a 2% relative shave does not.
-const DEVIG_MARGIN = parseFloat(process.env.DEVIG_MARGIN || '0.02');
+// The anchor. ONE book, deliberately: fair value is Pinnacle's Shin-de-vigged
+// line and nothing else. See the note on computeConsensus() for why averaging a
+// panel of soft books inverted the signal.
+const ANCHOR_BOOK = 'pinnacle';
+
+// Books a UK subscriber can realistically hold. Mirrors lib/marketAnchor.js,
+// which is the authority — imported rather than re-listed so the two cannot
+// drift. Pinnacle is absent because it is the anchor.
+const BETTABLE_SET = new Set(BETTABLE_BOOKS);
+
+// DEVIG_MARGIN is GONE. It shaved 2% off the consensus probability as a safety
+// buffer against the consensus's own error. There is nothing to buy back from a
+// Shin-de-vigged sharp line, and a shave would mean fair value is the anchor
+// plus an arbitrary constant rather than the anchor. The MIN_EDGE gate in
+// lib/marketAnchor.js does the job it was reaching for, explicitly.
 
 // Palpable-error guard. A lone book pricing an outcome more than this multiple
 // longer/shorter than the median is almost always a mistake, not value — e.g. a
@@ -60,33 +71,39 @@ const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD || '0.005');
 // MAX_PLAUSIBLE_EDGE: above this, drop the edge rather than publish value.
 const MAX_PLAUSIBLE_EDGE = parseFloat(process.env.MAX_PLAUSIBLE_EDGE || '0.30');
 
-// The learning model speaks at a HIGHER bar than the consensus. The consensus is
-// market-anchored — it is the market disagreeing with itself, so a 0.5% edge is
-// still information. A forecast has no such anchor: a thin gap is far more
-// likely to be model noise than a mispriced market, so the supermodel only
-// publishes where it disagrees by an amount worth acting on.
-const SUPERMODEL_EV_THRESHOLD = parseFloat(process.env.SUPERMODEL_EV_THRESHOLD || '0.03');
+// SUPERMODEL_EV_THRESHOLD is GONE with the publisher it gated. It read as a
+// safeguard — "the model only speaks when it disagrees by an amount worth
+// acting on" — and was the opposite. Model-market disagreement is
+// anti-predictive on this corpus, so a bar that publishes only the WIDEST
+// disagreements selects for the model's worst calls by construction.
 
 /**
- * Should the learning model publish a signal on this outcome, and at what edge?
+ * supermodelEdge() IS GONE. DELETED 6 AUG 2026 UNDER THE MARKET-ANCHORED RULING.
  *
- * Pulled out as a pure function because it is the whole editorial policy for a
- * model that had never spoken before: it decides what an unproven forecast is
- * allowed to claim. Returns { edge, publish, reason } — `reason` is why it
- * stayed quiet, which is the interesting case.
+ * It computed `edge = modelProb · odds − 1` from the XGBoost forecast and, above
+ * a 3% bar, wrote a value_signals row. That is a model generating a value flag
+ * and an edge number, which the ruling forbids outright — rule 1, and the most
+ * literal breach of it in the codebase.
+ *
+ * The comment it shipped under argued the case for itself: that the model had
+ * been "decorative", that its probabilities "drove no signal, no edge and no
+ * conviction". All true, and all beside the point. The measured record is that
+ * this model's disagreement with the market is ANTI-PREDICTIVE — across 44,820
+ * settled selections the market is closer to the truth 65.1% of the time once
+ * the two are 15pp apart, and monotonically more often as the gap widens. A
+ * forecast that publishes only where it disagrees MOST with the market is
+ * therefore selecting, on purpose, for its own worst selections. The 3%
+ * threshold was not a safeguard; it was the mechanism.
+ *
+ * The model probabilities are STILL COMPUTED AND STILL WRITTEN — see the
+ * ensemble block in main(). They remain display-only, which is exactly what
+ * rule 2 permits: a model probability may sit beside the market's on a match
+ * card, and may never sit beside a price in a way that implies edge.
+ *
+ * If this model is ever to speak again it goes through paper_trade_gate() like
+ * anything else: 300 settled bets, CLV above +0.5%, z above 2. Yield does not
+ * open it. Do not reinstate a threshold-based publisher.
  */
-function supermodelEdge(p, bestOdds) {
-  const odds = parseFloat(bestOdds);
-  if (!Number.isFinite(odds) || odds <= 1) return { edge: null, publish: false, reason: 'no price' };
-  if (!Number.isFinite(p) || p <= 0 || p > 1) return { edge: null, publish: false, reason: 'no probability' };
-
-  const edge = parseFloat((p * odds - 1).toFixed(6));
-  // Below the bar the model is not disagreeing, it is rounding.
-  if (edge < SUPERMODEL_EV_THRESHOLD) return { edge, publish: false, reason: 'below threshold' };
-  // Above the cap it is not value, it is an out-of-distribution input.
-  if (edge > MAX_PLAUSIBLE_EDGE) return { edge, publish: false, reason: 'implausible' };
-  return { edge, publish: true, reason: null };
-}
 
 // Skip re-signal if same odds seen within this window (avoid spam)
 const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
@@ -169,6 +186,42 @@ function formatBookName(key) {
   return names[key] ?? key;
 }
 
+/**
+ * MARKET-ANCHORED PRICING. Replaced the consensus on 6 Aug 2026.
+ *
+ * WHAT THIS USED TO DO. It averaged the vig-inclusive implied probability
+ * across every book on the row — typically ~15 of them — de-vigged the average
+ * and shaved 2%, and called that fair. The panel it averaged is mostly the SOFT
+ * BOOKS the comparison is supposed to beat, so the reference point drifted
+ * toward the very prices being evaluated. Over 198 settled selections that
+ * produced -47.0% yield at -24.94% CLV, and the de-vigged consensus scored
+ * Brier 0.3051 against the market's own 0.3050 — zero information added. It was
+ * not a weak signal. It was an inverted one.
+ *
+ * WHAT IT DOES NOW. Fair value is PINNACLE ALONE, Shin-de-vigged. Pinnacle is
+ * the sharpest liquid book on the panel, it moves on money rather than on
+ * liability, and it is the reference every published closing-line-value study
+ * uses. Best price is the highest among books a UK subscriber can realistically
+ * hold — Pinnacle excluded, because taking the best price from the book that
+ * defines fair value compares a number with itself and returns the vig as edge.
+ *
+ * Measured 6 Aug 2026: +6.58% CLV on flagged selections against -3.52% on
+ * unflagged, with a monotone gradient in edge size.
+ *
+ * IT FAILS CLOSED. No Pinnacle price on a fixture means no fair value, which
+ * means no signal — `null`, not a fallback to the old consensus. A fallback is
+ * how the inverted signal would quietly survive on exactly the fixtures where
+ * the anchor is thinnest.
+ *
+ * THE 2% SHAVE IS GONE. `DEVIG_MARGIN` existed to buy back some of the error in
+ * the consensus. There is nothing to buy back from a Shin-de-vigged sharp line,
+ * and a shave would mean fair value is no longer the anchor — it would be the
+ * anchor plus an arbitrary constant. The 2% MIN_EDGE gate in lib/marketAnchor.js
+ * does the job the shave was reaching for, explicitly and in one place.
+ *
+ * The returned SHAPE is unchanged, so every downstream consumer keeps working;
+ * only what fills it has changed.
+ */
 function computeConsensus(oddsRows) {
   const h2hRows = oddsRows.filter(r => (r.market ?? 'h2h') === 'h2h');
   if (!h2hRows.length) return null;
@@ -184,7 +237,12 @@ function computeConsensus(oddsRows) {
   if (byBook.size < MIN_BOOKMAKERS) return null;
 
   const deduped = [...byBook.values()];
-  const bookmakerCount = deduped.length;
+  // The book count that matters is the number of BETTABLE books competing for
+  // best price — not every row on the fixture. The anchor, the synthetic `best`
+  // row and the exchanges are all excluded, so this is the number the
+  // six-book floor is actually about.
+  const bettableRows = deduped.filter(r => BETTABLE_SET.has(r.bookmaker));
+  const bookmakerCount = bettableRows.length;
 
   const latestFetchedAt = deduped.reduce(
     (best, r) => (!best || r.fetched_at > best ? r.fetched_at : best), null
@@ -200,12 +258,39 @@ function computeConsensus(oddsRows) {
 
   const result = { bookmakerCount, latestFetchedAt };
 
-  // ── Pass 1: per-outcome vig-inclusive consensus prob + best available price ──
+  // ── The anchor. Fair value comes from here and nowhere else. ──────────────
+  const anchorRow = byBook.get(ANCHOR_BOOK);
+  const anchorOdds = anchorRow
+    ? OUTCOMES.map(o => parseFloat(anchorRow[FIELDS[o]]))
+    : null;
+  const anchor = anchorOdds ? shinDevig(anchorOdds) : { probs: null, reason: 'no Pinnacle price' };
+
+  if (anchor.probs === null) {
+    // Fail closed. Without the anchor there is no fair value, and without fair
+    // value there is no edge to claim. Returning the old consensus here is how
+    // the inverted signal would survive on the fixtures with the thinnest
+    // sharp coverage — precisely the ones least safe to guess on.
+    return null;
+  }
+  const anchorProb = {};
+  OUTCOMES.forEach((o, i) => { anchorProb[o] = anchor.probs[i]; });
+
+  result.anchor = {
+    book: ANCHOR_BOOK,
+    devig: 'shin',
+    overround: anchor.overround,
+    z: anchor.z,
+  };
+
+  // ── Pass 1: best BETTABLE price per outcome ──────────────────────────────
   const raw = {};
   for (const outcome of OUTCOMES) {
     const field = FIELDS[outcome];
 
-    const validRows = deduped.filter(r => {
+    // Only books the reader can actually hold an account with. A signal is a
+    // claim that this price is available to them; a price at a book they
+    // cannot open makes the claim false.
+    const validRows = bettableRows.filter(r => {
       const v = parseFloat(r[field]);
       return Number.isFinite(v) && v > 1.0 && v < 1000;
     });
@@ -228,31 +313,26 @@ function computeConsensus(oddsRows) {
 
     const allOdds = {};
     let max_odds = 0, max_book = null;
-    const impliedProbs = [];
     for (const p of kept) {
       if (p.name) allOdds[p.name] = p.v;
-      impliedProbs.push(1 / p.v);
       if (p.v > max_odds) { max_odds = p.v; max_book = p.name; }
     }
 
-    // Mean implied probability across books (vig-inclusive). Averaging the
-    // probabilities — not 1/mean(odds) — is what makes the three sum to a proper
-    // overround (>1) so the de-vig normalisation below is correct.
-    const p_cons_vig = impliedProbs.reduce((s, p) => s + p, 0) / impliedProbs.length;
-
-    raw[outcome] = { p_cons_vig, max_odds, max_book, allOdds };
+    // No consensus probability is computed any more. The books on this list are
+    // the ones we are trying to BEAT — averaging them was the bug.
+    raw[outcome] = { max_odds, max_book, allOdds };
   }
 
-  // ── De-vig: normalise the three consensus probs to sum to 1 (strip the
-  // overround), then shave a small RELATIVE safety margin. Edge fires when the
-  // best price beats the resulting fair odds. ──
-  const present   = OUTCOMES.filter(o => raw[o]);
-  const overround = present.reduce((s, o) => s + raw[o].p_cons_vig, 0);
+  // ── Edge: the best bettable price against the Shin-de-vigged anchor. ──────
+  const present = OUTCOMES.filter(o => raw[o]);
 
   for (const outcome of present) {
-    const r        = raw[outcome];
-    const p_novig  = overround > 0 ? r.p_cons_vig / overround : r.p_cons_vig;
-    const p_adj    = p_novig * (1 - DEVIG_MARGIN);
+    const r         = raw[outcome];
+    // `p_cons` and `p_adj` keep their names for the downstream consumers that
+    // read them, but both are now the anchor's probability — there is no
+    // consensus and no shave, so the two are equal by construction.
+    const p_novig   = anchorProb[outcome];
+    const p_adj     = p_novig;
     const fair_odds = 1 / p_adj;
     let has_edge = r.max_odds > fair_odds;
     let edge     = has_edge ? parseFloat((p_adj * r.max_odds - 1).toFixed(6)) : 0;
@@ -327,7 +407,13 @@ function computeMatch(match) {
     fair_home_odds, fair_draw_odds, fair_away_odds,
     home_edge, draw_edge, away_edge,
     home_value, draw_value, away_value,
-    model_architecture: 'MARKET_CONSENSUS',
+    // MARKET_ANCHORED, not MARKET_CONSENSUS: these rows are now priced against
+    // Shin-de-vigged Pinnacle, not against an average of the panel. The name
+    // change is load-bearing — MARKET_CONSENSUS is barred from publishing by
+    // lib/publication.js on the strength of the consensus's measured record,
+    // and a row priced a different way must not inherit that verdict in either
+    // direction. It carries its own name so it can earn its own.
+    model_architecture: 'MARKET_ANCHORED',
     odds_fetched_at:    latestFetchedAt,
     computed_at:        new Date().toISOString(),
     best_outcome:  max_edge_val > 0 ? best_outcome : null,
@@ -377,7 +463,7 @@ async function upsertComputedValues(supabase, rows) {
  */
 async function insertValueSignals(
   supabase, rows, phase = 'prematch',
-  architecture = 'MARKET_CONSENSUS',
+  architecture = 'MARKET_ANCHORED',
   fields = { edge: o => `${o}_edge`, value: o => `${o}_value` },
 ) {
   const candidates = [];
@@ -699,10 +785,6 @@ async function main() {
   // gated by lib/halftimeFeatures.buildPrematchVector: it fills a row only where
   // the retrained supermodel is in distribution (known league incl. Allsvenskan/
   // MLS, warm ELO, real form) — otherwise the columns stay null, never guessed.
-  // Rows the learning model found a publishable edge on. A Set because one row
-  // can carry up to three outcomes and must only be handed over once.
-  const smCandidateRows = new Set();
-
   try {
     const infer = require('./ensemble/inference');
     if (infer.ensembleAvailable?.()) {
@@ -737,29 +819,17 @@ async function main() {
         // a "model certainty" readout on the match page. The most sophisticated
         // thing in the stack was decorative.
         //
-        // It is priced exactly like every other model — EV against the best
-        // available price — and it is deliberately held to a HIGHER bar than the
-        // consensus (SUPERMODEL_EV_THRESHOLD, default 3% vs the consensus 0.5%).
-        // The consensus is market-anchored and can be trusted at thin margins; a
-        // forecast has no such anchor, so it only speaks when it disagrees with
-        // the market by an amount worth acting on. Its edges are capped by the
-        // same MAX_PLAUSIBLE_EDGE guard, and its signals carry their own
-        // architecture so the product can score them separately and never fold
-        // an unproven model into a headline it has not earned.
-        for (const outcome of ['home', 'draw', 'away']) {
-          const { edge, publish, reason } = supermodelEdge(probs[outcome], r.row[`best_${outcome}_odds`]);
-          if (reason === 'implausible') {
-            console.warn(
-              `[supermodel] dropped implausible edge ${(edge * 100).toFixed(0)}% on ${outcome} ` +
-              `(model ${(probs[outcome] * 100).toFixed(1)}% vs best ${r.row[`best_${outcome}_odds`]}) ` +
-              `— out-of-distribution input`
-            );
-          }
-          if (!publish) continue;
-          r.row[`_sm_${outcome}_edge`]  = edge;
-          r.row[`_sm_${outcome}_value`] = true;
-          smCandidateRows.add(r.row);
-        }
+        // They are written and they stop there. Under the ruling of 6 Aug 2026
+        // a model probability is DISPLAY ONLY: it may sit beside the market's
+        // number on a match card, and it may never be turned into an edge, a
+        // value flag or a score. The block that used to do that
+        // (supermodelEdge, and the _sm_* transport columns) is deleted — see
+        // the note where it used to live.
+        //
+        // "Decorative" is the right description of this data and is no longer
+        // a criticism. The measured record says the model's disagreement with
+        // the market is anti-predictive, so a decorative model is the only
+        // honest kind we currently have.
       }
       console.log(`[ensemble] pre-match model probs written for ${filled}/${live.length} match(es)`);
     }
@@ -772,24 +842,10 @@ async function main() {
   if (valueRows.length) {
     await insertValueSignals(supabase, valueRows);
   }
-  if (smCandidateRows.size) {
-    try {
-      const n = await insertValueSignals(
-        supabase, [...smCandidateRows], 'prematch', 'SUPERMODEL',
-        // The learning model's own columns. detected_mes is null: MES is
-        // risk-adjusted and trust-weighted per architecture, and the frontend
-        // recomputes it — the engine's match-level score is the consensus's.
-        // Underscore-prefixed so upsertComputedValues strips them: these are
-        // transport between the two steps, not columns on computed_values.
-        { edge: o => `_sm_${o}_edge`, value: o => `_sm_${o}_value` },
-      );
-      console.log(`[supermodel] published ${n} signal(s) from ${smCandidateRows.size} match(es)`);
-    } catch (err) {
-      console.error('[supermodel] signal insert failed (consensus unaffected):', err.message);
-    }
-  } else {
-    console.log('[supermodel] no publishable edges this cycle');
-  }
+  // The supermodel signal insert used to sit here. It is deleted, not disabled:
+  // a model publisher behind a flag is a model publisher someone turns on.
+  // Its probabilities are still written to computed_values as display-only
+  // columns; nothing turns them into a signal.
   if (secondaryCandidates.length) {
     try { await insertSecondarySignals(supabase, secondaryCandidates); }
     catch (err) { console.error('[secondary] signal insert failed:', err.message); }
@@ -810,7 +866,7 @@ if (require.main === module) {
 // Exported so computeInplayValues.js can reuse the consensus core and the
 // signal-insert helpers (with phase='inplay') instead of duplicating them.
 module.exports = {
-  supermodelEdge,
+  // supermodelEdge is deliberately absent — see the note where it was deleted.
   fetchMatchesForComputation,
   computeConsensus,
   computeMatch,
