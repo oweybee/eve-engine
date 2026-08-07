@@ -24,7 +24,7 @@ function test(n, f) {
 /* ── The conviction ladder ─────────────────────────────────────────────── */
 
 test('names the four rungs, strongest first, and nothing else', () => {
-  assert.deepStrictEqual([...LABELS], ['PRIME', 'WATCH', 'NOTED', 'NOISE']);
+  assert.deepStrictEqual([...LABELS], ['PRIME', 'WATCH', 'TRACE', 'NIL']);
 });
 
 test('carries none of the eligibility ladder’s words', () => {
@@ -39,10 +39,10 @@ test('bands at 25 / 40 / 65, and 65 is the selection boundary', () => {
   assert.strictEqual(bandFor(65), 'PRIME');
   assert.strictEqual(bandFor(64), 'WATCH');
   assert.strictEqual(bandFor(40), 'WATCH');
-  assert.strictEqual(bandFor(39), 'NOTED');
-  assert.strictEqual(bandFor(25), 'NOTED');
-  assert.strictEqual(bandFor(24), 'NOISE');
-  assert.strictEqual(bandFor(0), 'NOISE');
+  assert.strictEqual(bandFor(39), 'TRACE');
+  assert.strictEqual(bandFor(25), 'TRACE');
+  assert.strictEqual(bandFor(24), 'NIL');
+  assert.strictEqual(bandFor(0), 'NIL');
   assert.strictEqual(BAND_MIN.PRIME, 65);
 });
 
@@ -52,7 +52,7 @@ test('an unscorable row is null, never the bottom rung', () => {
   for (const v of [null, undefined, '', 'x', NaN]) {
     assert.strictEqual(bandFor(v), null, `${String(v)} scores nothing`);
   }
-  assert.strictEqual(bandFor(0), 'NOISE', 'a genuine zero survives as a value');
+  assert.strictEqual(bandFor(0), 'NIL', 'a genuine zero survives as a value');
 });
 
 test('only PRIME is backed', () => {

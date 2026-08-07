@@ -26,12 +26,12 @@ function test(n, f) {
 const GOLDEN = [
   { gap: 0.0300, sigma: 0.0300, mxs: 65, band: 'PRIME' },  // z = 1 → the boundary
   { gap: 0.0150, sigma: 0.0300, mxs: 41, band: 'WATCH' },
-  { gap: 0.0100, sigma: 0.0300, mxs: 30, band: 'NOTED' },
+  { gap: 0.0100, sigma: 0.0300, mxs: 30, band: 'TRACE' },
   { gap: 0.0600, sigma: 0.0300, mxs: 88, band: 'PRIME' },
   { gap: 0.1000, sigma: 0.0300, mxs: 97, band: 'PRIME' },
-  { gap: 0.0300, sigma: 0.0693, mxs: 37, band: 'NOTED' },
-  { gap: 0.0000, sigma: 0.0300, mxs: 0,  band: 'NOISE' },
-  { gap: -0.020, sigma: 0.0300, mxs: 0,  band: 'NOISE' },
+  { gap: 0.0300, sigma: 0.0693, mxs: 37, band: 'TRACE' },
+  { gap: 0.0000, sigma: 0.0300, mxs: 0,  band: 'NIL' },
+  { gap: -0.020, sigma: 0.0300, mxs: 0,  band: 'NIL' },
   { gap: 0.0530, sigma: 0.0530, mxs: 65, band: 'PRIME' },
   { gap: 0.0693, sigma: 0.0693, mxs: 65, band: 'PRIME' },
 ];
@@ -124,7 +124,7 @@ test('writes the band beside the score, from the score', () => {
   assert.strictEqual(s.mxs_band, 'PRIME');
   assert.ok(s.mxs >= 65);
   const weak = scoreSignal(row({ detected_odds: 2.0, detected_edge: 0.02 }));
-  assert.strictEqual(weak.mxs_band, 'NOTED');
+  assert.strictEqual(weak.mxs_band, 'TRACE');
   assert.ok(weak.mxs >= 25 && weak.mxs < 40);
 });
 
