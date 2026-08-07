@@ -11,6 +11,7 @@
 'use strict';
 const assert = require('assert');
 const { scoreSignal, maxedgeScore, sigmaFor, bandFor } = require('./lib/maxedge');
+const { isBacked } = require('./lib/signalTier');
 
 let passed = 0;
 function test(n, f) {
@@ -23,17 +24,22 @@ function test(n, f) {
 // select maxedge_score(gap, sigma) from (values ...) — run on production
 // zlbmpeiuhyllxwegtayu, 6 Aug 2026. If these drift, the browser, the engine and
 // the database are no longer computing one number.
+//
+// THE SCORES DID NOT MOVE IN THE SIX-RUNG RE-CUT — only the words. That two of
+// these pairs already landed on exactly 88 and exactly 41 is not a coincidence:
+// those are 2σ and 0.5σ, which is where the new cutoffs were derived from. The
+// table was computing the boundaries before anyone named them.
 const GOLDEN = [
-  { gap: 0.0300, sigma: 0.0300, mxs: 65, band: 'PRIME' },  // z = 1 → the boundary
+  { gap: 0.0300, sigma: 0.0300, mxs: 65, band: 'STRONG' }, // z = 1 → the boundary
   { gap: 0.0150, sigma: 0.0300, mxs: 41, band: 'WATCH' },
-  { gap: 0.0100, sigma: 0.0300, mxs: 30, band: 'NOTED' },
+  { gap: 0.0100, sigma: 0.0300, mxs: 30, band: 'SLIGHT' },
   { gap: 0.0600, sigma: 0.0300, mxs: 88, band: 'PRIME' },
   { gap: 0.1000, sigma: 0.0300, mxs: 97, band: 'PRIME' },
-  { gap: 0.0300, sigma: 0.0693, mxs: 37, band: 'NOTED' },
-  { gap: 0.0000, sigma: 0.0300, mxs: 0,  band: 'NOISE' },
-  { gap: -0.020, sigma: 0.0300, mxs: 0,  band: 'NOISE' },
-  { gap: 0.0530, sigma: 0.0530, mxs: 65, band: 'PRIME' },
-  { gap: 0.0693, sigma: 0.0693, mxs: 65, band: 'PRIME' },
+  { gap: 0.0300, sigma: 0.0693, mxs: 37, band: 'SLIGHT' },
+  { gap: 0.0000, sigma: 0.0300, mxs: 0,  band: 'NIL' },
+  { gap: -0.020, sigma: 0.0300, mxs: 0,  band: 'NIL' },
+  { gap: 0.0530, sigma: 0.0530, mxs: 65, band: 'STRONG' },
+  { gap: 0.0693, sigma: 0.0693, mxs: 65, band: 'STRONG' },
 ];
 
 test('matches maxedge_score() on every golden pair', () => {
@@ -121,10 +127,11 @@ test('rounds both probabilities to fit numeric(6,4)', () => {
 
 test('writes the band beside the score, from the score', () => {
   const s = scoreSignal(row({ detected_odds: 2.0, detected_edge: 0.20 }));
-  assert.strictEqual(s.mxs_band, 'PRIME');
+  assert.strictEqual(s.mxs_band, bandFor(s.mxs));
+  assert.strictEqual(isBacked(s.mxs), true);
   assert.ok(s.mxs >= 65);
   const weak = scoreSignal(row({ detected_odds: 2.0, detected_edge: 0.02 }));
-  assert.strictEqual(weak.mxs_band, 'NOTED');
+  assert.strictEqual(weak.mxs_band, bandFor(weak.mxs));
   assert.ok(weak.mxs >= 25 && weak.mxs < 40);
 });
 
@@ -192,7 +199,7 @@ const SCORED = ['model_prob', 'market_prob', 'prob_gap', 'model_sigma', 'mxs', '
     assert.strictEqual(c1.rows.length, 1);
     for (const col of SCORED) assert.ok(col in c1.rows[0], `${col} is written`);
     assert.strictEqual(c1.rows[0].mxs, 76);
-    assert.strictEqual(c1.rows[0].mxs_band, 'PRIME');
+    assert.strictEqual(c1.rows[0].mxs_band, bandFor(c1.rows[0].mxs));
     // Both ladders on one row, and they are allowed to differ.
     assert.strictEqual(c1.rows[0].signal_category, 'Prime');
   });

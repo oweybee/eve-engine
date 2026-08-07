@@ -23,7 +23,6 @@
 
  *
  * Optional env vars:
- *   WORLD_CUP_LEAGUE_ID   — API-Football league ID (default: 1)
  *   ALLSVENSKAN_LEAGUE_ID — API-Football league ID (default: 113)
  *   MLS_LEAGUE_ID         — API-Football league ID (default: 253)
  *   FOOTBALL_SEASON       — season year, e.g. 2025 (default: current year)
@@ -76,7 +75,6 @@ const DRY_RUN             = process.argv.includes('--dry-run');
 // frontend filters on (lib/feed.js AVAILABLE_LEAGUES) — keep the two in sync.
 // The API's own league name is deliberately NOT used, so e.g. World Cup stays
 // 'FIFA World Cup' (matching existing rows) rather than the API's "World Cup".
-const WORLD_CUP_LEAGUE_ID   = parseInt(process.env.WORLD_CUP_LEAGUE_ID   || '1',   10);
 const ALLSVENSKAN_LEAGUE_ID = parseInt(process.env.ALLSVENSKAN_LEAGUE_ID || '113', 10);
 const MLS_LEAGUE_ID         = parseInt(process.env.MLS_LEAGUE_ID         || '253', 10);
 

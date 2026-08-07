@@ -8,7 +8,8 @@
 const assert = require('assert');
 const inplay = require('./lib/inplay');
 const { buildMessage, isInplay, isSuggested, isBroadcastable, bandOf, chatIdForSignal } = require('./postToX');
-const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
+const { classifyTier, dedupeConflicts, bandFor, isBacked } = require('./lib/signalTier');
+const { scoreSignal } = require('./lib/maxedge');
 const { extractLiveH2h } = require('./ingestLiveOdds');
 const elo = require('./lib/elo');
 const { buildLadder } = require('./computeElo');
@@ -115,17 +116,21 @@ test('prematch unbacked edge (odds 2.5 / edge 3%) → info-only header, not sugg
 // conviction ladder scores it 65+ — so the word cannot say one thing in the
 // channel and another on a row. A suggested selection we could not score is
 // not broadcast at all.
-const primeSignal = {
+// odds 2.2 at a 9% edge scores 76 — which is STRONG since the six-rung re-cut,
+// not PRIME. PRIME is 88+ (2 sigma) now. The row is BACKED either way, and
+// "backed" is the thing this file is actually about, so the fixture is named for
+// that rather than for whichever word sits at the top of the ladder today.
+const backedSignal = {
   ...prematchSignal, detected_odds: 2.2, detected_edge: 0.09,
-  model_architecture: 'DIXON_COLES', mxs: 76, mxs_band: 'PRIME',
+  model_architecture: 'DIXON_COLES', mxs: 76, mxs_band: 'STRONG',
 };
 const longshotSignal = { ...prematchSignal, detected_odds: 5.0, detected_edge: 0.07 };
 
-test('prime box + PRIME score → PRIME header, broadcastable', () => {
-  assert.strictEqual(classifyTier(primeSignal).tier, 'prime');
-  assert.strictEqual(isSuggested(primeSignal), true);
-  assert.strictEqual(isBroadcastable(primeSignal), true);
-  const m = buildMessage(primeSignal);
+test('prime box + a backed score → PRIME header, broadcastable', () => {
+  assert.strictEqual(classifyTier(backedSignal).tier, 'prime');
+  assert.strictEqual(isSuggested(backedSignal), true);
+  assert.strictEqual(isBroadcastable(backedSignal), true);
+  const m = buildMessage(backedSignal);
   assert.ok(m.includes('PRIME SIGNAL'), 'header');
   assert.ok(m.includes('backed'), 'backed note');
   assert.ok(m.includes('76/100'), 'states the score it is claiming');
@@ -134,8 +139,12 @@ test('prime box + PRIME score → PRIME header, broadcastable', () => {
 test('the rung is read from the row, and recomputed when it is absent', () => {
   // A backfilled or legacy row carries no mxs_band; the same formula fills it
   // in rather than silently making the signal unbroadcastable.
-  const { mxs, mxs_band, ...unstored } = primeSignal;
-  assert.strictEqual(bandOf(unstored), 'PRIME');
+  const { mxs, mxs_band, ...unstored } = backedSignal;
+  // Asserted through the classifier, not against a literal word. Pinning 'PRIME'
+  // here is what broke when the ladder was re-cut: the recomputed rung moved to
+  // STRONG while the row's meaning — suggested, and backed — did not change.
+  assert.strictEqual(bandOf(unstored), bandFor(scoreSignal(unstored).mxs));
+  assert.strictEqual(isBacked(scoreSignal(unstored).mxs), true);
   assert.strictEqual(isBroadcastable(unstored), true);
 });
 
@@ -146,17 +155,17 @@ test('THE BOX AND THE RUNG DO NOT COINCIDE, and that is the point', () => {
   // 6 do not. Under the old policy all 10 were broadcast as "PRIME SIGNAL"
   // while the site badged six of them WATCH. Requiring both is what stops the
   // word meaning two things, and a quieter channel is the cost of that.
-  const inBox = { ...primeSignal, detected_edge: 0.06 };
+  const inBox = { ...backedSignal, detected_edge: 0.06 };
   delete inBox.mxs; delete inBox.mxs_band;
   assert.strictEqual(classifyTier(inBox).suggested, true, 'the box suggests it');
   assert.strictEqual(bandOf(inBox), 'WATCH', 'the score does not back it');
   assert.strictEqual(isBroadcastable(inBox), false);
 });
 
-test('suggested but scored below PRIME is NOT broadcast', () => {
+test('suggested but scored below the backing line is NOT broadcast', () => {
   // This is the case the old policy got wrong: the ladder suggests it, so the
   // channel would have opened with "PRIME SIGNAL" while the site badged WATCH.
-  const watch = { ...primeSignal, mxs: 52, mxs_band: 'WATCH' };
+  const watch = { ...backedSignal, mxs: 52, mxs_band: 'WATCH' };
   assert.strictEqual(isSuggested(watch), true);
   assert.strictEqual(isBroadcastable(watch), false);
 });
@@ -164,7 +173,7 @@ test('suggested but scored below PRIME is NOT broadcast', () => {
 test('suggested but UNSCORABLE is not broadcast either', () => {
   // An architecture with no row in model_calibration scores null, and null is
   // not PRIME. Silence is the right output for "we could not measure this".
-  const unscored = { ...primeSignal, model_architecture: 'SUPERMODEL_HALFTIME' };
+  const unscored = { ...backedSignal, model_architecture: 'SUPERMODEL_HALFTIME' };
   delete unscored.mxs; delete unscored.mxs_band;
   assert.strictEqual(bandOf(unscored), null);
   assert.strictEqual(isBroadcastable(unscored), false);

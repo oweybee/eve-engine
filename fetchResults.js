@@ -19,11 +19,28 @@
 const { createClient } = require('@supabase/supabase-js');
 const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
 
-// Clean-slate epoch: performance is tracked ONLY for signals detected on or
-// after this instant — the go-live of the Prime-only + conflict-deduped
-// structure. Everything before it was generated under the old rules and must
-// not count. Override with PERFORMANCE_EPOCH if the slate is ever reset again.
-const PERFORMANCE_EPOCH = process.env.PERFORMANCE_EPOCH || '2026-07-03T18:30:00Z';
+// Clean-slate epoch: the SUMMARY below counts only signals detected on or after
+// this instant. Everything before it was generated under different selection
+// rules and must not be reported as evidence for the current ones.
+//
+// MOVED 6 AUG 2026, the second reset since launch. The conviction ladder
+// unified on this date and PRIME now needs BOTH the odds+edge box and an MXS of
+// 65+, where before it needed only the box — a different rule, so the two sets
+// cannot share a headline. Measured over the 366 settled signals at the time,
+// 208 came from MARKET_CONSENSUS and 54 from API_PREDICTIVE, both switched off
+// in the 5 Aug audit, and together they dominated every figure.
+//
+// NOTHING IS DELETED AND NOTHING STOPS BEING GRADED. This constant is read in
+// exactly one place — the summarise step at the foot of this file — so results
+// are still settled for every signal whatever its age, and /performance still
+// shows the older record under the notice naming the architectures behind it.
+// Deleting an unflattering record because it came from a withdrawn model is the
+// same failure as publishing it as an edge, pointed the other way (5 Aug).
+//
+// Must equal PERFORMANCE_EPOCH in eve-frontend/lib/epoch.js, which also derives
+// the date the site prints. Override with the env var if the slate is reset
+// again.
+const PERFORMANCE_EPOCH = process.env.PERFORMANCE_EPOCH || '2026-08-06T16:00:00Z';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;

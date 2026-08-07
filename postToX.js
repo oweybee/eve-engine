@@ -32,7 +32,7 @@ const https  = require('https');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { formatLiveState } = require('./lib/inplay');
-const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
+const { classifyTier, dedupeConflicts, isBacked } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
 const { isPublished, withheldReason } = require('./lib/publication');
 
@@ -143,9 +143,20 @@ function bandOf(signal) {
   return signal.mxs_band ?? scoreSignal(signal).mxs_band;
 }
 
-/** Both ladders agree: suggested by the price+edge box AND scored PRIME. */
+/**
+ * Both ladders agree: suggested by the price+edge box AND scored at or above the
+ * backing line.
+ *
+ * THIS READS `isBacked`, NOT `band === 'PRIME'`, AND THE DIFFERENCE IS THE WHOLE
+ * CHANNEL. When the ladder went to six rungs on 6 Aug 2026, PRIME moved from 65
+ * (1σ) to 88 (2σ) and STRONG took the 65 line. A name comparison left here would
+ * have quietly raised the broadcast threshold from 1σ to 2σ — ten rows in the
+ * entire database clear 88 — and the channel would have gone almost silent with
+ * nothing in the diff that looked like a threshold change.
+ */
 function isBroadcastable(signal) {
-  return isSuggested(signal) && bandOf(signal) === 'PRIME';
+  const mxs = signal.mxs ?? scoreSignal(signal).mxs;
+  return isSuggested(signal) && isBacked(mxs);
 }
 
 function formatKickoff(isoStr) {
@@ -200,11 +211,14 @@ function buildMessage(signal) {
   } else {
     const { tier, notable } = classifyTier(signal);
     const band = bandOf(signal);
-    if (tier === 'prime' && band === 'PRIME') {
-      // PRIME, and it means here exactly what it means on a board row: the
-      // ladder suggests it and the score puts it at or above 65.
+    const mxs  = signal.mxs ?? scoreSignal(signal).mxs;
+    if (tier === 'prime' && isBacked(mxs)) {
+      // PRIME SIGNAL means what it always meant here: the ladder suggests it AND
+      // the score is at or above the backing line. Gated on isBacked so the
+      // six-rung re-cut did not move the bar under the words — the post names
+      // the rung it actually scored, which is PRIME or STRONG.
       header   = `🟢 *PRIME SIGNAL*`;
-      note     = `_Our only backed tier — the ladder suggests it and it scores ${signal.mxs ?? scoreSignal(signal).mxs}/100_`;
+      note     = `_Our backed tier — the ladder suggests it and it scores ${mxs}/100 (${band})_`;
       hashtags = `#MaxEdge #Prime #ValueBet`;
     } else if (tier === 'longshot') {
       // A fact about the price, not a rung: every settled bet at 3.00+ lost.
