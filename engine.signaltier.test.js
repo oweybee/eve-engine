@@ -24,26 +24,46 @@ function test(n, f) {
 /* ── The conviction ladder ─────────────────────────────────────────────── */
 
 test('names the four rungs, strongest first, and nothing else', () => {
-  assert.deepStrictEqual([...LABELS], ['PRIME', 'WATCH', 'TRACE', 'NIL']);
+  assert.deepStrictEqual([...LABELS], ['PRIME', 'STRONG', 'WATCH', 'SLIGHT', 'TRACE', 'NIL']);
 });
 
 test('carries none of the eligibility ladder’s words', () => {
   // Value and Longshot are buckets of the OTHER ladder. A rung named Value was
   // how a count and a verdict came to look like the same claim on screen.
-  for (const dead of ['VALUE', 'LONGSHOT', 'STANDARD', 'STRONG', 'MODERATE']) {
+  // STRONG came off this list on 6 Aug 2026. It is a rung again, and legitimately
+  // so: it exists only at or above the 1σ backing line, where we have not
+  // declined to back the reading. The prohibition was never about the word.
+  for (const dead of ['VALUE', 'LONGSHOT', 'STANDARD', 'MODERATE']) {
     assert.ok(!LABELS.includes(dead), `${dead} is not a rung`);
   }
 });
 
-test('bands at 25 / 40 / 65, and 65 is the selection boundary', () => {
-  assert.strictEqual(bandFor(65), 'PRIME');
+test('bands at 10 / 23 / 41 / 65 / 88, every one a round sigma', () => {
+  assert.strictEqual(bandFor(88), 'PRIME');
+  assert.strictEqual(bandFor(87), 'STRONG');
+  assert.strictEqual(bandFor(65), 'STRONG');
   assert.strictEqual(bandFor(64), 'WATCH');
-  assert.strictEqual(bandFor(40), 'WATCH');
-  assert.strictEqual(bandFor(39), 'TRACE');
-  assert.strictEqual(bandFor(25), 'TRACE');
-  assert.strictEqual(bandFor(24), 'NIL');
+  assert.strictEqual(bandFor(41), 'WATCH');
+  assert.strictEqual(bandFor(40), 'SLIGHT');
+  assert.strictEqual(bandFor(23), 'SLIGHT');
+  assert.strictEqual(bandFor(22), 'TRACE');
+  assert.strictEqual(bandFor(10), 'TRACE');
+  assert.strictEqual(bandFor(9), 'NIL');
   assert.strictEqual(bandFor(0), 'NIL');
-  assert.strictEqual(BAND_MIN.PRIME, 65);
+  // 65 is still the selection boundary BY CONSTRUCTION — it just belongs to
+  // STRONG now, and isBacked() is what reads it.
+  assert.strictEqual(BAND_MIN.STRONG, 65);
+  assert.strictEqual(BAND_MIN.PRIME, 88);
+});
+
+test('backed means at or above the 1 sigma line, not the top rung', () => {
+  // The bug this pins: `bandFor(mxs) === 'PRIME'` after the re-cut would have
+  // moved every backed check from 65 to 88 without looking like a threshold
+  // change — including the Telegram broadcast gate.
+  assert.strictEqual(isBacked(88), true);
+  assert.strictEqual(isBacked(65), true);
+  assert.strictEqual(isBacked(64), false);
+  assert.strictEqual(isBacked(null), false);
 });
 
 test('an unscorable row is null, never the bottom rung', () => {
