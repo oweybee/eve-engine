@@ -33,6 +33,7 @@
 const { getClient } = require('./lib/supabaseClient');
 const { categoryFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
+const ma = require('./lib/marketAnchor');
 
 const MIN_BOOKMAKERS        = parseInt(process.env.MIN_BOOKMAKERS        || '2',  10);
 const COMPUTE_CONCURRENCY   = parseInt(process.env.COMPUTE_CONCURRENCY   || '5',  10);
@@ -227,6 +228,19 @@ function computeApiMatchEdge(match) {
     outcomeResults[outcome] = { p_api, fair_odds, max_odds, max_book, has_edge, edge, allOdds };
   }
 
+  // The market side of every score written off this row: the best-price vector
+  // with its residual margin removed. `1/max_odds` is not it — those three
+  // reciprocals sum above 1, so each overstates its outcome and shrinks the
+  // gap. Same de-vig, same vector, as computeValues.js and as the frontend's
+  // "Fair %" column.
+  const bestDevig = ma.devigProbs(
+    { home: outcomeResults.home?.max_odds, draw: outcomeResults.draw?.max_odds, away: outcomeResults.away?.max_odds },
+    OUTCOMES,
+  );
+  for (const o of OUTCOMES) {
+    if (outcomeResults[o]) outcomeResults[o].p_mkt_devig = bestDevig.fair?.[o] ?? null;
+  }
+
   const { home, draw, away } = outcomeResults;
 
   // computed_values.best_*_odds are NOT NULL. Only emit a row when all three
@@ -293,6 +307,14 @@ function computeApiMatchEdge(match) {
 
     _kickoff_at:     match.kickoff_at,
     _bookmakerCount: deduped.length,
+    // Carried, not stored — `computed_values` has no column for it, but the
+    // signal insert needs the market side of the score for whichever outcome it
+    // picks. Underscore-prefixed so the column filter drops it before upsert.
+    _mktDevig: {
+      home: home.p_mkt_devig ?? null,
+      draw: draw.p_mkt_devig ?? null,
+      away: away.p_mkt_devig ?? null,
+    },
   };
 
   return { skipped: false, row, hasValue: home_value || draw_value || away_value };
@@ -348,6 +370,9 @@ async function insertValueSignals(supabase, rows) {
         bookmaker:          row[`best_${outcome}_book`],
         kickoff_at:         row._kickoff_at ?? null,
         model_architecture: 'API_PREDICTIVE',
+        // Margin-free market probability for this outcome — the other side of
+        // the gap. Null makes the row unscorable, never `1/odds`.
+        market_prob:        row._mktDevig?.[outcome] ?? null,
         _edge:              edge,
         _odds:              odds,
         _p_api:             p_api,

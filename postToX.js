@@ -25,6 +25,13 @@
  * knowing. An architecture with no row in `model_calibration` scores null, and a
  * null is not PRIME. Silence is the correct output for "we could not measure
  * this" — the alternative is a post that names a rung nobody computed.
+ *
+ * IT READS THE STORED VERDICT NOW, WHICH IS WHAT THE PARAGRAPH ABOVE ALWAYS
+ * CLAIMED. `fetchRecentSignals` did not select `mxs` or `mxs_band`, so
+ * `signal.mxs ?? recompute(signal)` took the right-hand branch on EVERY row and
+ * the broadcast asserted its own score after all — the stored one it was written
+ * to read was never fetched. Both are on the select list as of 7 Aug 2026, along
+ * with `gap_basis`, without which a legacy row cannot be told from a current one.
  */
 'use strict';
 
@@ -95,6 +102,7 @@ async function fetchRecentSignals(supabase) {
     .select(`
       id, match_id, market, market_line, outcome, detected_odds, detected_edge, detected_mes, bookmaker,
       kickoff_at, detected_at, signal_category, is_mover, phase, model_architecture,
+      model_prob, market_prob, prob_gap, mxs, mxs_band, gap_basis,
       match:matches (
         goals_home, goals_away, minute,
         home_team:teams!matches_home_team_id_fkey ( name ),
@@ -135,12 +143,34 @@ function isInplay(signal) { return signal.phase === 'inplay'; }
 function isSuggested(signal) { return classifyTier(signal).suggested; }
 
 /**
+ * Recompute a row's verdict, but ONLY when the row is on the current convention.
+ *
+ * SINCE MIGRATION 058 THERE ARE TWO. A row detected before 7 Aug 2026 carries
+ * `market_prob = 1 / detected_odds` and `gap_basis = 'implied'`; a row detected
+ * after carries the Shin-de-vigged probability and `gap_basis = 'devigged'`.
+ * Both are finite numbers in (0,1), so `scoreSignal` cannot tell them apart on
+ * its own — handed a legacy row it would happily produce a score under the OLD
+ * convention and pass it to the broadcast gate as though it meant the same
+ * thing. That is exactly the mixing `gap_basis` exists to prevent, so the check
+ * lives here rather than in the reader's head.
+ *
+ * A row that cannot be re-scored is not broadcast. It is history: its match has
+ * almost always kicked off, and a signal we cannot score under the convention we
+ * currently publish is not one to put in the channel.
+ */
+function rescore(signal) {
+  if (signal?.gap_basis !== 'devigged') return { mxs: null, mxs_band: null };
+  return scoreSignal(signal);
+}
+
+/**
  * The conviction rung for a signal — the stored one where the engine wrote it,
- * recomputed from the row otherwise so a backfilled or legacy signal is not
- * silently unbroadcastable. Same formula either way (lib/maxedge.js).
+ * recomputed from the row otherwise so a backfilled signal on the current
+ * convention is not silently unbroadcastable. Same formula either way
+ * (lib/maxedge.js).
  */
 function bandOf(signal) {
-  return signal.mxs_band ?? scoreSignal(signal).mxs_band;
+  return signal.mxs_band ?? rescore(signal).mxs_band;
 }
 
 /**
@@ -155,7 +185,7 @@ function bandOf(signal) {
  * nothing in the diff that looked like a threshold change.
  */
 function isBroadcastable(signal) {
-  const mxs = signal.mxs ?? scoreSignal(signal).mxs;
+  const mxs = signal.mxs ?? rescore(signal).mxs;
   return isSuggested(signal) && isBacked(mxs);
 }
 
@@ -211,7 +241,7 @@ function buildMessage(signal) {
   } else {
     const { tier, notable } = classifyTier(signal);
     const band = bandOf(signal);
-    const mxs  = signal.mxs ?? scoreSignal(signal).mxs;
+    const mxs  = signal.mxs ?? rescore(signal).mxs;
     if (tier === 'prime' && isBacked(mxs)) {
       // PRIME SIGNAL means what it always meant here: the ladder suggests it AND
       // the score is at or above the backing line. Gated on isBacked so the
