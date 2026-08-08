@@ -1,4 +1,11 @@
--- 058_rls_initplan_and_view_invoker.sql
+-- 059_rls_initplan_and_view_invoker.sql
+--
+-- Numbered 058 when it was written and applied (7 Aug 2026). 058 was taken
+-- in the meantime by `058_gap_basis.sql`, which landed on main first, so this
+-- file moved up. Both are already applied to production and neither depends on
+-- the other — one adds a column and backfills it, this one rewrites policy
+-- predicates and view options — so the reordering changes nothing about a
+-- replay from scratch.
 --
 -- Two launch-eve corrections, both found by measuring production rather than
 -- reading the schema. Neither changes who may see what: every predicate below
