@@ -19,6 +19,14 @@
  * P2-7 fix: extractH2hRows normalises oddsItem to an array before iterating.
  *   The API may return a single object or an array; both are now handled.
  *
+ * P3-1 fix: Phase 1 now fetches only dueIds, not plan.fixture_ids. Fetching
+ *   the full day's plan on every run that found even one fixture due blew
+ *   through the per-minute rate limit (a 429 storm) and logged every fixture
+ *   outside dueIds as "unresolved" since fixtureToMatchId was never built for
+ *   them - pure wasted quota that also starved the fixture(s) that were
+ *   actually due. None of that raises summary.errors, so the run still
+ *   reported success with oddsInserted: 0.
+ *
  * Required env vars:
  *   API_FOOTBALL_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  *
@@ -492,13 +500,21 @@ async function ingest() {
 
   const summary = { fixtures: dueIds.length, oddsInserted: 0, unresolved: 0, errors: 0 };
 
-  // ── Phase 1: fetch every fixture's odds in parallel (bounded) ──────────────
+  // ── Phase 1: fetch every due fixture's odds in parallel (bounded) ──────────
   // Was a serial fetch + sleep(200) between fixtures, so the network round-trips
   // dominated the run and capped odds freshness. Fetching is pure (no shared
   // state), so it parallelises safely; httpClient's Retry-After/backoff handles
   // any per-minute rate limit. (audit H6)
+  //
+  // P3-1 fix: this used to fetch plan.fixture_ids (every fixture scheduled
+  // today) instead of dueIds. That meant a run with 1 fixture due still hit
+  // the API for all ~191 fixtures on the slate, blew through the per-minute
+  // rate limit (a 429 storm), and logged the other ~190 as "unresolved" since
+  // fixtureToMatchId was only ever built from dueIds. Worse, the 429 storm
+  // starved the fixture(s) that were actually due, so oddsInserted stayed at 0
+  // even though the run reported success.
   const fetched = await withPool(
-    plan.fixture_ids,
+    dueIds,
     async (fixtureId) => {
       try {
         return { fixtureId, bookmakers: await fetchFixtureOdds(fixtureId) };
@@ -559,7 +575,7 @@ async function ingest() {
       // upsertMatches `continue`s on a failed team/league upsert while still
       // listing the id in the plan). The honest response is to skip it loudly so
       // the gap is visible, and let planDay/backfillSeasonFixtures create the row
-      // properly on their next pass.
+      // properly on its next pass.
       const matchId = fixtureToMatchId.get(extIdStr);
       if (!matchId) {
         summary.unresolved++;
