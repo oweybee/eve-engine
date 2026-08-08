@@ -328,6 +328,19 @@ function computeConsensus(oddsRows) {
     raw[outcome] = { max_odds, max_book, allOdds };
   }
 
+  // ── The market's own probability, margin removed. ────────────────────────
+  // `market_prob` on a signal is what the market a reader can actually bet into
+  // believes, and raw `1/best_odds` is not that: across the live 1X2 board those
+  // three reciprocals sum to ~1.0348 even at best prices across 15+ books, so
+  // each one overstates its outcome by roughly the residual margin. De-vig the
+  // complete best-price vector once, here, and hand the result to
+  // `scoreSignal`. It is also the SAME vector the frontend de-vigs for its
+  // "Fair %" column, so the board and the ledger cannot describe one bet two
+  // ways.
+  const bestVector = {};
+  for (const o of OUTCOMES) bestVector[o] = raw[o]?.max_odds;
+  const bestDevig = ma.devigProbs(bestVector, OUTCOMES);
+
   // ── Edge: the best bettable price against the Shin-de-vigged anchor. ──────
   const present = OUTCOMES.filter(o => raw[o]);
 
@@ -356,6 +369,11 @@ function computeConsensus(oddsRows) {
       p_cons: p_novig, p_adj, fair_odds,
       max_odds: r.max_odds, max_book: r.max_book,
       has_edge, edge, allOdds: r.allOdds,
+      // The de-vigged probability of THIS outcome across the bettable panel —
+      // the market side of every score written off this row. Null when the
+      // panel was not a complete market, which makes the row unscorable rather
+      // than scored against a margin-carrying number.
+      p_mkt_devig: bestDevig.fair?.[outcome] ?? null,
     };
   }
 
@@ -474,6 +492,15 @@ function computeMatch(match) {
     corners_over_value: false, corners_under_value: false,
     _kickoff_at:     match.kickoff_at,
     _bookmakerCount: bookmakerCount,
+    // Carried, not stored: `computed_values` has no column for it, but the
+    // signal insert needs the market side of the score for the outcome it
+    // picks. Underscore-prefixed like the other passthroughs so the column
+    // filter below drops it before the upsert.
+    _mktDevig: {
+      home: home?.p_mkt_devig ?? null,
+      draw: draw?.p_mkt_devig ?? null,
+      away: away?.p_mkt_devig ?? null,
+    },
   };
 
   return { skipped: false, row, hasValue: home_value || draw_value || away_value, match, consensus };
@@ -550,6 +577,11 @@ async function insertValueSignals(
         kickoff_at:         row._kickoff_at ?? null,
         model_architecture: architecture,
         phase,
+        // The market side of the score: this outcome's probability with the
+        // panel's margin removed. Null here means the row cannot be scored, and
+        // `scoreSignal` will return a null verdict rather than fall back to the
+        // margin-carrying `1/odds`.
+        market_prob:        row._mktDevig?.[outcome] ?? null,
         _edge:              edge,
         _odds:              row[`best_${outcome}_odds`],
       });

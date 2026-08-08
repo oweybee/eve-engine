@@ -33,6 +33,7 @@ const { getClient } = require('./lib/supabaseClient');
 const inplay         = require('./lib/inplay');
 const { categoryFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
+const ma             = require('./lib/marketAnchor');
 const sm             = require('./lib/secondaryMarkets');
 const { buildHalftimeVector } = require('./lib/halftimeFeatures');
 const { liveWinProb } = require('./lib/inplayWinProb');
@@ -53,6 +54,25 @@ const INPLAY_EV_THRESHOLD  = parseFloat(process.env.INPLAY_EV_THRESHOLD || proce
 // edges (mirrors MAX_PLAUSIBLE_EDGE in computeApiValues.js). An in-play model
 // "edge" above this is almost always a calibration artefact, not real value.
 const INPLAY_MAX_EDGE = parseFloat(process.env.INPLAY_MAX_EDGE || '0.20');
+
+/**
+ * De-vigged 1X2 probabilities from the live best-price map `bestH2hOdds`
+ * returns, or null when the live market is not complete enough to de-vig.
+ *
+ * In-play books quote a wider margin than pre-match ones, so the correction this
+ * applies is LARGER here, not smaller — which is the opposite of the intuition
+ * that a fast-moving market is not worth de-vigging carefully.
+ *
+ * @param {Record<string, {odds:number}|null|undefined>} best
+ * @returns {Record<string, number>|null}
+ */
+function devigLiveH2h(best) {
+  const r = ma.devigProbs(
+    { home: best?.home?.odds, draw: best?.draw?.odds, away: best?.away?.odds },
+    ['home', 'draw', 'away'],
+  );
+  return r.fair;
+}
 
 // Win-probability stage (Phase 2) — the competition-agnostic engine that serves
 // internationals. Independent flag so it can roll out separately from the
@@ -159,6 +179,12 @@ async function modelVsMarket(match, ctx) {
   if (!probs) return [];
 
   const best = inplay.bestH2hOdds(match.odds);
+  // The market side of the score, margin removed, from the same live vector the
+  // prices come from. SUPERMODEL_HALFTIME has no row in model_calibration so
+  // `mxs` stays null regardless — but `prob_gap` IS stored on these rows, and a
+  // gap measured against a margin-carrying price is the defect wherever it is
+  // written, including on rows nothing scores yet.
+  const bestDevig = devigLiveH2h(best);
   const candidates = [];
   for (const outcome of ['home', 'draw', 'away']) {
     const live = best[outcome];
@@ -178,6 +204,7 @@ async function modelVsMarket(match, ctx) {
       bookmaker:          live.book ?? null,
       kickoff_at:         match.kickoff_at ?? null,
       model_architecture: 'SUPERMODEL_HALFTIME',
+      market_prob:        bestDevig?.[outcome] ?? null,
       signal_category:    categoryFor({ odds: live.odds, edge }),
       phase:              'inplay',
     });
@@ -235,6 +262,7 @@ function winProbCandidates(match, baseline, opts = {}) {
   });
 
   const best = inplay.bestH2hOdds(match.odds);
+  const bestDevig = devigLiveH2h(best);
   const candidates = [];
   for (const outcome of ['home', 'draw', 'away']) {
     const live = best[outcome];
@@ -250,6 +278,7 @@ function winProbCandidates(match, baseline, opts = {}) {
       bookmaker:          live.book ?? null,
       kickoff_at:         match.kickoff_at ?? null,
       model_architecture: 'INPLAY_DIXON_COLES',
+      market_prob:        bestDevig?.[outcome] ?? null,
       signal_category:    categoryFor({ odds: live.odds, edge }),
       phase:              'inplay',
     });

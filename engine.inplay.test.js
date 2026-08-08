@@ -120,9 +120,14 @@ test('prematch unbacked edge (odds 2.5 / edge 3%) → info-only header, not sugg
 // not PRIME. PRIME is 88+ (2 sigma) now. The row is BACKED either way, and
 // "backed" is the thing this file is actually about, so the fixture is named for
 // that rather than for whichever word sits at the top of the ladder today.
+// `market_prob` is the Shin-de-vigged panel probability the engine stores as of
+// migration 058, and `gap_basis` is what says so — without it a recompute cannot
+// tell this row from a pre-7-Aug one whose market_prob is a margin-carrying
+// 1/odds. 0.4400 against a raw 1/2.20 = 0.4545.
 const backedSignal = {
   ...prematchSignal, detected_odds: 2.2, detected_edge: 0.09,
   model_architecture: 'DIXON_COLES', mxs: 76, mxs_band: 'STRONG',
+  market_prob: 0.44, gap_basis: 'devigged',
 };
 const longshotSignal = { ...prematchSignal, detected_odds: 5.0, detected_edge: 0.07 };
 
@@ -155,11 +160,40 @@ test('THE BOX AND THE RUNG DO NOT COINCIDE, and that is the point', () => {
   // 6 do not. Under the old policy all 10 were broadcast as "PRIME SIGNAL"
   // while the site badged six of them WATCH. Requiring both is what stops the
   // word meaning two things, and a quieter channel is the cost of that.
+  // Scored against the de-vigged 0.4400 rather than 1/2.20, this is 83 — STRONG,
+  // and BACKED. Under the old convention the same row scored 62 and was withheld.
+  // That is the change working: the margin was hiding a real disagreement, and 7
+  // of the live board's selections move across the line the same way. The pair
+  // still does not coincide — the point of the test — it just no longer needs a
+  // row this strong to make it.
   const inBox = { ...backedSignal, detected_edge: 0.06 };
   delete inBox.mxs; delete inBox.mxs_band;
   assert.strictEqual(classifyTier(inBox).suggested, true, 'the box suggests it');
-  assert.strictEqual(bandOf(inBox), 'WATCH', 'the score does not back it');
-  assert.strictEqual(isBroadcastable(inBox), false);
+  assert.strictEqual(bandOf(inBox), 'STRONG', 'the de-vigged score backs it');
+  assert.strictEqual(isBroadcastable(inBox), true);
+
+  // The divergence itself, which needs a LONGER price than it used to. At 2.20
+  // against a de-vigged 0.44 the whole 4–10% box now clears 65, so the two
+  // ladders agree there; they part company further out, where the same edge is a
+  // smaller probability disagreement. 2.80 at 4.5% scores 63 — WATCH — and is
+  // suggested. That asymmetry is §6.2's argument for leading with the gap
+  // instead of the edge, and de-vigging sharpened it rather than removing it.
+  const thin = { ...backedSignal, detected_odds: 2.8, detected_edge: 0.045, market_prob: 0.345 };
+  delete thin.mxs; delete thin.mxs_band;
+  assert.strictEqual(classifyTier(thin).suggested, true, 'the box suggests it');
+  assert.strictEqual(bandOf(thin), 'WATCH', 'the score does not back it');
+  assert.strictEqual(isBroadcastable(thin), false);
+});
+
+test('a legacy row is never re-scored under the new convention', () => {
+  // gap_basis='implied' means market_prob is 1/detected_odds, margin included.
+  // Both conventions store a finite probability in (0,1), so nothing about the
+  // number itself distinguishes them — only this flag does. Re-scoring such a
+  // row would mix two measurements in one broadcast gate.
+  const legacy = { ...backedSignal, market_prob: 1 / 2.2, gap_basis: 'implied' };
+  delete legacy.mxs; delete legacy.mxs_band;
+  assert.strictEqual(bandOf(legacy), null);
+  assert.strictEqual(isBroadcastable(legacy), false);
 });
 
 test('suggested but scored below the backing line is NOT broadcast', () => {

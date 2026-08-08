@@ -99,23 +99,62 @@ test('an architecture nobody has measured gets no sigma and no score', () => {
 
 /* ── Scoring a whole row ───────────────────────────────────────────────── */
 
+// 0.38 is a plausible de-vigged probability for a 2.50 shot: the raw reciprocal
+// is 0.4000, and removing ~3.4% of residual panel margin lands just under it.
+// The gap it produces is BIGGER than the old `edge/odds`, which is the point.
 const row = (over = {}) => ({
-  detected_odds: 2.50, detected_edge: 0.08,
+  detected_odds: 2.50, detected_edge: 0.08, market_prob: 0.38,
   model_architecture: 'DIXON_COLES', ...over,
 });
 
-test('recovers the two probabilities the way 048 backfills them', () => {
+test('the market side is the de-vigged probability it was handed', () => {
   const s = scoreSignal(row());
-  //  p_market = 1/2.50 = 0.4000 ; p_model = 1.08/2.50 = 0.4320
-  assert.strictEqual(s.market_prob, 0.4);
+  //  p_market = 0.3800 (de-vigged, supplied) ; p_model = 1.08/2.50 = 0.4320
+  assert.strictEqual(s.market_prob, 0.38);
   assert.strictEqual(s.model_prob, 0.432);
-  assert.ok(Math.abs(s.prob_gap - 0.032) < 1e-9);
+  assert.ok(Math.abs(s.prob_gap - 0.052) < 1e-9);
+});
+
+test('de-vigging WIDENS the gap — the sign the old note had backwards', () => {
+  // The whole justification for the change, pinned as arithmetic. `1/odds`
+  // sums to more than one across a market, so it overstates each outcome and
+  // shrinks the disagreement. A de-vigged market probability is SMALLER, so the
+  // gap is BIGGER and the score is HIGHER — not "inflated by the vig" as the
+  // frontend mirror's note claimed.
+  const devigged = scoreSignal(row());                       // p_market 0.3800
+  const implied  = scoreSignal(row({ market_prob: 1 / 2.5 })); // p_market 0.4000
+  assert.ok(devigged.prob_gap > implied.prob_gap);
+  assert.ok(devigged.mxs > implied.mxs);
+  // And the old convention's gap was exactly edge/odds — the identity that made
+  // prob_gap a restatement of the price rather than a measurement.
+  assert.ok(Math.abs(implied.prob_gap - 0.08 / 2.5) < 1e-9);
+});
+
+test('no de-vigged market probability, no verdict — it does NOT fall back to 1/odds', () => {
+  // The fail-closed rule. A silent `1/odds` fallback would put two conventions
+  // back in one column with nothing saying which is which, which is exactly what
+  // gap_basis exists to prevent.
+  for (const mp of [undefined, null, '', 0, 1, 1.4, -0.2, NaN, 'abc']) {
+    const s = scoreSignal(row({ market_prob: mp }));
+    assert.strictEqual(s.mxs, null, `market_prob ${mp}`);
+    assert.strictEqual(s.market_prob, null, `market_prob ${mp}`);
+    assert.strictEqual(s.prob_gap, null, `market_prob ${mp}`);
+    assert.strictEqual(s.gap_basis, null, `market_prob ${mp}`);
+  }
+});
+
+test('stamps the convention on every row it scores', () => {
+  assert.strictEqual(scoreSignal(row()).gap_basis, 'devigged');
+  // Even where sigma is null and there is no score: the gap IS measured and
+  // stored on those rows, so what it was measured against has to be too.
+  assert.strictEqual(
+    scoreSignal(row({ model_architecture: 'SUPERMODEL_HALFTIME' })).gap_basis, 'devigged');
 });
 
 test('prefers a model probability the caller actually holds', () => {
   const s = scoreSignal(row({ model_prob: 0.51 }));
   assert.strictEqual(s.model_prob, 0.51);
-  assert.ok(Math.abs(s.prob_gap - 0.11) < 1e-9);
+  assert.ok(Math.abs(s.prob_gap - 0.13) < 1e-9);
 });
 
 test('rounds both probabilities to fit numeric(6,4)', () => {
@@ -126,13 +165,20 @@ test('rounds both probabilities to fit numeric(6,4)', () => {
 });
 
 test('writes the band beside the score, from the score', () => {
-  const s = scoreSignal(row({ detected_odds: 2.0, detected_edge: 0.20 }));
+  // Both cases carry a de-vigged probability consistent with their OWN price:
+  // 0.4830 against a raw 1/2.00 = 0.5000. A market probability that does not
+  // belong to the odds beside it is not a weaker test, it is a different bet.
+  const at2 = { detected_odds: 2.0, market_prob: 0.483 };
+  const s = scoreSignal(row({ ...at2, detected_edge: 0.20 }));
   assert.strictEqual(s.mxs_band, bandFor(s.mxs));
   assert.strictEqual(isBacked(s.mxs), true);
   assert.ok(s.mxs >= 65);
-  const weak = scoreSignal(row({ detected_odds: 2.0, detected_edge: 0.02 }));
+  const weak = scoreSignal(row({ ...at2, detected_edge: 0.02 }));
   assert.strictEqual(weak.mxs_band, bandFor(weak.mxs));
-  assert.ok(weak.mxs >= 25 && weak.mxs < 40);
+  assert.strictEqual(isBacked(weak.mxs), false);
+  // Under the old convention this same row scored 32. De-vigging lifts it to
+  // WATCH — still not backed, but no longer understated by the margin.
+  assert.ok(weak.mxs >= 41 && weak.mxs < 65, `weak scored ${weak.mxs}`);
 });
 
 test('an unmeasured architecture yields nulls, and does NOT lose the row', () => {
@@ -144,7 +190,7 @@ test('an unmeasured architecture yields nulls, and does NOT lose the row', () =>
   assert.strictEqual(s.model_sigma, null);
   // The probabilities are still recoverable and still written — they are facts
   // about the row, not a claim about its strength.
-  assert.strictEqual(s.market_prob, 0.4);
+  assert.strictEqual(s.market_prob, 0.38);
 });
 
 test('a price that cannot be a price scores nothing at all', () => {
@@ -155,9 +201,9 @@ test('a price that cannot be a price scores nothing at all', () => {
   }
 });
 
-test('the columns it emits are exactly the ones 048 added, plus 039’s two', () => {
+test('the columns it emits are 048’s, plus 039’s two, plus 058’s gap_basis', () => {
   assert.deepStrictEqual(Object.keys(scoreSignal(row())).sort(),
-    ['market_prob', 'model_prob', 'model_sigma', 'mxs', 'mxs_band', 'prob_gap']);
+    ['gap_basis', 'market_prob', 'model_prob', 'model_sigma', 'mxs', 'mxs_band', 'prob_gap']);
 });
 
 /* ── The write paths actually emit it ──────────────────────────────────── */
@@ -181,7 +227,7 @@ function captureClient() {
   return { rows, from: () => q };
 }
 
-const SCORED = ['model_prob', 'market_prob', 'prob_gap', 'model_sigma', 'mxs', 'mxs_band'];
+const SCORED = ['model_prob', 'market_prob', 'prob_gap', 'model_sigma', 'mxs', 'mxs_band', 'gap_basis'];
 
 (async () => {
   const c1 = captureClient();
@@ -193,15 +239,42 @@ const SCORED = ['model_prob', 'market_prob', 'prob_gap', 'model_sigma', 'mxs', '
     _bookmakerCount: 18,
     odds_fetched_at: new Date().toISOString(),
     _kickoff_at: new Date(Date.now() + 6 * 3600e3).toISOString(),
+    // The de-vigged panel probability computeMatch now carries onto the row.
+    // 0.4400 against a raw 1/2.20 = 0.4545 — the residual margin, removed.
+    _mktDevig: { home: 0.44, draw: null, away: null },
   }], 'prematch', 'MARKET_ANCHORED');
 
   test('the 1X2 path writes every scored column', () => {
     assert.strictEqual(c1.rows.length, 1);
     for (const col of SCORED) assert.ok(col in c1.rows[0], `${col} is written`);
-    assert.strictEqual(c1.rows[0].mxs, 76);
+    assert.strictEqual(c1.rows[0].market_prob, 0.44);
+    assert.strictEqual(c1.rows[0].gap_basis, 'devigged');
+    assert.strictEqual(c1.rows[0].mxs, 86);
     assert.strictEqual(c1.rows[0].mxs_band, bandFor(c1.rows[0].mxs));
     // Both ladders on one row, and they are allowed to differ.
     assert.strictEqual(c1.rows[0].signal_category, 'Prime');
+  });
+
+  // The same row with no de-vigged probability to hand: it must still be
+  // INSERTED, carrying no verdict. Losing a signal because the panel was
+  // incomplete would be a worse failure than not scoring it.
+  const c1b = captureClient();
+  await insertValueSignals(c1b, [{
+    match_id: '00000000-0000-0000-0000-000000000003',
+    home_value: true, home_edge: 0.09,
+    best_home_odds: 2.20, best_home_book: 'bet365',
+    all_home_odds: { bet365: 2.20, pinnacle: 2.14, williamhill: 2.10, unibet: 2.12 },
+    _bookmakerCount: 18,
+    odds_fetched_at: new Date().toISOString(),
+    _kickoff_at: new Date(Date.now() + 6 * 3600e3).toISOString(),
+    _mktDevig: { home: null, draw: null, away: null },
+  }], 'prematch', 'MARKET_ANCHORED');
+
+  test('an un-de-viggable panel still writes the row, with a null verdict', () => {
+    assert.strictEqual(c1b.rows.length, 1, 'the signal is not lost');
+    assert.strictEqual(c1b.rows[0].mxs, null);
+    assert.strictEqual(c1b.rows[0].market_prob, null);
+    assert.strictEqual(c1b.rows[0].gap_basis, null);
   });
 
   const c2 = captureClient();
@@ -210,13 +283,18 @@ const SCORED = ['model_prob', 'market_prob', 'prob_gap', 'model_sigma', 'mxs', '
     outcome: 'over', market: 'totals', market_line: 2.5,
     detected_odds: 1.91, detected_edge: 0.048,
     bookmaker: 'bet365', model_architecture: 'DIXON_COLES', model_prob: 0.5487,
+    // Shin-de-vigged P(over) from the two-way pair, as lib/secondaryMarkets now
+    // attaches it. 0.5200 against a raw 1/1.91 = 0.5236.
+    market_prob: 0.52,
     kickoff_at: new Date(Date.now() + 9 * 3600e3).toISOString(),
   }], 'prematch');
 
   test('the secondary path writes them too, and no longer throws', () => {
     assert.strictEqual(c2.rows.length, 1, 'it inserted rather than throwing');
     for (const col of SCORED) assert.ok(col in c2.rows[0], `${col} is written`);
-    assert.strictEqual(c2.rows[0].mxs, 59);
+    assert.strictEqual(c2.rows[0].market_prob, 0.52);
+    assert.strictEqual(c2.rows[0].gap_basis, 'devigged');
+    assert.strictEqual(c2.rows[0].mxs, 63);
     assert.strictEqual(c2.rows[0].mxs_band, 'WATCH');
   });
 

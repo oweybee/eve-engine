@@ -24,6 +24,7 @@ const { getClient } = require('./lib/supabaseClient');
 const { priceFixture, available } = require('./lib/lambdaBoard');
 const { categoryFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
+const ma = require('./lib/marketAnchor');
 
 const ENABLED = process.env.LAMBDA_BOARD_ENABLED === 'true';
 const EV_THRESHOLD = parseFloat(process.env.LAMBDA_EV_THRESHOLD || '0.03');
@@ -238,12 +239,23 @@ async function run() {
     if (!res.matched.home || !res.matched.away) { skippedUnmatched++; continue; }
     priced++;
 
+    // The market side of the score, de-vigged from the BEST-price vector — the
+    // same prices the signals are detected at. `opp.marketP` is de-vigged from
+    // the MEDIAN vector, which is what anchored the model, and scoring a
+    // best-price signal against a median-derived probability compares two
+    // different markets. Median stays where it belongs, on the model fit.
+    const bestDevig = ma.devigProbs(
+      { home: s.home?.best?.v, draw: s.draw?.best?.v, away: s.away?.best?.v },
+      ['home', 'draw', 'away'],
+    );
+
     for (const opp of res.opportunities) {
       // Re-evaluate the edge at the BEST live price (median anchored the model).
       const bestP = s[opp.outcome]?.best;
       if (!bestP || !(bestP.v > 1)) continue;
       const edge = opp.modelP * bestP.v - 1;
       if (edge < EV_THRESHOLD || edge > 0.25) continue;
+      const marketProb = bestDevig.fair?.[opp.outcome] ?? null;
       candidates.push({
         match_id: m.id,
         kickoff_at: m.kickoff_at,
@@ -255,7 +267,6 @@ async function run() {
         model_architecture: 'LAMBDA_MC',
         phase: 'prematch',
         model_prob: opp.modelP,
-        market_prob: Number(opp.marketP.toFixed(4)),
         credible_score: Number((edge *
           (opp.seg === 'fav' ? 1 : opp.seg === 'mid' ? 0.85 : 0.35) *
           (opp.leagueTag === 'proven' ? 1 : opp.leagueTag === 'avoid' ? 0.4 : 0.75)).toFixed(4)),
@@ -264,10 +275,14 @@ async function run() {
         signal_category: categoryFor({ odds: bestP.v, edge }),
         // This path already wrote model_prob and market_prob — it always knew
         // they were columns, which is what makes the "not a column" comment in
-        // computeValues.js so expensive. The score joins them.
+        // computeValues.js so expensive. The score joins them, and it is the
+        // ONLY writer of market_prob now: the literal that used to sit above
+        // was overwritten by this spread on every row anyway, so the de-vigged
+        // `opp.marketP` it carried never reached the database.
         ...scoreSignal({
           detected_odds: bestP.v, detected_edge: edge,
           model_architecture: 'DIXON_COLES', model_prob: opp.modelP,
+          market_prob: marketProb,
         }),
       });
     }
