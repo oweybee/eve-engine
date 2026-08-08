@@ -224,7 +224,14 @@ jobs:
             ITER_START=$SECONDS
             node ingestOdds.js    || LOOP_EXIT=$?
             node computeValues.js || LOOP_EXIT=$?
-            node captureSnapshot.js 2>/dev/null || true
+            # Was `2>/dev/null || true` — every captureSnapshot.js failure was
+            # discarded before GitHub Actions ever saw it: no red step, no
+            # LOOP_EXIT, no "Alert on pipeline failure" (which already lists
+            # captureSnapshot under ingest-loop, on the assumption this line
+            # behaved like its two neighbours above). odds_snapshots went 29h+
+            # stale, silently, because of exactly that. Treat it the same as
+            # ingestOdds/computeValues so a real failure is visible and alerts.
+            node captureSnapshot.js || LOOP_EXIT=$?
             WORK=$(( SECONDS - ITER_START ))
 
             if [ "$i" -lt "$LOOPS" ]; then
