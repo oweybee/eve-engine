@@ -224,7 +224,7 @@ jobs:
             ITER_START=$SECONDS
             node ingestOdds.js    || LOOP_EXIT=$?
             node computeValues.js || LOOP_EXIT=$?
-            node captureSnapshot.js 2>/dev/null || true
+            node captureSnapshot.js || echo "::warning::captureSnapshot.js failed (exit $?) — odds_snapshots was not written this iteration; see error above"
             WORK=$(( SECONDS - ITER_START ))
 
             if [ "$i" -lt "$LOOPS" ]; then
