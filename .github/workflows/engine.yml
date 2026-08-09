@@ -224,7 +224,13 @@ jobs:
             ITER_START=$SECONDS
             node ingestOdds.js    || LOOP_EXIT=$?
             node computeValues.js || LOOP_EXIT=$?
-            node captureSnapshot.js 2>/dev/null || true
+            # captureSnapshot failures never fail the loop (CLV/chart history
+            # is lower priority than odds ingest + value compute) — but its
+            # stderr is no longer thrown away. It used to be `2>/dev/null`,
+            # which meant a real fault (e.g. the P3-1 URL-length bug, 9 Aug
+            # 2026) produced zero visible signal anywhere and odds_snapshots
+            # silently stopped updating for ~37h. Let it print.
+            node captureSnapshot.js || true
             WORK=$(( SECONDS - ITER_START ))
 
             if [ "$i" -lt "$LOOPS" ]; then
