@@ -224,7 +224,13 @@ jobs:
             ITER_START=$SECONDS
             node ingestOdds.js    || LOOP_EXIT=$?
             node computeValues.js || LOOP_EXIT=$?
-            node captureSnapshot.js 2>/dev/null || true
+            # A snapshot failure must never abort the loop (odds ingest and
+            # value computation already happened this iteration), but it must
+            # stay VISIBLE — piping stderr to /dev/null here is what let
+            # captureSnapshot.js fail on every single iteration for 20+ hours
+            # (an oversized `.in()` query string, fixed alongside this) without
+            # a single line showing up in the job log.
+            node captureSnapshot.js || echo "::warning::captureSnapshot.js failed (exit $?) — snapshot skipped this iteration, loop continues"
             WORK=$(( SECONDS - ITER_START ))
 
             if [ "$i" -lt "$LOOPS" ]; then
