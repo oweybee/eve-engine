@@ -224,7 +224,13 @@ jobs:
             ITER_START=$SECONDS
             node ingestOdds.js    || LOOP_EXIT=$?
             node computeValues.js || LOOP_EXIT=$?
-            node captureSnapshot.js 2>/dev/null || true
+            # captureSnapshot.js must never fail the loop (it's a nice-to-have
+            # price series, not the live board), but a swallowed failure here
+            # went unnoticed for 14h on 9 Aug 2026 because stderr was routed
+            # to /dev/null: the step kept reporting success while
+            # odds_snapshots silently stopped updating. Surface the error to
+            # the job log instead of discarding it — still non-fatal to the loop.
+            node captureSnapshot.js || echo "::warning::captureSnapshot.js failed (non-fatal, see above) — odds_snapshots may be stale"
             WORK=$(( SECONDS - ITER_START ))
 
             if [ "$i" -lt "$LOOPS" ]; then
