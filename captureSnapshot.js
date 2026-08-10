@@ -90,8 +90,25 @@ function edgeBucket(edge) {
 }
 
 // ---------------------------------------------------------------------------
-// Bulk prefetch functions (each fires exactly one query)
+// Bulk prefetch functions (each fires one query PER CHUNK of match_ids)
 // ---------------------------------------------------------------------------
+
+// computed_values carries every upcoming fixture across every architecture —
+// 470 distinct match_ids live on 10 Aug — and `.in('match_id', matchIds)`
+// puts every one of them, as a UUID, into the request's query string. Above
+// ~150-200 ids that URL passed ~18KB and every prefetch* call started dying
+// with `TypeError: fetch failed` — a transport-level failure with no HTTP
+// status, not a PostgREST error — 100% reproducible on every one of 4 loop
+// iterations, concurrent or sequential, with or without retry. Chunking the
+// `.in()` filter keeps each request's URL bounded regardless of how many
+// fixtures are live.
+const MATCH_ID_CHUNK_SIZE = 150;
+
+function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
 
 /**
  * Which of the given match_ids have at least one existing odds_snapshot?
@@ -106,15 +123,17 @@ function edgeBucket(edge) {
  * @returns {Promise<Set<string>>}
  */
 async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
-  const { data, error } = await supabase
-    .from('odds_snapshots')
-    .select('match_id')
-    .in('match_id', matchIds)
-    .gte('captured_at', since7dIso);
-  if (error) throw new Error(`prefetchSnapshotExistence: ${error.message}`);
-
-  // Deduplicate in JS — we only need existence, not row count.
-  return new Set((data ?? []).map(r => r.match_id));
+  const result = new Set();
+  for (const ids of chunk(matchIds, MATCH_ID_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('odds_snapshots')
+      .select('match_id')
+      .in('match_id', ids)
+      .gte('captured_at', since7dIso);
+    if (error) throw new Error(`prefetchSnapshotExistence: ${error.message}`);
+    for (const r of data ?? []) result.add(r.match_id);
+  }
+  return result;
 }
 
 /**
@@ -132,21 +151,23 @@ async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
  *   Outer key: matchId.  Inner key: bookmaker.  Value: odds row.
  */
 async function prefetchLatestOdds(supabase, matchIds, since48hIso) {
-  const { data, error } = await supabase
-    .from('odds')
-    .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds)
-    .eq('market', 'h2h')
-    .gte('fetched_at', since48hIso)
-    .order('fetched_at', { ascending: false });
-  if (error) throw new Error(`prefetchLatestOdds: ${error.message}`);
-
   const map = new Map();
-  for (const row of data ?? []) {
-    if (!map.has(row.match_id)) map.set(row.match_id, new Map());
-    const byBook = map.get(row.match_id);
-    // First occurrence = latest (DESC order). Never overwrite.
-    if (!byBook.has(row.bookmaker)) byBook.set(row.bookmaker, row);
+  for (const ids of chunk(matchIds, MATCH_ID_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('odds')
+      .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
+      .in('match_id', ids)
+      .eq('market', 'h2h')
+      .gte('fetched_at', since48hIso)
+      .order('fetched_at', { ascending: false });
+    if (error) throw new Error(`prefetchLatestOdds: ${error.message}`);
+
+    for (const row of data ?? []) {
+      if (!map.has(row.match_id)) map.set(row.match_id, new Map());
+      const byBook = map.get(row.match_id);
+      // First occurrence = latest (DESC order). Never overwrite.
+      if (!byBook.has(row.bookmaker)) byBook.set(row.bookmaker, row);
+    }
   }
   return map;
 }
@@ -167,24 +188,26 @@ async function prefetchLatestOdds(supabase, matchIds, since48hIso) {
  * @returns {Promise<{existingRecsMap: Map<string, Set<string>>, openRecsForClv: Map<string, object[]>}>}
  */
 async function prefetchRecommendations(supabase, matchIds) {
-  const { data, error } = await supabase
-    .from('recommendations')
-    .select('id, match_id, selection, recommended_odds, clv_pct')
-    .in('match_id', matchIds);
-  if (error) throw new Error(`prefetchRecommendations: ${error.message}`);
-
   const existingRecsMap = new Map();
   const openRecsForClv  = new Map();
 
-  for (const rec of data ?? []) {
-    // Signal dedup map
-    if (!existingRecsMap.has(rec.match_id)) existingRecsMap.set(rec.match_id, new Set());
-    existingRecsMap.get(rec.match_id).add(rec.selection);
+  for (const ids of chunk(matchIds, MATCH_ID_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('recommendations')
+      .select('id, match_id, selection, recommended_odds, clv_pct')
+      .in('match_id', ids);
+    if (error) throw new Error(`prefetchRecommendations: ${error.message}`);
 
-    // CLV candidates — only those still missing a closing price
-    if (rec.clv_pct == null) {
-      if (!openRecsForClv.has(rec.match_id)) openRecsForClv.set(rec.match_id, []);
-      openRecsForClv.get(rec.match_id).push(rec);
+    for (const rec of data ?? []) {
+      // Signal dedup map
+      if (!existingRecsMap.has(rec.match_id)) existingRecsMap.set(rec.match_id, new Set());
+      existingRecsMap.get(rec.match_id).add(rec.selection);
+
+      // CLV candidates — only those still missing a closing price
+      if (rec.clv_pct == null) {
+        if (!openRecsForClv.has(rec.match_id)) openRecsForClv.set(rec.match_id, []);
+        openRecsForClv.get(rec.match_id).push(rec);
+      }
     }
   }
 
