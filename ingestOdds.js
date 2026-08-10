@@ -33,8 +33,9 @@
 
 'use strict';
 
-const https            = require('https');
-const { getClient }    = require('./lib/supabaseClient');
+const https               = require('https');
+const { getClient }       = require('./lib/supabaseClient');
+const { retierSchedule }  = require('./lib/pollBudget');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -445,8 +446,28 @@ async function ingest() {
     return;
   }
 
+  // ── Re-tier against the current clock ─────────────────────────────────────
+  // planDay assigns each fixture's tier once, at plan time. Nothing else ever
+  // revisits it, so a fixture tiered 'near' (3h) when the plan was built stays
+  // on a 3-hour poll straight through its actual closing window — the one
+  // window this whole budget system exists to cover densely. retierSchedule
+  // only ever promotes (tightens), never demotes, so it can't blow the daily
+  // budget the planner already sized; it can only catch a fixture up on
+  // polling it should already have had.
+  const { schedule: retiered, promoted } = retierSchedule(plan.fixture_schedule ?? {}, { now });
+  if (promoted.length) {
+    console.log(`[ingest] re-tiered ${promoted.length} fixture(s): ` +
+      promoted.map(p => `${p.id} ${p.from}→${p.to}`).join(', '));
+    const { error: retierErr } = await supabase
+      .from('engine_plan')
+      .update({ fixture_schedule: retiered })
+      .eq('date', plan.date);
+    if (retierErr) throw new Error(`retier persist: ${retierErr.message}`);
+    plan.fixture_schedule = retiered;
+  }
+
   const nextRun = new Date(plan.next_run_at);
-  if (now < nextRun) {
+  if (now < nextRun && !promoted.length) {
     const waitMins = Math.round((nextRun - now) / 60000);
     console.log(`[ingest] not due yet — ${waitMins} min until next run (${plan.next_run_at})`);
     return;

@@ -5,7 +5,7 @@
 'use strict';
 
 const assert = require('assert');
-const { planPolling, pollsForFixture, tierFor, dueNow, DEFAULT_TIERS } =
+const { planPolling, pollsForFixture, tierFor, dueNow, retierSchedule, DEFAULT_TIERS } =
   require('./lib/pollBudget');
 
 let passed = 0;
@@ -117,6 +117,43 @@ test('dueNow filters on nextPollAt', () => {
   assert.strictEqual(dueNow(plan.schedule, NOW).length, 0, 'nothing due immediately');
   const later = new Date(NOW.getTime() + 10 * 60_000);
   assert.strictEqual(dueNow(plan.schedule, later).length, 1, 'closing-tier fixture due at +10m');
+});
+
+test('retierSchedule promotes a fixture that drifted into the closing window', () => {
+  // Tiered 'near' (3h) when the plan was built, hours ago; kickoff is now 20 min out.
+  const schedule = {
+    f1: { tier: 'near', everyMin: 180, nextPollAt: inHours(2), kickoffAt: inHours(1 / 3) },
+  };
+  const { schedule: out, promoted } = retierSchedule(schedule, { now: NOW });
+  assert.strictEqual(promoted.length, 1);
+  assert.strictEqual(promoted[0].id, 'f1');
+  assert.strictEqual(out.f1.tier, 'closing');
+  assert.strictEqual(out.f1.everyMin, 5);
+  assert.strictEqual(out.f1.nextPollAt, NOW.toISOString(), 'pulled forward to now, not left at the stale +2h poll');
+});
+
+test('retierSchedule never demotes an already-tighter tier', () => {
+  // Already on 'closing' (5m) despite being far out — e.g. widened manually, or
+  // a fixture whose kickoff got pushed back. Must not be loosened back to 'near'.
+  const schedule = {
+    f1: { tier: 'closing', everyMin: 5, nextPollAt: inHours(0.05), kickoffAt: inHours(30) },
+  };
+  const { schedule: out, promoted } = retierSchedule(schedule, { now: NOW });
+  assert.strictEqual(promoted.length, 0);
+  assert.strictEqual(out.f1.everyMin, 5);
+});
+
+test('retierSchedule leaves correctly-tiered and legacy (no kickoffAt) entries alone', () => {
+  const schedule = {
+    correct: { tier: 'near', everyMin: 180, nextPollAt: inHours(1), kickoffAt: inHours(30) },
+    legacy:  { tier: 'closing', everyMin: 5, nextPollAt: inHours(0.05) }, // no kickoffAt
+    kicked:  { tier: 'near', everyMin: 180, nextPollAt: inHours(1), kickoffAt: inHours(-1) }, // past kickoff
+  };
+  const { schedule: out, promoted } = retierSchedule(schedule, { now: NOW });
+  assert.strictEqual(promoted.length, 0);
+  assert.deepStrictEqual(out.correct, schedule.correct);
+  assert.deepStrictEqual(out.legacy, schedule.legacy);
+  assert.deepStrictEqual(out.kicked, schedule.kicked);
 });
 
 console.log(`\npoll budget tests: ${passed} passed${process.exitCode ? ' (with failures)' : ''}`);

@@ -221,10 +221,13 @@ function calcPlan(fixtures, today) {
   console.log(`  ${summarise(budgetPlan)}`);
 
   // Per-fixture schedule for ingestOdds — it polls only what is DUE.
+  // kickoffAt is persisted (not just used to build the tier here) so ingestOdds
+  // can re-tier a fixture as it drifts through the day — see
+  // lib/pollBudget.retierSchedule for why that matters.
   const fixtureSchedule = {};
   for (const s2 of budgetPlan.schedule) {
     fixtureSchedule[String(s2.id)] = {
-      tier: s2.tier, everyMin: s2.everyMin, nextPollAt: s2.nextPollAt,
+      tier: s2.tier, everyMin: s2.everyMin, nextPollAt: s2.nextPollAt, kickoffAt: s2.kickoffAt,
     };
   }
   // The loop must wake at least as often as the tightest tier so closing-line
