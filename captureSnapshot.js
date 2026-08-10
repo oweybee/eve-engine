@@ -59,13 +59,19 @@ const SECONDARY_SNAP = [
  * concurrently right after ingestOdds/computeValues finish their own bursts
  * of requests on the same connection pool). Anything else rethrows
  * immediately — this is not a general-purpose retry.
+ *
+ * The raw TypeError never reaches here: supabase-js returns network failures
+ * as { error } rather than throwing, and each prefetch* function re-throws
+ * `new Error('prefetchX: ' + error.message)` — a plain Error whose message
+ * happens to contain the original "TypeError: fetch failed" text. Matching
+ * on `instanceof TypeError` here always misses; match the message instead.
  */
-async function withFetchRetry(fn, { retries = 2, delayMs = 500 } = {}) {
+async function withFetchRetry(fn, { retries = 3, delayMs = 1000 } = {}) {
   for (let attempt = 0; ; attempt++) {
     try {
       return await fn();
     } catch (err) {
-      const isFetchFailed = err instanceof TypeError && /fetch failed/i.test(err.message);
+      const isFetchFailed = /fetch failed/i.test(err?.message ?? '');
       if (!isFetchFailed || attempt >= retries) throw err;
       console.warn(`[snapshot] fetch failed (attempt ${attempt + 1}/${retries + 1}) — retrying in ${delayMs}ms`);
       await new Promise(r => setTimeout(r, delayMs));
