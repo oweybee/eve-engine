@@ -53,6 +53,26 @@ const SECONDARY_SNAP = [
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Retries a thunk on Node's undici "fetch failed" (stale pooled socket —
+ * observed rotating across all three prefetch calls when they fire
+ * concurrently right after ingestOdds/computeValues finish their own bursts
+ * of requests on the same connection pool). Anything else rethrows
+ * immediately — this is not a general-purpose retry.
+ */
+async function withFetchRetry(fn, { retries = 2, delayMs = 500 } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const isFetchFailed = err instanceof TypeError && /fetch failed/i.test(err.message);
+      if (!isFetchFailed || attempt >= retries) throw err;
+      console.warn(`[snapshot] fetch failed (attempt ${attempt + 1}/${retries + 1}) — retrying in ${delayMs}ms`);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+}
+
 function edgeBucket(edge) {
   const pp = edge * 100;
   if (pp < 2)  return '0-2';
@@ -206,11 +226,16 @@ async function run() {
   const since7dIso  = new Date(now -  7 * 24 * 60 * 60 * 1000).toISOString();
 
   // ── 3 parallel bulk reads — fires all three simultaneously, one network RTT ─
+  // Each wrapped in withFetchRetry: firing three concurrent requests right as
+  // ingestOdds/computeValues finish their own request bursts intermittently
+  // hits a stale pooled socket (TypeError: fetch failed) — reproduced live on
+  // 10 Aug, a different one of the three failing on each of four consecutive
+  // loop iterations, silently (the caller had 2>/dev/null || true) for ~2h.
   const [snapshotExistsSet, latestOddsMap, { existingRecsMap, openRecsForClv }] =
     await Promise.all([
-      prefetchSnapshotExistence(supabase, matchIds, since7dIso),
-      prefetchLatestOdds(supabase, matchIds, since48hIso),
-      prefetchRecommendations(supabase, matchIds),
+      withFetchRetry(() => prefetchSnapshotExistence(supabase, matchIds, since7dIso)),
+      withFetchRetry(() => prefetchLatestOdds(supabase, matchIds, since48hIso)),
+      withFetchRetry(() => prefetchRecommendations(supabase, matchIds)),
     ]);
 
   console.log(
