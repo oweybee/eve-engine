@@ -224,7 +224,16 @@ jobs:
             ITER_START=$SECONDS
             node ingestOdds.js    || LOOP_EXIT=$?
             node computeValues.js || LOOP_EXIT=$?
-            node captureSnapshot.js 2>/dev/null || true
+            # Non-fatal by design (a snapshot hiccup must not take down
+            # ingest/compute) — but it must not be SILENT either. Previously
+            # `2>/dev/null || true` discarded stderr and always exited 0, so a
+            # persistent crash here never showed up anywhere: not in the job
+            # log, not in steps.ingest_loop.outcome, not in the Discord
+            # `if: failure()` alert below. That let captureSnapshot.js fail on
+            # every single invocation for ~24h (odds_snapshots stopped
+            # advancing 2026-08-09 21:24 UTC) with a fully green pipeline the
+            # whole time. Keep it non-fatal; stop hiding it.
+            node captureSnapshot.js || echo "::warning::captureSnapshot.js failed (exit $?) — odds_snapshots not updated this cycle, see log above"
             WORK=$(( SECONDS - ITER_START ))
 
             if [ "$i" -lt "$LOOPS" ]; then
