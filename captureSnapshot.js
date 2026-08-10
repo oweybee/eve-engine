@@ -10,13 +10,14 @@
  *      that we haven't already recorded — freezing the signal odds + edge.
  *   3. Back-fills CLV on recommendations whose match now has a closing price.
  *
- * DB efficiency (P2-1 fix): 3 parallel bulk reads before the loop replace
- * 120+ serial round-trips per run:
+ * DB efficiency (P2-1 fix): 3 bulk reads before the loop replace 120+ serial
+ * round-trips per run:
  *   Bulk 1 — prefetchSnapshotExistence : Set<matchId>         (snap type: open vs current)
  *   Bulk 2 — prefetchLatestOdds        : Map<matchId, byBook> (depth row source)
  *   Bulk 3 — prefetchRecommendations   : existingRecsMap + openRecsForClv
  * Inside the loop every lookup is O(1). The only remaining DB round-trips are
  * write operations (upserts and updates) which cannot be avoided.
+ * Run sequentially, not concurrently — see the note at the call site.
  *
  * CLV % = ((recommended_odds − closing_odds) / closing_odds) × 100
  *
@@ -231,18 +232,19 @@ async function run() {
   const since48hIso = new Date(now - 48 * 60 * 60 * 1000).toISOString();
   const since7dIso  = new Date(now -  7 * 24 * 60 * 60 * 1000).toISOString();
 
-  // ── 3 parallel bulk reads — fires all three simultaneously, one network RTT ─
-  // Each wrapped in withFetchRetry: firing three concurrent requests right as
-  // ingestOdds/computeValues finish their own request bursts intermittently
-  // hits a stale pooled socket (TypeError: fetch failed) — reproduced live on
-  // 10 Aug, a different one of the three failing on each of four consecutive
-  // loop iterations, silently (the caller had 2>/dev/null || true) for ~2h.
-  const [snapshotExistsSet, latestOddsMap, { existingRecsMap, openRecsForClv }] =
-    await Promise.all([
-      withFetchRetry(() => prefetchSnapshotExistence(supabase, matchIds, since7dIso)),
-      withFetchRetry(() => prefetchLatestOdds(supabase, matchIds, since48hIso)),
-      withFetchRetry(() => prefetchRecommendations(supabase, matchIds)),
-    ]);
+  // ── 3 bulk reads, SEQUENTIAL — was Promise.all, changed 10 Aug 2026 ─────────
+  // Firing these three concurrently reproduced a 100% failure rate live: all
+  // three request(s) failed with the same `TypeError: fetch failed` on every
+  // one of 4 loop iterations, and retrying (with 1s backoff, 4 attempts) never
+  // once got a single one through — this is not the occasional stale-pooled-
+  // socket blip the retry was written for, it is this runtime failing every
+  // concurrent 3-way fetch to the same host. ingestOdds.js and computeValues.js
+  // run immediately before in the same job on the same runner and never fail,
+  // but neither ever fires more than one request at a time. withFetchRetry is
+  // kept as a safety net for genuine one-off blips, not as the fix.
+  const snapshotExistsSet = await withFetchRetry(() => prefetchSnapshotExistence(supabase, matchIds, since7dIso));
+  const latestOddsMap     = await withFetchRetry(() => prefetchLatestOdds(supabase, matchIds, since48hIso));
+  const { existingRecsMap, openRecsForClv } = await withFetchRetry(() => prefetchRecommendations(supabase, matchIds));
 
   console.log(
     `[snapshot] prefetch complete — ` +
