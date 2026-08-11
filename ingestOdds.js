@@ -492,13 +492,23 @@ async function ingest() {
 
   const summary = { fixtures: dueIds.length, oddsInserted: 0, unresolved: 0, errors: 0 };
 
-  // ── Phase 1: fetch every fixture's odds in parallel (bounded) ──────────────
+  // ── Phase 1: fetch every DUE fixture's odds in parallel (bounded) ──────────
   // Was a serial fetch + sleep(200) between fixtures, so the network round-trips
   // dominated the run and capped odds freshness. Fetching is pure (no shared
   // state), so it parallelises safely; httpClient's Retry-After/backoff handles
   // any per-minute rate limit. (audit H6)
+  //
+  // BUG FIX (11 Aug 2026): this fetched plan.fixture_ids — the WHOLE day's plan
+  // (up to 55+ fixtures) — instead of dueIds, the tiered subset computed above.
+  // Introduced in 5474bdf alongside tiered per-fixture polling; the fetch phase
+  // was never switched over, so every ~55s loop iteration re-fetched every
+  // fixture regardless of tier, four times per job. That blew straight through
+  // API-Football's per-minute rate limit on every run: "1/55 fixture(s) due"
+  // followed by 55 concurrent-batch GETs, all rejected with
+  // "Too many requests... exceeded the limit of requests per minute", so
+  // oddsInserted stayed 0 for 2+ hours starting ~20:57 UTC on 11 Aug 2026.
   const fetched = await withPool(
-    plan.fixture_ids,
+    dueIds,
     async (fixtureId) => {
       try {
         return { fixtureId, bookmakers: await fetchFixtureOdds(fixtureId) };
