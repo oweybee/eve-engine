@@ -222,9 +222,15 @@ jobs:
 
             echo "--- Loop $i / $LOOPS (t+${ELAPSED}s of ${BUDGET}s) ---"
             ITER_START=$SECONDS
-            node ingestOdds.js    || LOOP_EXIT=$?
-            node computeValues.js || LOOP_EXIT=$?
-            node captureSnapshot.js 2>/dev/null || true
+            node ingestOdds.js     || LOOP_EXIT=$?
+            node computeValues.js  || LOOP_EXIT=$?
+            # Was `2>/dev/null || true` — captureSnapshot.js's failures were
+            # fully discarded, so odds_snapshots stopped writing for 11h+ on
+            # 10-11 Aug 2026 while every run still reported 'success'. It is
+            # already named in the failure-alert step below as part of
+            # ingest-loop; that alert can only fire if this line lets a
+            # non-zero exit reach LOOP_EXIT.
+            node captureSnapshot.js || LOOP_EXIT=$?
             WORK=$(( SECONDS - ITER_START ))
 
             if [ "$i" -lt "$LOOPS" ]; then
