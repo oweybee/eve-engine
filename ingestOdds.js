@@ -492,13 +492,22 @@ async function ingest() {
 
   const summary = { fixtures: dueIds.length, oddsInserted: 0, unresolved: 0, errors: 0 };
 
-  // ── Phase 1: fetch every fixture's odds in parallel (bounded) ──────────────
+  // ── Phase 1: fetch only the DUE fixtures' odds in parallel (bounded) ───────
   // Was a serial fetch + sleep(200) between fixtures, so the network round-trips
   // dominated the run and capped odds freshness. Fetching is pure (no shared
   // state), so it parallelises safely; httpClient's Retry-After/backoff handles
   // any per-minute rate limit. (audit H6)
+  //
+  // Bug fix (2026-08-12): this used to iterate plan.fixture_ids — the FULL
+  // day's fixture list (~55), not the dueIds subset computed above. Every run
+  // therefore re-fetched fixtures nowhere near due, burning the API-Football
+  // per-minute rate limit before it reached the fixtures that actually needed
+  // fresh prices. A rate-limited response has no `response` array, which
+  // fetchFixtureOdds treats as "no odds returned" rather than an error, so
+  // summary.errors stayed 0 and the job kept exiting 0 while `odds` went
+  // stale for hours with green CI throughout.
   const fetched = await withPool(
-    plan.fixture_ids,
+    dueIds,
     async (fixtureId) => {
       try {
         return { fixtureId, bookmakers: await fetchFixtureOdds(fixtureId) };
