@@ -498,7 +498,7 @@ async function ingest() {
   // state), so it parallelises safely; httpClient's Retry-After/backoff handles
   // any per-minute rate limit. (audit H6)
   const fetched = await withPool(
-    plan.fixture_ids,
+    dueIds,
     async (fixtureId) => {
       try {
         return { fixtureId, bookmakers: await fetchFixtureOdds(fixtureId) };
