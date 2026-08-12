@@ -492,13 +492,22 @@ async function ingest() {
 
   const summary = { fixtures: dueIds.length, oddsInserted: 0, unresolved: 0, errors: 0 };
 
-  // ── Phase 1: fetch every fixture's odds in parallel (bounded) ──────────────
+  // ── Phase 1: fetch every DUE fixture's odds in parallel (bounded) ──────────
   // Was a serial fetch + sleep(200) between fixtures, so the network round-trips
   // dominated the run and capped odds freshness. Fetching is pure (no shared
   // state), so it parallelises safely; httpClient's Retry-After/backoff handles
   // any per-minute rate limit. (audit H6)
+  //
+  // This predates tiered polling (dueIds) by three weeks and was never updated
+  // to use it: it fetched plan.fixture_ids — the WHOLE day's plan, all 71
+  // fixtures, every ~55s cycle — instead of the handful actually due. Six
+  // concurrent requests against 71 fixtures burns a request-per-minute budget
+  // in seconds, so most of every burst came back "Too many requests" and
+  // ingestOdds had been logging oddsInserted: 0 on every run since 14:15 UTC
+  // on 12 Aug 2026 while still exiting 0 (green). dueIds is already what
+  // `summary.fixtures` and the bulk prefetch above are scoped to.
   const fetched = await withPool(
-    plan.fixture_ids,
+    dueIds,
     async (fixtureId) => {
       try {
         return { fixtureId, bookmakers: await fetchFixtureOdds(fixtureId) };
