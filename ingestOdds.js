@@ -492,13 +492,23 @@ async function ingest() {
 
   const summary = { fixtures: dueIds.length, oddsInserted: 0, unresolved: 0, errors: 0 };
 
-  // ── Phase 1: fetch every fixture's odds in parallel (bounded) ──────────────
+  // ── Phase 1: fetch every DUE fixture's odds in parallel (bounded) ──────────
   // Was a serial fetch + sleep(200) between fixtures, so the network round-trips
   // dominated the run and capped odds freshness. Fetching is pure (no shared
   // state), so it parallelises safely; httpClient's Retry-After/backoff handles
   // any per-minute rate limit. (audit H6)
+  //
+  // This fetched plan.fixture_ids — every fixture scheduled today, not just
+  // the ones the tiered-polling check above found due — from 29 Jul until
+  // 12 Aug. Once the tracked set reached ~70 fixtures/day, every 5-minute
+  // tick fanned out 70+ concurrent API-Football requests regardless of which
+  // single fixture was actually due, so most calls came back
+  // `rateLimit: "Too many requests..."` and oddsInserted stayed 0 run after
+  // run — the odds table went stale for hours with every step reporting
+  // success. dueIds is what the "only fetch what's due" tiering above this
+  // block already computed; Phase 1 must fetch that, not the full-day list.
   const fetched = await withPool(
-    plan.fixture_ids,
+    dueIds,
     async (fixtureId) => {
       try {
         return { fixtureId, bookmakers: await fetchFixtureOdds(fixtureId) };
