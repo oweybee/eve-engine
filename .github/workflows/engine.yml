@@ -224,7 +224,15 @@ jobs:
             ITER_START=$SECONDS
             node ingestOdds.js    || LOOP_EXIT=$?
             node computeValues.js || LOOP_EXIT=$?
-            node captureSnapshot.js 2>/dev/null || true
+            # Never fails the loop (a snapshot hiccup must not block
+            # ingestOdds/computeValues), but stderr is no longer discarded —
+            # captureSnapshot.js failed fatally on every single invocation for
+            # ~67h (7-10 Aug to 13 Aug) after computed_values grew past the
+            # request-line limit for its .in(match_id) queries, and the
+            # combination of 2>/dev/null and `|| true` meant that ran silently
+            # with a green step the entire time. See captureSnapshot.js's
+            # MATCH_ID_CHUNK fix for the actual cause.
+            node captureSnapshot.js || echo "::warning::captureSnapshot.js failed — see stderr above. odds_snapshots is not being updated this cycle."
             WORK=$(( SECONDS - ITER_START ))
 
             if [ "$i" -lt "$LOOPS" ]; then

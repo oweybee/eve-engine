@@ -63,8 +63,25 @@ function edgeBucket(edge) {
 }
 
 // ---------------------------------------------------------------------------
-// Bulk prefetch functions (each fires exactly one query)
+// Bulk prefetch functions (chunked — each fires one query per MATCH_ID_CHUNK
+// batch of match_ids, run in parallel)
 // ---------------------------------------------------------------------------
+
+// supabase-js builds .in() filters as a literal `col=in.(id1,id2,...)` query
+// string on a GET request. computed_values has grown to carry match_ids for
+// matches well past kickoff (nothing prunes it), and at ~570 distinct
+// match_ids the resulting URL (~21k chars) exceeds the request-line limit
+// most infra enforces (~8k), so every one of the three prefetch queries below
+// failed outright — fatal, before any row was read. Chunking keeps each
+// request's id list comfortably under that ceiling regardless of how large
+// computed_values grows.
+const MATCH_ID_CHUNK = 150;
+
+function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
 
 /**
  * Which of the given match_ids have at least one existing odds_snapshot?
@@ -79,15 +96,20 @@ function edgeBucket(edge) {
  * @returns {Promise<Set<string>>}
  */
 async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
-  const { data, error } = await supabase
-    .from('odds_snapshots')
-    .select('match_id')
-    .in('match_id', matchIds)
-    .gte('captured_at', since7dIso);
-  if (error) throw new Error(`prefetchSnapshotExistence: ${error.message}`);
+  const results = await Promise.all(
+    chunk(matchIds, MATCH_ID_CHUNK).map(async (ids) => {
+      const { data, error } = await supabase
+        .from('odds_snapshots')
+        .select('match_id')
+        .in('match_id', ids)
+        .gte('captured_at', since7dIso);
+      if (error) throw new Error(`prefetchSnapshotExistence: ${error.message}`);
+      return data ?? [];
+    }),
+  );
 
   // Deduplicate in JS — we only need existence, not row count.
-  return new Set((data ?? []).map(r => r.match_id));
+  return new Set(results.flat().map(r => r.match_id));
 }
 
 /**
@@ -105,20 +127,27 @@ async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
  *   Outer key: matchId.  Inner key: bookmaker.  Value: odds row.
  */
 async function prefetchLatestOdds(supabase, matchIds, since48hIso) {
-  const { data, error } = await supabase
-    .from('odds')
-    .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds)
-    .eq('market', 'h2h')
-    .gte('fetched_at', since48hIso)
-    .order('fetched_at', { ascending: false });
-  if (error) throw new Error(`prefetchLatestOdds: ${error.message}`);
+  const results = await Promise.all(
+    chunk(matchIds, MATCH_ID_CHUNK).map(async (ids) => {
+      const { data, error } = await supabase
+        .from('odds')
+        .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
+        .in('match_id', ids)
+        .eq('market', 'h2h')
+        .gte('fetched_at', since48hIso)
+        .order('fetched_at', { ascending: false });
+      if (error) throw new Error(`prefetchLatestOdds: ${error.message}`);
+      return data ?? [];
+    }),
+  );
 
   const map = new Map();
-  for (const row of data ?? []) {
+  for (const row of results.flat()) {
     if (!map.has(row.match_id)) map.set(row.match_id, new Map());
     const byBook = map.get(row.match_id);
-    // First occurrence = latest (DESC order). Never overwrite.
+    // First occurrence = latest (DESC order within its own chunk — every
+    // chunk is independently ordered, but a match_id only ever appears in
+    // one chunk, so this is still latest-first per match). Never overwrite.
     if (!byBook.has(row.bookmaker)) byBook.set(row.bookmaker, row);
   }
   return map;
@@ -140,16 +169,21 @@ async function prefetchLatestOdds(supabase, matchIds, since48hIso) {
  * @returns {Promise<{existingRecsMap: Map<string, Set<string>>, openRecsForClv: Map<string, object[]>}>}
  */
 async function prefetchRecommendations(supabase, matchIds) {
-  const { data, error } = await supabase
-    .from('recommendations')
-    .select('id, match_id, selection, recommended_odds, clv_pct')
-    .in('match_id', matchIds);
-  if (error) throw new Error(`prefetchRecommendations: ${error.message}`);
+  const results = await Promise.all(
+    chunk(matchIds, MATCH_ID_CHUNK).map(async (ids) => {
+      const { data, error } = await supabase
+        .from('recommendations')
+        .select('id, match_id, selection, recommended_odds, clv_pct')
+        .in('match_id', ids);
+      if (error) throw new Error(`prefetchRecommendations: ${error.message}`);
+      return data ?? [];
+    }),
+  );
 
   const existingRecsMap = new Map();
   const openRecsForClv  = new Map();
 
-  for (const rec of data ?? []) {
+  for (const rec of results.flat()) {
     // Signal dedup map
     if (!existingRecsMap.has(rec.match_id)) existingRecsMap.set(rec.match_id, new Set());
     existingRecsMap.get(rec.match_id).add(rec.selection);
