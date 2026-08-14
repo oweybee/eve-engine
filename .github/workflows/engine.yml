@@ -224,7 +224,12 @@ jobs:
             ITER_START=$SECONDS
             node ingestOdds.js    || LOOP_EXIT=$?
             node computeValues.js || LOOP_EXIT=$?
-            node captureSnapshot.js 2>/dev/null || true
+            # stderr used to be redirected to /dev/null here. It had been failing
+            # on every single invocation since 2026-08-10 23:50 UTC (zero rows
+            # written to odds_snapshots or recommendations since) with the error
+            # itself invisible. Kept non-fatal (|| true) — same pass/fail
+            # semantics as before — but the message now reaches the job log.
+            node captureSnapshot.js || true
             WORK=$(( SECONDS - ITER_START ))
 
             if [ "$i" -lt "$LOOPS" ]; then
