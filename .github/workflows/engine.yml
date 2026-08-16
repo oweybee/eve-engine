@@ -224,7 +224,12 @@ jobs:
             ITER_START=$SECONDS
             node ingestOdds.js    || LOOP_EXIT=$?
             node computeValues.js || LOOP_EXIT=$?
-            node captureSnapshot.js 2>/dev/null || true
+            # `|| true` is deliberate — a snapshot failure must not fail the
+            # ingest loop. Discarding stderr was not: it hid every fatal error
+            # captureSnapshot.js has thrown since the run of 10 Aug 2026, so
+            # odds_snapshots stopped receiving rows and nothing in the run
+            # list showed it — every job still reports 'success'.
+            node captureSnapshot.js || true
             WORK=$(( SECONDS - ITER_START ))
 
             if [ "$i" -lt "$LOOPS" ]; then
