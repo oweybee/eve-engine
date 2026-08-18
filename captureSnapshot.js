@@ -27,7 +27,8 @@
 
 const { getClient } = require('./lib/supabaseClient');
 
-const CLOSING_WINDOW_MIN = 60;
+const CLOSING_WINDOW_MIN   = 60;
+const CLOSING_WINDOW_GRACE_MIN = 180; // how far past kickoff a match still gets a snapshot
 const SIGNAL_EDGE        = parseFloat(process.env.SIGNAL_EDGE || '0.02'); // 2 pp minimum
 
 const OUTCOMES = ['home', 'draw', 'away'];
@@ -172,7 +173,18 @@ async function run() {
   console.log(`\n[snapshot] ${new Date().toISOString()}`);
   const supabase = getClient();
 
-  // Primary data source — all active computed_values rows with match metadata
+  // Primary data source — active computed_values rows with match metadata.
+  // Bounded to matches:!inner on kickoff_at >= now - CLOSING_WINDOW grace
+  // (the -180min floor the snapType logic below already treats as the
+  // outside edge of relevance). Without this bound the query pulls in every
+  // settled fixture computed_values has ever held — 1412 rows on 18 Aug,
+  // most of them weeks stale — and the resulting `.in(match_id, ...)` calls
+  // in the prefetch queries below carry a ~50KB id list that the REST
+  // gateway rejects before this function ever logs "prefetch complete".
+  // That failure was silent end to end: engine.yml runs this script with
+  // `2>/dev/null || true`, so odds_snapshots went 8 days without a write
+  // and nothing surfaced it.
+  const sinceIso = new Date(Date.now() - CLOSING_WINDOW_GRACE_MIN * 60_000).toISOString();
   const { data: rows, error: cvErr } = await supabase
     .from('computed_values')
     .select(`
@@ -185,8 +197,9 @@ async function run() {
       btts_yes_odds, btts_no_odds,
       corners_over_odds, corners_under_odds,
       bookings_over_odds, bookings_under_odds,
-      match:matches ( kickoff_at, league:leagues ( name ) )
-    `);
+      match:matches!inner ( kickoff_at, league:leagues ( name ) )
+    `)
+    .gte('match.kickoff_at', sinceIso);
   if (cvErr) throw new Error(`computed_values fetch: ${cvErr.message}`);
 
   if (!rows?.length) {
@@ -234,7 +247,7 @@ async function run() {
 
     // ── 1. Snap type — O(1) Set lookup, zero DB calls ────────────────────────
     let snapType = 'current';
-    if (minsToKick != null && minsToKick <= CLOSING_WINDOW_MIN && minsToKick > -180) {
+    if (minsToKick != null && minsToKick <= CLOSING_WINDOW_MIN && minsToKick > -CLOSING_WINDOW_GRACE_MIN) {
       snapType = 'closing';
     } else if (!snapshotExistsSet.has(r.match_id)) {
       snapType = 'open';
