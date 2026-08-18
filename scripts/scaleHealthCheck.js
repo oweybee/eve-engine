@@ -75,6 +75,8 @@ async function main() {
     console.log(`\n  no scored rows yet for: ${missing.join(', ')} — nothing to check, and nothing verified`);
   }
 
+  await reportLiveness(supabase);
+
   const red = rows.filter(r => String(r.verdict).startsWith('RED'));
   if (red.length) {
     console.error(`\n✗ SCALE CHECK RED on ${red.map(r => r.market).join(', ')}`);
@@ -83,6 +85,64 @@ async function main() {
   }
 
   console.log(`\n✓ scale check green on ${rows.length} market${rows.length === 1 ? '' : 's'}`);
+}
+
+/**
+ * PRICE LIVENESS — reported, deliberately NOT a hard gate.
+ *
+ * CLV against the close cannot separate "we found a better price" from "we
+ * recorded a price nobody was offering". Both read as positive CLV and the
+ * second reads MORE positive: across the settled book the unavailable rows
+ * carry the higher CLV on every architecture but one.
+ *
+ * `price_was_takeable()` asks the clean version of the question — was this
+ * price at or below the best a BETTABLE book was showing at the time. A premium
+ * over the median can be honest (best-of-nine legitimately beats the median by
+ * ~3.5%, measured); a price above the contemporaneous maximum cannot be.
+ *
+ * WHY IT ONLY WARNS. The measure is bounded by how dense the odds feed is, and
+ * the feed writes in bursts covering 10-23 fixtures an hour with the freshest
+ * quote on the forward card around 64 minutes old. A thin window misclassifies
+ * a real price as unavailable, and a second hard gate that goes red on history
+ * nobody can change is a gate people learn to ignore. The scale invariant above
+ * is the one that fails the build; this one is for reading.
+ */
+async function reportLiveness(supabase) {
+  const { data, error } = await supabase
+    .from('signal_price_liveness')
+    .select('model_architecture, market, settled, checkable, takeable, takeable_pct, clv_all_pct, clv_takeable_pct, z_takeable')
+    .order('clv_takeable_pct', { ascending: false, nullsFirst: false });
+
+  if (error) {
+    console.log(`\n  price liveness unavailable: ${error.message}`);
+    return;
+  }
+
+  console.log('\n\nprice liveness — was the price we published actually available?');
+  console.log('CLV on bets that could have been placed, vs CLV on everything\n');
+  console.log('  architecture      market   settled  takeable   CLV all   CLV takeable      z');
+  console.log('  ' + '─'.repeat(74));
+
+  for (const r of data ?? []) {
+    const pct = r.takeable_pct == null ? '—' : `${r.takeable_pct}%`;
+    console.log(
+      '  ' +
+      String(r.model_architecture ?? '—').padEnd(17) +
+      String(r.market).padEnd(8) +
+      String(r.settled).padStart(7) + '  ' +
+      pct.padStart(8) + '  ' +
+      String(r.clv_all_pct ?? '—').padStart(8) + '  ' +
+      String(r.clv_takeable_pct ?? '—').padStart(12) + '  ' +
+      String(r.z_takeable ?? '—').padStart(6)
+    );
+  }
+
+  const thin = (data ?? []).filter(r => r.takeable_pct != null && r.takeable_pct < 50);
+  if (thin.length) {
+    console.log(
+      `\n  ⚠  ${thin.map(r => `${r.model_architecture}/${r.market} ${r.takeable_pct}%`).join(', ')} ` +
+      `— under half these prices were available when we published them.`);
+  }
 }
 
 main().catch(err => {
