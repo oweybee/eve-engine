@@ -183,6 +183,30 @@ async function main() {
   const leagues = Object.entries(map);
   console.log(`[oddsApi] ${leagues.length} league(s) resolved`);
 
+  // Zero matches across every matcher (soccer AND cups) is not "a league got
+  // renamed" — it means the catalogue itself isn't what mapSportKeys expects.
+  // Since 30 Jul this has resolved 0/36 on every run (quota untouched — see
+  // engine_state.odds_api_quota), so log enough of the raw response to tell
+  // "account/key returned nothing usable" apart from "response shape changed"
+  // without needing to reproduce the call locally.
+  if (leagues.length === 0) {
+    const catList = Array.isArray(cat.json) ? cat.json : null;
+    console.log(
+      `[oddsApi] WARNING: 0 leagues resolved from the catalogue — ` +
+      `raw entries=${catList ? catList.length : 'NOT AN ARRAY'}, ` +
+      `soccer entries=${catList ? catList.filter(s => s.key?.startsWith('soccer')).length : 'n/a'}`,
+    );
+    if (catList?.length) {
+      console.log(`[oddsApi] sample: ${JSON.stringify(catList.slice(0, 3))}`);
+    } else if (catList) {
+      console.log('[oddsApi] catalogue array is empty — check the account/key on the-odds-api.com ' +
+                   '(expired trial, revoked key, or a plan without soccer entitlement all return an ' +
+                   'empty array with HTTP 200, so this never trips the 401 handler)');
+    } else {
+      console.log(`[oddsApi] catalogue response was not an array: ${JSON.stringify(cat.json).slice(0, 300)}`);
+    }
+  }
+
   const idx = await loadFixtureIndex(supabase);
   const nowMs = Date.now();
   const horizonMs = nowMs + HORIZON_HOURS * 3_600_000;
