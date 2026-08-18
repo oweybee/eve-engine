@@ -173,10 +173,12 @@ async function prefetchMatchIds(supabase, externalIds) {
   if (!externalIds.length) return new Map();
   const { data, error } = await supabase
     .from('matches')
-    .select('id, external_id')
+    // `kickoff_at` rides along so the caller can drop fixtures that have already
+    // started — one extra column on a query we were making anyway.
+    .select('id, external_id, kickoff_at')
     .in('external_id', externalIds);
   if (error) throw new Error(`prefetchMatchIds: ${error.message}`);
-  return new Map((data ?? []).map(r => [r.external_id, r.id]));
+  return new Map((data ?? []).map(r => [r.external_id, { id: r.id, kickoffAt: r.kickoff_at }]));
 }
 
 /**
@@ -478,9 +480,48 @@ async function ingest() {
 
   // ── Bulk prefetch phase (2 queries replace ~50 serial reads) ──────────────
 
-  // Bulk 1: resolve all fixture API IDs → Supabase match UUIDs
+  // Bulk 1: resolve all fixture API IDs → Supabase match UUIDs (+ kickoff)
   const externalIds = dueIds.map(String);
-  const fixtureToMatchId = await prefetchMatchIds(supabase, externalIds);
+  const resolved = await prefetchMatchIds(supabase, externalIds);
+
+  // ── A FIXTURE THAT HAS KICKED OFF IS NOT A PRE-MATCH FIXTURE ─────────────
+  //
+  // `planDay` builds the day's fixture list ONCE, at 05:00, and `pollBudget`
+  // correctly filters to upcoming fixtures at that moment — when everything
+  // that day still is. The list is then executed all day against a schedule
+  // that only ever asks "is this due?", never "has this started?". So a game
+  // that kicked off at 14:00 keeps being polled every tier interval until the
+  // active window closes at midnight.
+  //
+  // Measured over 10 days: 20-23% of EVERY pre-match book's rows were fetched
+  // after kickoff — marathonbet 1,376, betfair 1,333, betvictor 1,314, bet365
+  // 1,271, pinnacle 921 — against only 7.4-8.9% landing in the two hours
+  // before kickoff, which is the window that decides whether a published price
+  // is takeable. A fifth of the odds budget was being spent on quotes that are
+  // suspended or in-play and worthless to a pre-match product.
+  //
+  // Nothing downstream wants them. `closing_lines` enforces `quoted_at <=
+  // kickoff_at` at the database, `fetchResults` no longer reads
+  // `odds_snapshots` at all, and in-play is priced by The Odds API on its own
+  // path. The only consumer left was `captureSnapshot`'s 'closing' label,
+  // which is the mislabelling that made those snapshots useless in the first
+  // place.
+  //
+  // This is a filter, not a reallocation: the requests are simply not spent,
+  // and the tiers can be tightened against the freed budget separately.
+  let summaryUnresolved = 0;
+  const startedIds = [];
+  const fixtureToMatchId = new Map();
+  for (const [extId, m] of resolved) {
+    if (m.kickoffAt && new Date(m.kickoffAt).getTime() <= now.getTime()) {
+      startedIds.push(extId);
+      continue;
+    }
+    fixtureToMatchId.set(extId, m.id);
+  }
+  if (startedIds.length) {
+    console.log(`[ingest] skipping ${startedIds.length} fixture(s) past kickoff — a started game has no pre-match price`);
+  }
 
   // Bulk 2: latest odds per (matchId, bookmaker, market) for all known matches
   const knownMatchIds = [...fixtureToMatchId.values()];
@@ -490,7 +531,35 @@ async function ingest() {
 
   // Cache the league DB id so we only upsert it once per run.
 
-  const summary = { fixtures: dueIds.length, oddsInserted: 0, unresolved: 0, errors: 0 };
+  // ── WHAT THIS RUN ACTUALLY FETCHES ───────────────────────────────────────
+  //
+  // THE TIERING WAS NOT SAVING A SINGLE REQUEST. `dueIds` was computed above,
+  // logged, and used to advance the schedule — and then Phase 1 fetched
+  // `plan.fixture_ids`, the WHOLE day's plan, on every run. The block comment
+  // fifty lines up says polling only what's due "is what makes 40 leagues
+  // affordable"; the loop underneath it did the thing that comment says was
+  // replaced, and `summary.fixtures` reported the due count while the run
+  // spent requests on everything.
+  //
+  // That is the real reason the odds feed is thin. The daily budget was being
+  // burned on fixtures three days out at the same rate as fixtures in their
+  // closing hour, so `pollBudget` had to widen the tiers to fit — today's plan
+  // is 64 fixtures ALL on the 180-minute 'near' tier — which is why the last
+  // two hours before kickoff get ~1.0 snapshots and the freshest quote on the
+  // forward card is over an hour old.
+  //
+  // Fetch what is due, resolvable, and has not started. Nothing else.
+  const pollIds = dueIds.filter(id => fixtureToMatchId.has(String(id)));
+  const unresolvedCount = externalIds.length - resolved.size;
+  if (unresolvedCount > 0) {
+    // Loud, per the ruling above: an unresolvable id means planDay failed to
+    // create the match, and the gap should be visible rather than absorbed.
+    console.log(`[ingest] ${unresolvedCount} fixture(s) have no match row — planDay has not created them`);
+    summaryUnresolved = unresolvedCount;
+  }
+  console.log(`[ingest] fetching ${pollIds.length} of ${plan.fixture_ids.length} planned fixture(s)`);
+
+  const summary = { fixtures: pollIds.length, oddsInserted: 0, unresolved: summaryUnresolved, errors: 0 };
 
   // ── Phase 1: fetch every fixture's odds in parallel (bounded) ──────────────
   // Was a serial fetch + sleep(200) between fixtures, so the network round-trips
@@ -498,7 +567,7 @@ async function ingest() {
   // state), so it parallelises safely; httpClient's Retry-After/backoff handles
   // any per-minute rate limit. (audit H6)
   const fetched = await withPool(
-    plan.fixture_ids,
+    pollIds,
     async (fixtureId) => {
       try {
         return { fixtureId, bookmakers: await fetchFixtureOdds(fixtureId) };
