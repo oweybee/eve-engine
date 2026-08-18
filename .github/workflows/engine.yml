@@ -20,7 +20,6 @@
 #     2. computeValues.js — Kaunitz edge detection; price-change signals
 #     3. captureSnapshot.js — odds time-series for charts
 #   Once per job:
-#     4. computeApiValues.js — XG/API predictive model
 #     5. postToX.js          — Telegram: VALUE / RUBY / ODDS MOVEMENT alerts
 #     6. fetchResults.js     — settle completed fixtures
 #     7. fetchMatchDetails.js — lineups + stats
@@ -136,8 +135,10 @@ jobs:
       ACTIVE_START_HOUR:         '0'
       ACTIVE_END_HOUR:           '24'
       DAILY_REQUEST_BUDGET:      ${{ vars.DAILY_REQUEST_BUDGET || '75000' }}
-      # λ "model vs market" board (computeModelBoard.js)
-      LAMBDA_BOARD_ENABLED:      ${{ vars.LAMBDA_BOARD_ENABLED || 'true' }}
+      # LAMBDA_MC is switched off (Phase 0) — no-vig CLV -3.58% at z -9.41 over
+      # 166 settled rows. The step is gone; this stays pinned false so setting
+      # the repo variable cannot quietly restart it.
+      LAMBDA_BOARD_ENABLED:      'false'
       # onnxruntime-node postinstall fetches CUDA extras we don't need
       ONNXRUNTIME_NODE_INSTALL_CUDA: 'skip'
       # The Odds API — UK soft-book BREADTH (complements API-Football).
@@ -250,18 +251,21 @@ jobs:
         continue-on-error: true
         run: node ingestOddsApi.js
 
-      - name: Compute API predictive values
-        id: api_compute
-        continue-on-error: true
-        run: node computeApiValues.js
-
-      # λ "model vs market" board — prices every scheduled fixture with fresh
-      # odds against the goals-model and records credible disagreements to
-      # value_signals (model_architecture='LAMBDA_MC') for /model-board.
-      - name: Model vs market board (λ Monte Carlo)
-        id: model_board
-        continue-on-error: true
-        run: node computeModelBoard.js
+      # API_PREDICTIVE and LAMBDA_MC ARE SWITCHED OFF — Phase 0 of the engine
+      # consolidation, 18 Aug 2026. Both were the wrong side of the closing
+      # line at sample sizes where that is settled, measured against the
+      # Shin-de-vigged fair close:
+      #
+      #     API_PREDICTIVE   n=230   no-vig CLV -3.26%   z -8.60
+      #     LAMBDA_MC        n=166   no-vig CLV -3.58%   z -9.41
+      #
+      # The read-side guards already stripped their claims, but the guards stop
+      # a row being SCORED, not written — both were still producing rows every
+      # cycle. Switching them off at the writer is the point.
+      #
+      # The steps are deleted rather than commented out; the scripts also refuse
+      # to run without an explicit override, so neither can come back by
+      # accident. Rollback is that env flag, per the plan's config-flip rule.
 
       # The "constant eye" — asserts the published maths is internally consistent
       # (probabilities in range, edge <-> odds coherent, no implausible edges,
@@ -345,7 +349,6 @@ jobs:
           FAILED_STEPS=""
           [ "${{ steps.plan.outcome }}"        = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- plan (planDay.js)"
           [ "${{ steps.ingest_loop.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- ingest-loop (ingestOdds + computeValues + captureSnapshot)"
-          [ "${{ steps.api_compute.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- api-compute (computeApiValues.js)"
           [ "${{ steps.post.outcome }}"         = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- post-signals (postToX.js)"
           [ "${{ steps.results.outcome }}"      = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- settle-results (fetchResults.js)"
           [ "${{ steps.details.outcome }}"      = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- fetch-details (fetchMatchDetails.js)"

@@ -35,6 +35,24 @@ const { categoryFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
 const ma = require('./lib/marketAnchor');
 
+// SWITCHED OFF — Phase 0 of the engine consolidation, 18 Aug 2026.
+//
+// Measured against the Shin-de-vigged closing line over 230 settled signals:
+// no-vig CLV -3.26% at z -8.60. That is not underperformance, it is being
+// systematically on the wrong side of the close at a sample size where the
+// question is settled. The audit's verdict on it stands too — five distinct
+// probabilities keyed to price bands, 45% applied to home, draw and away alike,
+// which lib/publication.js calls "not a model".
+//
+// The read-side guards already stripped its claims. They stop a row being
+// SCORED, not written, and it was still producing ~12 value_signals and ~45
+// computed_values every 24 hours. This is the writer, so this is where it stops.
+//
+// Default OFF and explicit to turn on, the same shape as LAMBDA_BOARD_ENABLED,
+// so rollback is a config flip and an accidental `node computeApiValues.js`
+// is a no-op rather than a resurrection.
+const ENABLED = process.env.API_PREDICTIVE_ENABLED === 'true';
+
 const MIN_BOOKMAKERS        = parseInt(process.env.MIN_BOOKMAKERS        || '2',  10);
 const COMPUTE_CONCURRENCY   = parseInt(process.env.COMPUTE_CONCURRENCY   || '5',  10);
 const EV_THRESHOLD          = parseFloat(process.env.EV_THRESHOLD         || '0.005');
@@ -470,6 +488,11 @@ async function withPool(items, fn, concurrency) {
 // ── 7. Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
+  if (!ENABLED) {
+    console.log('[api_engine] API_PREDICTIVE_ENABLED != true — switched off (no-vig CLV -3.26%, z -8.60 over 230 settled). Skipping.');
+    return;
+  }
+
   const supabase = getClient();
 
   console.log('[api_engine] computeApiValues v3 — API Predictive (API-Football /predictions)');

@@ -15,7 +15,13 @@
  *   • both clubs must match the model's state bundle, else skip (no
  *     defaults-only guessing)
  *
- * Gated behind LAMBDA_BOARD_ENABLED (default false) for rollout control.
+ * SWITCHED OFF — Phase 0 of the engine consolidation, 18 Aug 2026. Measured
+ * against the Shin-de-vigged closing line over 166 settled signals: no-vig CLV
+ * -3.58% at z -9.41. LAMBDA_BOARD_ENABLED was a rollout toggle and is now the
+ * off switch; it is pinned false in engine.yml and the workflow step is gone.
+ *
+ * It also has NO row in model_calibration, and its CLV is the argument for
+ * never adding one — a calibration row would let it score again.
  * Run order: after ingestOdds.js, alongside computeValues.js.
  */
 'use strict';
@@ -197,7 +203,7 @@ async function fetchFixtures(supabase) {
 
 async function run() {
   if (!ENABLED) {
-    console.log('[modelBoard] LAMBDA_BOARD_ENABLED != true — skipping');
+    console.log('[modelBoard] LAMBDA_BOARD_ENABLED != true — switched off (no-vig CLV -3.58%, z -9.41 over 166 settled). Skipping.');
     return;
   }
   if (!available()) {
