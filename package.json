@@ -5,7 +5,7 @@
   "main": "computeValues.js",
   "scripts": {
     "start": "node computeValues.js",
-    "test": "node engine.devig.test.js && node engine.marketanchor.test.js && node engine.test.js && node engine.supermodel.test.js && node engine.inplay.test.js && node engine.results.test.js && node engine.winprob.test.js && node engine.sniper.test.js && node engine.dixoncoles.test.js && node engine.lambda.test.js && node engine.pollbudget.test.js && node engine.inplayseries.test.js && node engine.oddsapi.test.js && node engine.oddsbudget.test.js && node engine.backfill.test.js && node engine.leaguemap.test.js && node engine.matchstats.test.js && node engine.dataquality.test.js && node engine.signaltier.test.js && node engine.maxedge.test.js && node engine.teamnames.test.js && node engine.teamalias.test.js",
+    "test": "node engine.devig.test.js && node engine.marketanchor.test.js && node engine.marketprob.test.js && node engine.closinglines.test.js && node engine.test.js && node engine.supermodel.test.js && node engine.inplay.test.js && node engine.results.test.js && node engine.winprob.test.js && node engine.sniper.test.js && node engine.dixoncoles.test.js && node engine.lambda.test.js && node engine.pollbudget.test.js && node engine.inplayseries.test.js && node engine.oddsapi.test.js && node engine.oddsbudget.test.js && node engine.backfill.test.js && node engine.leaguemap.test.js && node engine.matchstats.test.js && node engine.dataquality.test.js && node engine.signaltier.test.js && node engine.maxedge.test.js && node engine.teamnames.test.js && node engine.teamalias.test.js",
     "post-to-x": "node postToX.js",
     "post-to-x:dry": "DRY_RUN=1 node postToX.js"
   },

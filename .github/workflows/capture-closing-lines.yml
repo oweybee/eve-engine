@@ -1,0 +1,72 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — freeze the closing line at kickoff
+#
+# CLV is the only feedback this platform can get inside a week, and it is what
+# `paper_trade_gate()` opens the publication gate on. It needs a benchmark that
+# is genuinely the CLOSE: the last price vector quoted STRICTLY BEFORE kickoff,
+# Shin-de-vigged.
+#
+# It had neither. `odds_snapshots.snapshot_type = 'closing'` labels anything
+# from 60 minutes before kickoff to 180 minutes after — 71% of those rows were
+# captured after kickoff, median 42 minutes INTO the match — and `no_vig_clv`
+# came from a proportional de-vig of one arbitrary book.
+#
+# This job re-reads history rather than sampling now, and the database enforces
+# `quoted_at <= kickoff_at`, so a late run is still a correct one. Read-only
+# against the odds already stored; burns no API quota.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Capture Closing Lines
+
+on:
+  schedule:
+    # Every 15 minutes at :08, offset from the engine's '*/15'. A fixture's
+    # closing line is frozen within a quarter-hour of kickoff, and the 6-hour
+    # lookback means a run of missed jobs costs nothing.
+    - cron: '8/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: 'Process every past fixture still missing a closing line'
+        type: boolean
+        default: false
+
+concurrency:
+  group: closing-lines-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: Freeze closing lines
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Capture closing lines
+        shell: bash
+        run: |
+          set -o pipefail
+          if [ "${{ inputs.backfill }}" = "true" ]; then
+            node captureClosingLines.js --backfill | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            node captureClosingLines.js | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
