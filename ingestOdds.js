@@ -379,6 +379,44 @@ function extractBttsRows(bookmaker) {
 // Price movement gate
 // ---------------------------------------------------------------------------
 
+// ── THE CLOSING FLOOR ────────────────────────────────────────────────────────
+//
+// Inside this window before kickoff a fixture is polled at least this often,
+// WHATEVER TIER IT IS ON.
+//
+// This exists because fixing the fetch loop is, on its own, a freshness
+// REGRESSION. The bug fetched every planned fixture on every run, so polling
+// was maximal by accident; polling only what is due drops a fixture on the
+// 180-minute 'near' tier to roughly ONE look in its final three hours — and
+// that is the window where prices move fastest. Measured over 10 days on the
+// bettable panel, price movements recorded per fixture-book:
+//
+//     T-0 to 2h    1.01   (0.51 / hour)
+//     T-2 to 6h    1.09   (0.27 / hour)
+//     T-6 to 24h   1.96   (0.11 / hour)
+//
+// Prices move about five times faster per hour in the closing two hours than a
+// day out. Polling that window least often is precisely backwards, and holding
+// a price the book has since moved off is the phantom-price condition that
+// `price_was_takeable()` measures and the 90% takeability gate fails on. We
+// would have reintroduced it with our own fix.
+//
+// NOTE the 1.01 figure is a count of PRICE MOVES, not of polls — `odds` only
+// stores a row when the price moved (`oddsHaveMoved`). It was recorded while
+// the buggy fetch was polling that fixture every run, so it says how often the
+// market moved, never how often we looked. It cannot be read as evidence that
+// any tier interval produces one poll.
+//
+// Cost is bounded and small: 3 polls per fixture inside two hours is ~300
+// requests on a 101-fixture Saturday, against the ~2,570 a day the broken fetch
+// was already spending. Net spend still falls sharply.
+//
+// This is a FLOOR, not a tier. `pollBudget` still owns tier assignment, and
+// sizing the closing tier against measured consumption is a separate decision
+// that this does not pre-empt.
+const CLOSING_FLOOR_WINDOW_MIN = parseFloat(process.env.CLOSING_FLOOR_WINDOW_MIN || '120');
+const CLOSING_FLOOR_EVERY_MIN  = parseFloat(process.env.CLOSING_FLOOR_EVERY_MIN  || '40');
+
 function oddsHaveMoved(last, newRow) {
   if (!last) return true;
   return (
@@ -471,17 +509,19 @@ async function ingest() {
       })
     : plan.fixture_ids;
 
-  if (schedule && !dueIds.length) {
-    console.log(`[ingest] 0 of ${plan.fixture_ids.length} fixture(s) due — advancing schedule only`);
-    await advancePlan(supabase, plan);
-    return;
-  }
-  console.log(`[ingest] ${dueIds.length}/${plan.fixture_ids.length} fixture(s) due: ${dueIds.join(', ')}`);
+  // NO EARLY RETURN ON AN EMPTY DUE SET. There used to be one, and it fired
+  // BEFORE the closing floor below could look at kickoff times — so on exactly
+  // the quiet runs where the floor matters most (nothing due by tier, a fixture
+  // 40 minutes from kickoff) it returned without polling. Whether there is work
+  // is now decided by `pollIds`, after both rules have had a say.
+  console.log(`[ingest] ${dueIds.length}/${plan.fixture_ids.length} fixture(s) due by schedule`);
 
   // ── Bulk prefetch phase (2 queries replace ~50 serial reads) ──────────────
 
-  // Bulk 1: resolve all fixture API IDs → Supabase match UUIDs (+ kickoff)
-  const externalIds = dueIds.map(String);
+  // Bulk 1: resolve EVERY planned fixture → UUID + kickoff. All of them, not
+  // just the due ones, because the closing floor below has to be able to see a
+  // fixture the schedule does not currently consider due.
+  const externalIds = plan.fixture_ids.map(String);
   const resolved = await prefetchMatchIds(supabase, externalIds);
 
   // ── A FIXTURE THAT HAS KICKED OFF IS NOT A PRE-MATCH FIXTURE ─────────────
@@ -549,13 +589,38 @@ async function ingest() {
   // forward card is over an hour old.
   //
   // Fetch what is due, resolvable, and has not started. Nothing else.
-  const pollIds = dueIds.filter(id => fixtureToMatchId.has(String(id)));
+  // Due by schedule, OR inside the closing window and not looked at recently.
+  // `nextPollAt - everyMin` is when the fixture was last polled; the schedule
+  // stores no explicit timestamp and does not need one.
+  const dueSet = new Set(dueIds.map(String));
+  const floorIds = [];
+  for (const [extId, m] of resolved) {
+    if (dueSet.has(extId) || !fixtureToMatchId.has(extId) || !m.kickoffAt) continue;
+    const minsToKo = (new Date(m.kickoffAt).getTime() - now.getTime()) / 60000;
+    if (minsToKo <= 0 || minsToKo > CLOSING_FLOOR_WINDOW_MIN) continue;
+    const sched = schedule?.[extId];
+    if (!sched?.nextPollAt || !sched?.everyMin) { floorIds.push(extId); continue; }
+    const lastPolledMs = new Date(sched.nextPollAt).getTime() - sched.everyMin * 60000;
+    if (now.getTime() - lastPolledMs >= CLOSING_FLOOR_EVERY_MIN * 60000) floorIds.push(extId);
+  }
+  if (floorIds.length) {
+    console.log(`[ingest] closing floor adds ${floorIds.length} fixture(s) inside ` +
+                `${CLOSING_FLOOR_WINDOW_MIN}min of kickoff not otherwise due`);
+  }
+
+  const pollIds = [...new Set([...dueIds.map(String), ...floorIds])]
+    .filter(id => fixtureToMatchId.has(id));
   const unresolvedCount = externalIds.length - resolved.size;
   if (unresolvedCount > 0) {
     // Loud, per the ruling above: an unresolvable id means planDay failed to
     // create the match, and the gap should be visible rather than absorbed.
     console.log(`[ingest] ${unresolvedCount} fixture(s) have no match row — planDay has not created them`);
     summaryUnresolved = unresolvedCount;
+  }
+  if (!pollIds.length) {
+    console.log(`[ingest] nothing to poll — advancing schedule only`);
+    await advancePlan(supabase, plan);
+    return;
   }
   console.log(`[ingest] fetching ${pollIds.length} of ${plan.fixture_ids.length} planned fixture(s)`);
 
@@ -682,8 +747,10 @@ async function ingest() {
   // an incomplete run as complete.
   if (!DRY_RUN) {
     try {
-      // dueIds = exactly what this run polled → each advances by its own tier
-      await advancePlan(supabase, plan, dueIds);
+      // pollIds = exactly what this run polled → each advances by its own tier.
+      // It was `dueIds`, which left every closing-floor fixture un-advanced and
+      // therefore due again on the very next run.
+      await advancePlan(supabase, plan, pollIds);
     } catch (err) {
       // advancePlan failure is non-fatal to the odds data already written,
       // but we must surface it — the scheduler is now in an undefined state.

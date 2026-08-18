@@ -111,5 +111,52 @@ test('the lambda estimators are deleted, not merely unused', () => {
   assert(!fs.existsSync(path.join(__dirname, 'bookingsModel.js')), 'bookingsModel.js must be deleted');
 });
 
+console.log('\nwhat a run actually polls');
+
+test('the fetch uses the DUE set, not the whole day plan', () => {
+  const src = read('ingestOdds.js');
+  // The bug: dueIds was computed, logged, used to advance the schedule — and
+  // then Phase 1 fetched plan.fixture_ids, so the tiering saved no requests.
+  assert(/const fetched = await withPool\(\s*pollIds,/.test(src),
+    'Phase 1 must fetch pollIds, never plan.fixture_ids');
+  assert(!/withPool\(\s*plan\.fixture_ids,/.test(src),
+    'plan.fixture_ids must not be the fetch set');
+});
+
+test('a fixture past kickoff is dropped before any request is spent', () => {
+  const src = read('ingestOdds.js');
+  assert(/minsToKo <= 0/.test(src) || /kickoffAt\).getTime\(\) <= now/.test(src),
+    'started fixtures must be filtered out');
+  assert(/select\('id, external_id, kickoff_at'\)/.test(src),
+    'kickoff must ride along on the id resolution rather than costing a query');
+});
+
+test('the closing floor exists and is a floor, not a tier', () => {
+  const src = read('ingestOdds.js');
+  assert(/CLOSING_FLOOR_WINDOW_MIN/.test(src) && /CLOSING_FLOOR_EVERY_MIN/.test(src),
+    'both floor parameters must exist');
+  // It must ADD to the due set, never replace it — pollBudget still owns tiers.
+  assert(/new Set\(\[\.\.\.dueIds\.map\(String\), \.\.\.floorIds\]\)/.test(src),
+    'the floor unions with the due set');
+});
+
+test('an empty due set does NOT short-circuit before the floor runs', () => {
+  const src = read('ingestOdds.js');
+  const floorAt  = src.indexOf('const floorIds');
+  const bailAt   = src.indexOf('nothing to poll');
+  assert(floorAt > 0 && bailAt > floorAt,
+    'the bail-out must come AFTER the floor has had a say — a fixture 40 minutes ' +
+    'from kickoff with nothing else due is the case the floor exists for');
+  assert(!/0 of \$\{plan\.fixture_ids\.length\} fixture\(s\) due — advancing schedule only/.test(src),
+    'the old pre-floor early return must be gone');
+});
+
+test('everything polled advances, so the floor cannot re-fire every run', () => {
+  const src = read('ingestOdds.js');
+  assert(/advancePlan\(supabase, plan, pollIds\)/.test(src),
+    'advancePlan must receive pollIds; passing dueIds leaves floor fixtures ' +
+    'un-advanced and therefore due again immediately');
+});
+
 console.log(`\n${failed === 0 ? '✓' : '✗'} phase 0: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
