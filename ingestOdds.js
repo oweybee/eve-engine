@@ -492,13 +492,22 @@ async function ingest() {
 
   const summary = { fixtures: dueIds.length, oddsInserted: 0, unresolved: 0, errors: 0 };
 
-  // ── Phase 1: fetch every fixture's odds in parallel (bounded) ──────────────
+  // ── Phase 1: fetch every DUE fixture's odds in parallel (bounded) ──────────
   // Was a serial fetch + sleep(200) between fixtures, so the network round-trips
   // dominated the run and capped odds freshness. Fetching is pure (no shared
   // state), so it parallelises safely; httpClient's Retry-After/backoff handles
   // any per-minute rate limit. (audit H6)
+  //
+  // This looped over plan.fixture_ids — every fixture in today's plan, not just
+  // dueIds — so every ~5min cycle fired ~60+ concurrent API-Football requests
+  // regardless of the tiered-polling schedule above, which only ever intended
+  // 3-6 fixtures per cycle. That blew the per-minute rate limit on every single
+  // run: every request came back {"errors":{"rateLimit":"Too many requests..."}}
+  // with 0 results, ingestOdds exited 0 (rate-limit responses aren't thrown),
+  // and the pipeline reported "success" while writing zero fresh odds — from
+  // 2026-08-18 08:16 UTC onward, silently, until this fix.
   const fetched = await withPool(
-    plan.fixture_ids,
+    dueIds,
     async (fixtureId) => {
       try {
         return { fixtureId, bookmakers: await fetchFixtureOdds(fixtureId) };
