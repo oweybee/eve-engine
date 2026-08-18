@@ -124,9 +124,9 @@ async function runDailyTelemetry() {
     console.log(`   - Total Value Signals Triggered: ${sig.length}`);
     // The odds+edge ladder's three buckets. `byCat` reads signal_category, so
     // the KEYS stay the ladder's own names; the labels say what they mean now.
-    console.log(`   - 🟢 Backed (suggested):   ${byCat('Prime')}`);
-    console.log(`   - ⚡ Unbacked edges:       ${byCat('Value')}`);
-    console.log(`   - 🎯 Longshots:            ${byCat('Longshot')}`);
+    console.log(`   - 🟢 Backed (suggested):   ${byCat('prime')}`);
+    console.log(`   - ⚡ Unbacked edges:       ${byCat('value')}`);
+    console.log(`   - 🎯 Longshots:            ${byCat('longshot')}`);
     console.log(`   - ⇅  Odds Movement:        ${movers}`);
     console.log(`   - — by model: MARKET_CONSENSUS=${consensus} API_PREDICTIVE=${apiPred}`);
   }

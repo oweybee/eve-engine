@@ -439,9 +439,9 @@ async function insertValueSignals(supabase, rows) {
   if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
 
   const mv = toInsert.filter(r => r.is_mover).length;
-  const pr = toInsert.filter(r => r.signal_category === 'Prime').length;
-  const va = toInsert.filter(r => r.signal_category === 'Value').length;
-  const ls = toInsert.filter(r => r.signal_category === 'Longshot').length;
+  const pr = toInsert.filter(r => r.signal_category === 'prime').length;
+  const va = toInsert.filter(r => r.signal_category === 'value').length;
+  const ls = toInsert.filter(r => r.signal_category === 'longshot').length;
   console.log(
     `[api_engine] inserted ${toInsert.length}` +
     ` (Prime=${pr} Value=${va} Longshot=${ls} movers=${mv})`

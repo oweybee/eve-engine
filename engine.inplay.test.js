@@ -131,12 +131,19 @@ const backedSignal = {
 };
 const longshotSignal = { ...prematchSignal, detected_odds: 5.0, detected_edge: 0.07 };
 
-test('prime box + a backed score → PRIME header, broadcastable', () => {
+test('prime box + a backed score → BACKED header, broadcastable', () => {
   assert.strictEqual(classifyTier(backedSignal).tier, 'prime');
   assert.strictEqual(isSuggested(backedSignal), true);
   assert.strictEqual(isBroadcastable(backedSignal), true);
   const m = buildMessage(backedSignal);
-  assert.ok(m.includes('PRIME SIGNAL'), 'header');
+  // NOT "PRIME SIGNAL", and the gate has not moved — both ladders are still
+  // required. The word was wrong twice: this post is gated on `isBacked`, which
+  // admits STRONG, so a row the site badges STRONG (this fixture scores 76) went
+  // out headed PRIME. And PRIME is capped at publication site-wide, because
+  // nothing scores between 85 and 91 and every 85+ row in the history came from
+  // the legacy `implied` basis. See eve-frontend MAX_PUBLISHED_BAND.
+  assert.ok(m.includes('BACKED SIGNAL'), 'header');
+  assert.ok(!m.includes('PRIME'), 'must not claim the top rung');
   assert.ok(m.includes('backed'), 'backed note');
   assert.ok(m.includes('76/100'), 'states the score it is claiming');
 });

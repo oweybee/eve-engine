@@ -554,17 +554,77 @@ function avg(arr) {
  */
 const ROI_BANKROLL_UNITS = 100;
 
+/**
+ * THE SAMPLE IS NOT INDEPENDENT, AND THE HEADLINE WAS COMPUTED AS IF IT WERE.
+ *
+ * A yield over N settled SIGNALS treats every signal as one observation. They
+ * are not: the engine writes several signals per fixture, and their outcomes
+ * are driven by the same ninety minutes. On the live tracked cohort, 90 settled
+ * signals came from 56 fixtures — so the effective sample is a third smaller
+ * than the number the site was quoting a yield over, and the error bars are
+ * correspondingly wider than the ones nobody was drawing.
+ *
+ * The unit of independence is the MATCH. `yield_clustered` averages the P/L
+ * within a fixture first and then across fixtures; `yield_z` is that mean over
+ * its own standard error. On the live cohort:
+ *
+ *     per signal    n=90  yield +8.57%   z 0.70
+ *     per match     n=56  yield +14.80%  z 0.98
+ *
+ * Clustering did not make the number smaller here — it made the number HONEST,
+ * and the honest number carries a z below 1. A yield you cannot distinguish
+ * from zero is not a result, and `paper_trade_gate()` already sets this
+ * platform's own standard at 300 settled bets with z above 2.
+ */
+const MIN_SETTLED_MATCHES = 100;
+const MIN_YIELD_Z = 2.0;
+
+function stddev(arr) {
+  if (arr.length < 2) return null;
+  const m = avg(arr);
+  return Math.sqrt(arr.reduce((s, x) => s + (x - m) ** 2, 0) / (arr.length - 1));
+}
+
 /** Aggregate one phase's slice of value_signals into a summary object. */
 function summarisePhase(rows, { includeClv }) {
   const settled = rows.filter(r => r.result === 'win' || r.result === 'loss');
   const wins   = settled.filter(r => r.result === 'win').length;
   const losses = settled.filter(r => r.result === 'loss').length;
-  const profit = settled.reduce(
-    (s, r) => s + (r.result === 'win' ? (parseFloat(r.detected_odds) - 1) : -1), 0);
+  const plOf   = r => (r.result === 'win' ? (parseFloat(r.detected_odds) - 1) : -1);
+  const profit = settled.reduce((s, r) => s + plOf(r), 0);
 
-  const clvs   = settled.map(r => r.clv).filter(v => v != null).map(Number);
-  const edges  = rows.map(r => r.detected_edge).filter(v => v != null).map(Number);
-  const messes = rows.map(r => r.detected_mes).filter(v => v != null).map(Number);
+  // One observation per fixture: mean P/L within the match, then across matches.
+  const byMatch = new Map();
+  for (const r of settled) {
+    const k = r.match_id ?? r.id;
+    if (!byMatch.has(k)) byMatch.set(k, []);
+    byMatch.get(k).push(plOf(r));
+  }
+  const matchPls = [...byMatch.values()].map(avg);
+  const clusteredYield = matchPls.length ? avg(matchPls) : null;
+  const sd = stddev(matchPls);
+  const yieldZ = (clusteredYield != null && sd != null && sd > 0 && matchPls.length > 1)
+    ? clusteredYield / (sd / Math.sqrt(matchPls.length))
+    : null;
+
+  const clvs    = settled.map(r => r.clv).filter(v => v != null).map(Number);
+  const noVigs  = settled.map(r => r.no_vig_clv).filter(v => v != null).map(Number);
+  const edges   = rows.map(r => r.detected_edge).filter(v => v != null).map(Number);
+  const messes  = rows.map(r => r.detected_mes).filter(v => v != null).map(Number);
+
+  // THE GATE ON PUBLISHING A YIELD AT ALL. Both conditions, and the reason is
+  // recorded so a surface can say why it is showing nothing rather than
+  // silently rendering an empty state that reads like a quiet day.
+  let insufficientReason = null;
+  if (matchPls.length < MIN_SETTLED_MATCHES) {
+    insufficientReason =
+      `${matchPls.length} settled ${matchPls.length === 1 ? 'fixture' : 'fixtures'} — ` +
+      `below the ${MIN_SETTLED_MATCHES} this platform requires before a yield is a result`;
+  } else if (yieldZ == null || Math.abs(yieldZ) < MIN_YIELD_Z) {
+    insufficientReason =
+      `yield z = ${yieldZ == null ? 'n/a' : yieldZ.toFixed(2)} — ` +
+      `indistinguishable from zero at the ${MIN_YIELD_Z} sigma this platform requires`;
+  }
 
   return {
     total_signals:   rows.length,
@@ -574,9 +634,26 @@ function summarisePhase(rows, { includeClv }) {
     win_rate: settled.length ? +(wins / settled.length).toFixed(4) : null,
     yield:    settled.length ? +(profit / settled.length).toFixed(4) : null,
     roi:      settled.length ? +(profit / ROI_BANKROLL_UNITS).toFixed(4) : null,
+
+    // The clustered figures are the ones a surface should publish.
+    settled_matches: matchPls.length,
+    yield_clustered: clusteredYield != null ? +clusteredYield.toFixed(4) : null,
+    yield_z:         yieldZ != null ? +yieldZ.toFixed(2) : null,
+    insufficient:        insufficientReason != null,
+    insufficient_reason: insufficientReason,
+
     // CLV is only meaningful pre-match (the close happens at kickoff). In-play
     // is judged on realised yield/strike-rate alone.
-    avg_clv:  includeClv && clvs.length ? +avg(clvs).toFixed(4) : null,
+    //
+    // BOTH CLV MEASURES, because they disagree by more than six points on the
+    // same bets and only one of them is hard to achieve. `avg_clv` is measured
+    // against the closing PRICE, margin still in it; `avg_no_vig_clv` against
+    // the Shin-de-vigged FAIR close, which is the measure `paper_trade_gate()`
+    // opens the publication gate on. Across the settled book they read +4.98%
+    // and -1.55%.
+    avg_clv:        includeClv && clvs.length   ? +avg(clvs).toFixed(4)   : null,
+    avg_no_vig_clv: includeClv && noVigs.length ? +avg(noVigs).toFixed(4) : null,
+    clv_sample:     includeClv ? clvs.length : null,
     avg_edge: edges.length  ? +avg(edges).toFixed(4)  : null,
     avg_mes:  messes.length ? +avg(messes).toFixed(1) : null,
   };
@@ -599,7 +676,7 @@ function summarisePhase(rows, { includeClv }) {
 async function calculatePerformance(supabase) {
   const { data, error } = await supabase
     .from('value_signals')
-    .select('result, detected_odds, detected_edge, detected_mes, clv, phase, detected_at, match_id, market, market_line, model_architecture');
+    .select('result, detected_odds, detected_edge, detected_mes, clv, no_vig_clv, phase, detected_at, match_id, market, market_line, model_architecture');
   if (error) throw new Error(`calculatePerformance(select): ${error.message}`);
 
   const rows = data ?? [];
