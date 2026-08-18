@@ -63,8 +63,24 @@ function edgeBucket(edge) {
 }
 
 // ---------------------------------------------------------------------------
-// Bulk prefetch functions (each fires exactly one query)
+// Bulk prefetch functions
 // ---------------------------------------------------------------------------
+
+// `.in('match_id', matchIds)` puts every id straight into the request URL as
+// a GET query string. computed_values now spans 700+ distinct matches during
+// the season (785 measured 18 Aug 2026), which is a ~29KB filter value alone
+// — enough to fail outright ("TypeError: fetch failed", no HTTP status, so
+// nothing for `error` to report) rather than degrade gracefully. Off-season,
+// with a couple hundred matches, the same query fit under whatever limit is
+// biting and nobody saw it. Chunking keeps every request's `.in()` list
+// small regardless of how many matches are live.
+const ID_CHUNK_SIZE = 150;
+
+function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
 
 /**
  * Which of the given match_ids have at least one existing odds_snapshot?
@@ -79,15 +95,18 @@ function edgeBucket(edge) {
  * @returns {Promise<Set<string>>}
  */
 async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
-  const { data, error } = await supabase
-    .from('odds_snapshots')
-    .select('match_id')
-    .in('match_id', matchIds)
-    .gte('captured_at', since7dIso);
-  if (error) throw new Error(`prefetchSnapshotExistence: ${error.message}`);
+  const pages = await Promise.all(chunk(matchIds, ID_CHUNK_SIZE).map(async ids => {
+    const { data, error } = await supabase
+      .from('odds_snapshots')
+      .select('match_id')
+      .in('match_id', ids)
+      .gte('captured_at', since7dIso);
+    if (error) throw new Error(`prefetchSnapshotExistence: ${error.message}`);
+    return data ?? [];
+  }));
 
   // Deduplicate in JS — we only need existence, not row count.
-  return new Set((data ?? []).map(r => r.match_id));
+  return new Set(pages.flat().map(r => r.match_id));
 }
 
 /**
@@ -105,20 +124,24 @@ async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
  *   Outer key: matchId.  Inner key: bookmaker.  Value: odds row.
  */
 async function prefetchLatestOdds(supabase, matchIds, since48hIso) {
-  const { data, error } = await supabase
-    .from('odds')
-    .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds)
-    .eq('market', 'h2h')
-    .gte('fetched_at', since48hIso)
-    .order('fetched_at', { ascending: false });
-  if (error) throw new Error(`prefetchLatestOdds: ${error.message}`);
+  const pages = await Promise.all(chunk(matchIds, ID_CHUNK_SIZE).map(async ids => {
+    const { data, error } = await supabase
+      .from('odds')
+      .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
+      .in('match_id', ids)
+      .eq('market', 'h2h')
+      .gte('fetched_at', since48hIso)
+      .order('fetched_at', { ascending: false });
+    if (error) throw new Error(`prefetchLatestOdds: ${error.message}`);
+    return data ?? [];
+  }));
 
   const map = new Map();
-  for (const row of data ?? []) {
+  for (const row of pages.flat()) {
     if (!map.has(row.match_id)) map.set(row.match_id, new Map());
     const byBook = map.get(row.match_id);
-    // First occurrence = latest (DESC order). Never overwrite.
+    // First occurrence = latest (DESC order within each chunk — chunks don't
+    // straddle a single match, so per-chunk descending order is preserved).
     if (!byBook.has(row.bookmaker)) byBook.set(row.bookmaker, row);
   }
   return map;
@@ -140,16 +163,19 @@ async function prefetchLatestOdds(supabase, matchIds, since48hIso) {
  * @returns {Promise<{existingRecsMap: Map<string, Set<string>>, openRecsForClv: Map<string, object[]>}>}
  */
 async function prefetchRecommendations(supabase, matchIds) {
-  const { data, error } = await supabase
-    .from('recommendations')
-    .select('id, match_id, selection, recommended_odds, clv_pct')
-    .in('match_id', matchIds);
-  if (error) throw new Error(`prefetchRecommendations: ${error.message}`);
+  const pages = await Promise.all(chunk(matchIds, ID_CHUNK_SIZE).map(async ids => {
+    const { data, error } = await supabase
+      .from('recommendations')
+      .select('id, match_id, selection, recommended_odds, clv_pct')
+      .in('match_id', ids);
+    if (error) throw new Error(`prefetchRecommendations: ${error.message}`);
+    return data ?? [];
+  }));
 
   const existingRecsMap = new Map();
   const openRecsForClv  = new Map();
 
-  for (const rec of data ?? []) {
+  for (const rec of pages.flat()) {
     // Signal dedup map
     if (!existingRecsMap.has(rec.match_id)) existingRecsMap.set(rec.match_id, new Set());
     existingRecsMap.get(rec.match_id).add(rec.selection);
@@ -205,7 +231,7 @@ async function run() {
   const since48hIso = new Date(now - 48 * 60 * 60 * 1000).toISOString();
   const since7dIso  = new Date(now -  7 * 24 * 60 * 60 * 1000).toISOString();
 
-  // ── 3 parallel bulk reads — fires all three simultaneously, one network RTT ─
+  // ── 3 parallel bulk reads, each internally chunked by ID_CHUNK_SIZE ──────
   const [snapshotExistsSet, latestOddsMap, { existingRecsMap, openRecsForClv }] =
     await Promise.all([
       prefetchSnapshotExistence(supabase, matchIds, since7dIso),
