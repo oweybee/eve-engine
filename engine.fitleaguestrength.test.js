@@ -34,11 +34,29 @@ function rng(seed) {
 }
 
 // ── seasons ────────────────────────────────────────────────────────────────
-test('a season is labelled by its start year and turns over in August', () => {
+test('a season is labelled by its start year and turns over in JULY', () => {
+  // Not August. getUTCMonth() is zero-indexed and the first version compared it
+  // to 7, which put every July fixture in the previous season — the busiest
+  // month in the UEFA calendar, matched against the clubs' old divisions.
+  assert.equal(seasonOf('2026-07-01T00:00:00Z'), 2026, 'July 1 opens the new season');
+  assert.equal(seasonOf('2026-06-30T23:59:59Z'), 2025, 'June 30 is still the old one');
   assert.equal(seasonOf('2026-08-01T00:00:00Z'), 2026);
-  assert.equal(seasonOf('2026-07-31T23:59:59Z'), 2025);
   assert.equal(seasonOf('2027-05-30T00:00:00Z'), 2026);
   assert.equal(seasonOf('2026-01-15T00:00:00Z'), 2025);
+});
+
+test('seasonOf agrees with the repo convention it has to match', () => {
+  // backfillSeasonFixtures.currentSeasonYear is the existing statement of this.
+  // Two spellings of one boundary is how they came apart in the first place.
+  const repoConvention = (d) =>
+    d.getUTCMonth() + 1 >= 7 ? d.getUTCFullYear() : d.getUTCFullYear() - 1;
+  for (let month = 0; month < 12; month++) {
+    for (const day of [1, 15, 28]) {
+      const d = new Date(Date.UTC(2026, month, day));
+      assert.equal(seasonOf(d.toISOString()), repoConvention(d),
+        `${d.toISOString().slice(0, 10)} must agree`);
+    }
+  }
 });
 
 // ── the replay ─────────────────────────────────────────────────────────────
