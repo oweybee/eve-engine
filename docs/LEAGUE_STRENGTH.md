@@ -151,35 +151,82 @@ of 104), where Premier League sides rotate heavily. Refitting on UEFA ties alone
 points, except Sweden at 8.9. All are far inside standard errors of 18 to 67, so
 the two competitions agree and the League Cup is not distorting the scale.
 
-## 5. What it refuses, which is the point
+## 5. Coverage: what is actually refused, and it is almost nothing
 
-`status` is the contract:
+The first version keyed the offset by LEAGUE and refused any pair it could not
+place. Measured against the next thirty days — 1,472 fixtures — that refused
+111. Almost all of it turned out to be neither a missing offset nor a real
+refusal.
 
-| status | meaning | θ |
-|---|---|---|
-| `reference` | the pinned origin | 0 |
-| `fitted` | usable | a number |
-| `not_estimable` | **no cross-league fixture exists at all** | NULL |
+**The big one was a lookup bug.** A club's league was read as "the division it
+last completed a season in". In August that is wrong for every promoted and
+relegated club. **Inter v Monza is a Serie A fixture**, but Monza last completed
+a season in Serie B, so the pair looked cross-league, the two offsets failed to
+cancel, and an ordinary domestic match was shifted by more than a hundred rating
+points. 47 fixtures: Serie A/Serie B, La Liga/Segunda, Ligue 1/Ligue 2,
+Bundesliga/2. Bundesliga.
 
-**Fourteen leagues are `not_estimable`** — MLS, Liga MX, J1, the Chinese Super
-League, the Russian Premier League, Argentina, Brazil, the English National
-League, Spain's Segunda, Italy's Serie B, Ligue 2, 2. Bundesliga, the Scottish
-Championship, and the legacy `1. Bundesliga` duplicate row.
+**The competition is the league.** If a fixture IS a Serie A match then both
+clubs are Serie A clubs that day, whatever they did last May.
+`competitionIsDomesticLeague` is a required argument to `adjustPair` and there
+is no default: a caller that omits it gets a refusal, because the alternative
+failure — silently shifting a domestic forecast — is invisible and therefore
+worse. It is the same principle the fit already used in §3.
 
-`lib/leagueStrength.js` returns **null** for those pairs rather than 0. Zero is
-a claim — it says the league is exactly Premier League strength — and for MLS
-that claim is wrong by around 200 rating points and nobody would ever see it
-happen, because a wrong probability looks exactly like a right one. MLS alone is
-thirty of the next seven days' fixtures.
+**The `not_estimable` leagues refused nothing at all.** MLS, Liga MX, J1, the
+Chinese Super League, the Russian Premier League and Argentina are closed pools
+— that is *why* they have no offset — and a closed pool never produces a
+cross-league fixture. **Zero** of the 1,472 were refused on their account. The
+refusal is vacuous for exactly the leagues that look worst in §1, and their
+domestic boards were never affected, because same-league offsets cancel.
 
-**Same-league fixtures need nothing**: the two offsets cancel, so `adjustPair`
-short-circuits and never consults the table. A domestic board is unaffected
-whatever the status says, and an MLS-vs-MLS fixture still scores.
+**What remained was 48 fixtures where a club has no league at all** — the
+untracked-nation clubs that appear only in European ties (`ELO_CALIBRATION.md`
+§7). 314 such clubs are in the corpus.
+
+Those need no *league* offset, because they have no closed pool to correct:
+every game they have played in our data is a cross-pool tie, so their rating is
+already anchored to the global ladder. What they inherit instead is their
+**opponents' inflation** — a Faroese club that has only played Norwegian sides
+earned its rating against ratings themselves ~130 points high, so it carries
+~130 points of the same error. `team_scale` (migration 078) estimates that as
+the meetings-weighted mean θ of the opponents actually played. 161 of the 314
+have at least one rated opponent, 106 have four or more.
+
+That is a **first-order correction, not a fit**, and it is labelled
+`source = 'opponents'` so no caller can mistake it for one. It carries
+`n_rated_opponents` and `adjustPair` gates on it, defaulting to four.
+
+`team_scale` is a **view, not a table**: the league offsets are fitted and are
+therefore frozen data, but these are derived — a deterministic function of
+`elo_corpus` and `league_strength` — so they cannot go stale, and a new European
+tie improves a club's estimate the moment it settles.
+
+### Where that leaves it, over the next thirty days
+
+| | fixtures | |
+|---|---:|---|
+| domestic league — no offset needed, offsets cancel | 1,424 | 96.7% |
+| cross-league, both clubs on fitted league offsets | 40 | |
+| cross-league, a club placed by ≥4 rated opponents | 40 | |
+| cross-league, a club placed by fewer (gated off by default) | 8 | |
+| **cannot be placed at all** | **2** | **0.14%** |
+
+The two that remain are ties in which *both* clubs are untracked-nation sides
+that have only ever played each other's kind — there is genuinely nothing to
+anchor them to, and the honest output is silence.
+
+## 5b. What it still refuses, and why zero is not an option
+
+`adjustPair` returns **null**, never 0. Zero is a claim — it says this club sits
+exactly on the Premier League scale — and for an MLS club that is wrong by
+around two hundred rating points and nobody would ever see it happen, because a
+wrong probability looks exactly like a right one.
 
 There is deliberately **no compiled fallback table** in `lib/leagueStrength.js`.
 `MODEL_SIGMA` is the cautionary tale: a hand-copy that disagreed with the
-database twice in production and threw neither time. If the table has not
-loaded, every cross-league pair is refused.
+database twice in production and threw neither time. If the view has not loaded,
+every cross-league pair is refused.
 
 ## 6. What this does NOT license
 
