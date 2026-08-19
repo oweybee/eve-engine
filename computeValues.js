@@ -696,9 +696,9 @@ async function insertValueSignals(
   if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
 
   const mv = toInsert.filter(r => r.is_mover).length;
-  const pr = toInsert.filter(r => r.signal_category === 'Prime').length;
-  const va = toInsert.filter(r => r.signal_category === 'Value').length;
-  const ls = toInsert.filter(r => r.signal_category === 'Longshot').length;
+  const pr = toInsert.filter(r => r.signal_category === 'prime').length;
+  const va = toInsert.filter(r => r.signal_category === 'value').length;
+  const ls = toInsert.filter(r => r.signal_category === 'longshot').length;
   console.log(`[value_signals] inserted ${toInsert.length} (Prime=${pr} Value=${va} Longshot=${ls} movers=${mv})`);
   return toInsert.length;
 }

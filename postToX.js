@@ -7,7 +7,8 @@
  * put it on PRIME, meaning MXS >= 65. That is exactly what the site requires
  * before it prints ◆ PRIME on a row, so the word means one thing in both places.
  *
- *   PRIME SIGNAL   — suggested by the ladder AND scored PRIME. The only
+ *   BACKED SIGNAL  — suggested by the ladder AND scored at or above the
+ *                    backing line. The only
  *                    broadcast bucket, and the only place this word is used.
  *   ODDS MOVEMENT  — is_mover=true (odds shifted on an existing signal)
  *   IN-PLAY        — phase='inplay', routed to the dedicated in-play channel
@@ -243,13 +244,24 @@ function buildMessage(signal) {
     const band = bandOf(signal);
     const mxs  = signal.mxs ?? rescore(signal).mxs;
     if (tier === 'prime' && isBacked(mxs)) {
-      // PRIME SIGNAL means what it always meant here: the ladder suggests it AND
-      // the score is at or above the backing line. Gated on isBacked so the
-      // six-rung re-cut did not move the bar under the words — the post names
-      // the rung it actually scored, which is PRIME or STRONG.
-      header   = `🟢 *PRIME SIGNAL*`;
+      // NOT "PRIME SIGNAL" ANY MORE, AND NOT BECAUSE THE GATE MOVED.
+      //
+      // The gate is unchanged — the ladder must suggest it AND the score must
+      // clear the backing line — but the word was wrong twice over. `isBacked`
+      // admits STRONG as well as PRIME, so a row the site badges ◈ STRONG went
+      // out of here headed PRIME, which is the exact drift the 6 Aug
+      // unification was for. And PRIME itself is capped at publication
+      // (lib/maxedge.ts, migration 064): no row on the current de-vigged basis
+      // has ever scored above 77, every 85+ score in the history came from the
+      // legacy `implied` basis, and the 88 cutoff sits inside a band — 85 to 91
+      // — that nothing occupies.
+      //
+      // So the post names the rung it actually scored and makes no claim above
+      // it. The score and the band still go out; it is the headline that stops
+      // asserting a rung the platform has not earned.
+      header   = `🟢 *BACKED SIGNAL*`;
       note     = `_Our backed tier — the ladder suggests it and it scores ${mxs}/100 (${band})_`;
-      hashtags = `#MaxEdge #Prime #ValueBet`;
+      hashtags = `#MaxEdge #Backed #ValueBet`;
     } else if (tier === 'longshot') {
       // A fact about the price, not a rung: every settled bet at 3.00+ lost.
       header   = notable ? `🎯 *LONGSHOT · NOTABLE EDGE*` : `🎯 *LONGSHOT*`;

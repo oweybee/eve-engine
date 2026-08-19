@@ -3,9 +3,14 @@
  *
  * 1. Finds value_signals with result = 'pending' whose kickoff was > 2h ago.
  * 2. Looks up the actual match result from API-Football (API-Sports) and sets
- *   result = 'win' | 'loss' on each signal, plus closing_odds and CLV where a
- *    closing Betfair price is available.
- *      CLV = ln(detected_odds) − ln(closing_odds)   (positive = beat the close)
+ *    result = 'win' | 'loss' on each signal, plus closing_odds, clv and
+ *    no_vig_clv from `closing_lines` — the price vector quoted STRICTLY before
+ *    kickoff, Shin-de-vigged and frozen by captureClosingLines.js.
+ *      clv        = ln(detected_odds) − ln(closing_odds)   vs the closing PRICE
+ *      no_vig_clv = ln(detected_odds) − ln(no_vig_odds)    vs the FAIR close
+ *    The second is the one that means something: beating a price with the
+ *    bookmaker's margin still in it is not hard, and across 671 settled h2h
+ *    rows the two read -2.51% and +4.36% on the same bets.
  * 3. Recomputes performance_summary (win rate, yield, ROI, avg CLV, …) from the
  *    full settled history.
  *
@@ -308,7 +313,6 @@ async function settleFinishedMatches(supabase, cache) {
 // Closing Betfair price for CLV (best-effort)
 // ---------------------------------------------------------------------------
 
-const OUTCOME_TO_ODDS_COL = { home: 'home_odds', draw: 'draw_odds', away: 'away_odds' };
 
 /**
  * Best-effort closing price: a 'closing' odds_snapshot if captured, otherwise the
@@ -322,48 +326,48 @@ async function prefetchClosingOdds(supabase, signals) {
   const matchIds = [...new Set(signals.map(s => s.match_id).filter(Boolean))];
   if (!matchIds.length) return new Map();
 
-  // Query 1: closing snapshots for all match+outcome combos
-  const { data: snaps } = await supabase
-    .from('odds_snapshots')
-    .select('match_id, selection, odds, captured_at')
-    .in('match_id', matchIds)
-    .eq('snapshot_type', 'closing')
-    .order('captured_at', { ascending: false });
-
-  // Query 2: latest Betfair Exchange prices for all matches
-  const { data: betfairRows } = await supabase
-    .from('odds')
-    .select('match_id, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds)
-    .eq('bookmaker', 'betfair_ex_uk')
-    .order('fetched_at', { ascending: false });
-
-  // Build maps — first row per match_id is latest (DESC order)
-  const snapMap    = new Map(); // key: `${matchId}:${outcome}`
-  const betfairMap = new Map(); // key: matchId → latest row
-
-  for (const s of snaps ?? []) {
-    const key = `${s.match_id}:${s.selection}`;
-    if (!snapMap.has(key)) snapMap.set(key, parseFloat(s.odds));
-  }
-  for (const r of betfairRows ?? []) {
-    if (!betfairMap.has(r.match_id)) betfairMap.set(r.match_id, r);
-  }
-
-  // Resolve each signal to a closing price
-  const result = new Map();
-  for (const sig of signals) {
-    const key = `${sig.match_id}:${sig.outcome}`;
-    if (snapMap.has(key)) {
-      result.set(key, snapMap.get(key));
-      continue;
+  // `closing_lines` ONLY. It is the last price vector quoted STRICTLY BEFORE
+  // kickoff, Shin-de-vigged and frozen once (migration 061), and the constraint
+  // `quoted_at <= kickoff_at` is enforced by the database rather than hoped for.
+  //
+  // WHAT THIS REPLACED, AND WHY NOTHING FALLS BACK TO IT. The old reader took
+  // `odds_snapshots` where `snapshot_type = 'closing'`, a label
+  // captureSnapshot.js applies from 60 minutes BEFORE kickoff to 180 minutes
+  // AFTER: 22,988 of the 32,303 rows carrying it were captured after kickoff,
+  // and the median one is 42 MINUTES INTO THE MATCH. Failing that it took the
+  // latest Betfair Exchange price, read at settlement time — two hours past
+  // kickoff, so on a finished match. Both are in-play prices on a match whose
+  // score has already moved, which is not a noisy closing line but a different
+  // quantity.
+  //
+  // A fixture with no closing line gets NO CLV. That is the honest answer and
+  // it is why there is no fallback here: the fallbacks were the bug.
+  const out = new Map();
+  const CHUNK = 200;
+  for (let i = 0; i < matchIds.length; i += CHUNK) {
+    const slice = matchIds.slice(i, i + CHUNK);
+    const { data, error } = await supabase
+      .from('closing_lines')
+      .select('match_id, market, market_line, selection, closing_odds, no_vig_odds, basis')
+      .in('match_id', slice);
+    if (error) throw new Error(`closing_lines: ${error.message}`);
+    for (const r of data ?? []) {
+      out.set(closingKey(r.match_id, r.market, r.market_line, r.selection), {
+        closing: parseFloat(r.closing_odds),
+        noVig:   parseFloat(r.no_vig_odds),
+        basis:   r.basis,
+      });
     }
-    const col = OUTCOME_TO_ODDS_COL[sig.outcome];
-    const row = col && betfairMap.get(sig.match_id);
-    const v   = row ? parseFloat(row[col]) : NaN;
-    result.set(key, Number.isFinite(v) && v > 1 ? v : null);
   }
-  return result;
+  return out;
+}
+
+/** The identity of a closing line. The LINE is part of it: a price at one
+ *  handicap benchmarked against another handicap's close is not CLV. */
+function closingKey(matchId, market, line, selection) {
+  const m = market ?? 'h2h';
+  const l = line == null ? 'null' : String(Number(line));
+  return `${matchId}|${m}|${l}|${selection}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -441,24 +445,35 @@ async function settlePendingSignals(supabase, cache = new Map()) {
     if (result == null) { unmatched++; continue; }
 
     // CLV is undefined for in-play signals — the line already closed at kickoff,
-    // so a pre-kickoff "closing" Betfair price is not a valid benchmark. Store
-    // null rather than a misleading number; in-play is judged on realised yield.
+    // so a pre-kickoff benchmark is not one. Store null rather than a
+    // misleading number; in-play is judged on realised yield.
     const isInplay = sig.phase === 'inplay';
-    const closing  = isInplay ? null : (closingMap.get(`${sig.match_id}:${sig.outcome}`) ?? null);
+    const line     = isInplay
+      ? null
+      : (closingMap.get(closingKey(sig.match_id, sig.market, sig.market_line, sig.outcome)) ?? null);
     const detected = parseFloat(sig.detected_odds);
-    // P0-3 fix: guard against NaN/Infinity before logarithm.
-    // Invalid prices (null, ≤1, NaN) → clv = null, never a garbage number.
-    const clv = (
-      !isInplay &&
-      Number.isFinite(closing) && closing > 1 &&
-      Number.isFinite(detected) && detected > 1
-    )
-      ? +(Math.log(detected) - Math.log(closing)).toFixed(4)
-      : null;
+    const usable   = v => Number.isFinite(v) && v > 1;
+
+    // TWO MEASURES, AND THE SECOND IS THE ONE THAT MEANS SOMETHING.
+    //   clv         vs the closing PRICE — beating a price with the
+    //               bookmaker's margin still in it is not hard, so this
+    //               number runs several points flatteringly positive.
+    //   no_vig_clv  vs the Shin-de-vigged FAIR close. This is the measure
+    //               `paper_trade_gate()` opens the publication gate on, and
+    //               across 671 settled h2h rows it reads -2.51% where the
+    //               vig-inclusive one reads +4.36%. Same bets, same closes.
+    // Guard against NaN/Infinity before the logarithm: an invalid price gives
+    // null, never a garbage number.
+    const ok  = !isInplay && line && usable(detected);
+    const clv = ok && usable(line.closing)
+      ? +(Math.log(detected) - Math.log(line.closing)).toFixed(4) : null;
+    const noVigClv = ok && usable(line.noVig)
+      ? +(Math.log(detected) - Math.log(line.noVig)).toFixed(4) : null;
+    const closing = ok && usable(line.closing) ? line.closing : null;
 
     const { error: upErr } = await supabase
       .from('value_signals')
-      .update({ result, closing_odds: closing, clv })
+      .update({ result, closing_odds: closing, clv, no_vig_clv: noVigClv })
       .eq('id', sig.id);
     if (upErr) { console.warn(`  [results] update ${sig.id} failed: ${upErr.message}`); continue; }
 
@@ -539,17 +554,77 @@ function avg(arr) {
  */
 const ROI_BANKROLL_UNITS = 100;
 
+/**
+ * THE SAMPLE IS NOT INDEPENDENT, AND THE HEADLINE WAS COMPUTED AS IF IT WERE.
+ *
+ * A yield over N settled SIGNALS treats every signal as one observation. They
+ * are not: the engine writes several signals per fixture, and their outcomes
+ * are driven by the same ninety minutes. On the live tracked cohort, 90 settled
+ * signals came from 56 fixtures — so the effective sample is a third smaller
+ * than the number the site was quoting a yield over, and the error bars are
+ * correspondingly wider than the ones nobody was drawing.
+ *
+ * The unit of independence is the MATCH. `yield_clustered` averages the P/L
+ * within a fixture first and then across fixtures; `yield_z` is that mean over
+ * its own standard error. On the live cohort:
+ *
+ *     per signal    n=90  yield +8.57%   z 0.70
+ *     per match     n=56  yield +14.80%  z 0.98
+ *
+ * Clustering did not make the number smaller here — it made the number HONEST,
+ * and the honest number carries a z below 1. A yield you cannot distinguish
+ * from zero is not a result, and `paper_trade_gate()` already sets this
+ * platform's own standard at 300 settled bets with z above 2.
+ */
+const MIN_SETTLED_MATCHES = 100;
+const MIN_YIELD_Z = 2.0;
+
+function stddev(arr) {
+  if (arr.length < 2) return null;
+  const m = avg(arr);
+  return Math.sqrt(arr.reduce((s, x) => s + (x - m) ** 2, 0) / (arr.length - 1));
+}
+
 /** Aggregate one phase's slice of value_signals into a summary object. */
 function summarisePhase(rows, { includeClv }) {
   const settled = rows.filter(r => r.result === 'win' || r.result === 'loss');
   const wins   = settled.filter(r => r.result === 'win').length;
   const losses = settled.filter(r => r.result === 'loss').length;
-  const profit = settled.reduce(
-    (s, r) => s + (r.result === 'win' ? (parseFloat(r.detected_odds) - 1) : -1), 0);
+  const plOf   = r => (r.result === 'win' ? (parseFloat(r.detected_odds) - 1) : -1);
+  const profit = settled.reduce((s, r) => s + plOf(r), 0);
 
-  const clvs   = settled.map(r => r.clv).filter(v => v != null).map(Number);
-  const edges  = rows.map(r => r.detected_edge).filter(v => v != null).map(Number);
-  const messes = rows.map(r => r.detected_mes).filter(v => v != null).map(Number);
+  // One observation per fixture: mean P/L within the match, then across matches.
+  const byMatch = new Map();
+  for (const r of settled) {
+    const k = r.match_id ?? r.id;
+    if (!byMatch.has(k)) byMatch.set(k, []);
+    byMatch.get(k).push(plOf(r));
+  }
+  const matchPls = [...byMatch.values()].map(avg);
+  const clusteredYield = matchPls.length ? avg(matchPls) : null;
+  const sd = stddev(matchPls);
+  const yieldZ = (clusteredYield != null && sd != null && sd > 0 && matchPls.length > 1)
+    ? clusteredYield / (sd / Math.sqrt(matchPls.length))
+    : null;
+
+  const clvs    = settled.map(r => r.clv).filter(v => v != null).map(Number);
+  const noVigs  = settled.map(r => r.no_vig_clv).filter(v => v != null).map(Number);
+  const edges   = rows.map(r => r.detected_edge).filter(v => v != null).map(Number);
+  const messes  = rows.map(r => r.detected_mes).filter(v => v != null).map(Number);
+
+  // THE GATE ON PUBLISHING A YIELD AT ALL. Both conditions, and the reason is
+  // recorded so a surface can say why it is showing nothing rather than
+  // silently rendering an empty state that reads like a quiet day.
+  let insufficientReason = null;
+  if (matchPls.length < MIN_SETTLED_MATCHES) {
+    insufficientReason =
+      `${matchPls.length} settled ${matchPls.length === 1 ? 'fixture' : 'fixtures'} — ` +
+      `below the ${MIN_SETTLED_MATCHES} this platform requires before a yield is a result`;
+  } else if (yieldZ == null || Math.abs(yieldZ) < MIN_YIELD_Z) {
+    insufficientReason =
+      `yield z = ${yieldZ == null ? 'n/a' : yieldZ.toFixed(2)} — ` +
+      `indistinguishable from zero at the ${MIN_YIELD_Z} sigma this platform requires`;
+  }
 
   return {
     total_signals:   rows.length,
@@ -559,9 +634,26 @@ function summarisePhase(rows, { includeClv }) {
     win_rate: settled.length ? +(wins / settled.length).toFixed(4) : null,
     yield:    settled.length ? +(profit / settled.length).toFixed(4) : null,
     roi:      settled.length ? +(profit / ROI_BANKROLL_UNITS).toFixed(4) : null,
+
+    // The clustered figures are the ones a surface should publish.
+    settled_matches: matchPls.length,
+    yield_clustered: clusteredYield != null ? +clusteredYield.toFixed(4) : null,
+    yield_z:         yieldZ != null ? +yieldZ.toFixed(2) : null,
+    insufficient:        insufficientReason != null,
+    insufficient_reason: insufficientReason,
+
     // CLV is only meaningful pre-match (the close happens at kickoff). In-play
     // is judged on realised yield/strike-rate alone.
-    avg_clv:  includeClv && clvs.length ? +avg(clvs).toFixed(4) : null,
+    //
+    // BOTH CLV MEASURES, because they disagree by more than six points on the
+    // same bets and only one of them is hard to achieve. `avg_clv` is measured
+    // against the closing PRICE, margin still in it; `avg_no_vig_clv` against
+    // the Shin-de-vigged FAIR close, which is the measure `paper_trade_gate()`
+    // opens the publication gate on. Across the settled book they read +4.98%
+    // and -1.55%.
+    avg_clv:        includeClv && clvs.length   ? +avg(clvs).toFixed(4)   : null,
+    avg_no_vig_clv: includeClv && noVigs.length ? +avg(noVigs).toFixed(4) : null,
+    clv_sample:     includeClv ? clvs.length : null,
     avg_edge: edges.length  ? +avg(edges).toFixed(4)  : null,
     avg_mes:  messes.length ? +avg(messes).toFixed(1) : null,
   };
@@ -584,7 +676,7 @@ function summarisePhase(rows, { includeClv }) {
 async function calculatePerformance(supabase) {
   const { data, error } = await supabase
     .from('value_signals')
-    .select('result, detected_odds, detected_edge, detected_mes, clv, phase, detected_at, match_id, market, market_line, model_architecture');
+    .select('result, detected_odds, detected_edge, detected_mes, clv, no_vig_clv, phase, detected_at, match_id, market, market_line, model_architecture');
   if (error) throw new Error(`calculatePerformance(select): ${error.message}`);
 
   const rows = data ?? [];

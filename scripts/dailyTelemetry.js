@@ -116,19 +116,26 @@ async function runDailyTelemetry() {
   } else {
     const sig      = activeSignals ?? [];
     const byCat    = c => sig.filter(s => s.signal_category === c).length;
-    const consensus = sig.filter(s => s.model_architecture === 'MARKET_CONSENSUS').length;
-    const apiPred   = sig.filter(s => s.model_architecture === 'API_PREDICTIVE').length;
+    // The two architectures still writing after Phase 0 (18 Aug 2026).
+    // MARKET_CONSENSUS, API_PREDICTIVE and LAMBDA_MC are switched off; a count
+    // that names retired writers reads as coverage rather than as silence, and
+    // it is silence we want to be able to see here.
+    const anchored  = sig.filter(s => s.model_architecture === 'MARKET_ANCHORED').length;
+    const dixon     = sig.filter(s => s.model_architecture === 'DIXON_COLES').length;
+    const retired   = sig.filter(s => ['MARKET_CONSENSUS', 'API_PREDICTIVE', 'LAMBDA_MC',
+                                       'CORNERS_MODEL', 'CARDS_MODEL'].includes(s.model_architecture)).length;
 
     const movers = sig.filter(s => s.is_mover).length;
     console.log(`\n🚨 [SIGNALS ENGINE VELOCITY - LAST 24 HOURS]`);
     console.log(`   - Total Value Signals Triggered: ${sig.length}`);
     // The odds+edge ladder's three buckets. `byCat` reads signal_category, so
     // the KEYS stay the ladder's own names; the labels say what they mean now.
-    console.log(`   - 🟢 Backed (suggested):   ${byCat('Prime')}`);
-    console.log(`   - ⚡ Unbacked edges:       ${byCat('Value')}`);
-    console.log(`   - 🎯 Longshots:            ${byCat('Longshot')}`);
+    console.log(`   - 🟢 Backed (suggested):   ${byCat('prime')}`);
+    console.log(`   - ⚡ Unbacked edges:       ${byCat('value')}`);
+    console.log(`   - 🎯 Longshots:            ${byCat('longshot')}`);
     console.log(`   - ⇅  Odds Movement:        ${movers}`);
-    console.log(`   - — by model: MARKET_CONSENSUS=${consensus} API_PREDICTIVE=${apiPred}`);
+    console.log(`   - — by model: MARKET_ANCHORED=${anchored} DIXON_COLES=${dixon}`);
+    if (retired) console.log(`   - ⚠  ${retired} row(s) from a RETIRED architecture — a switched-off writer is still running`);
   }
   console.log(`\n${SUB}\n`);
 

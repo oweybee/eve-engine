@@ -173,10 +173,12 @@ async function prefetchMatchIds(supabase, externalIds) {
   if (!externalIds.length) return new Map();
   const { data, error } = await supabase
     .from('matches')
-    .select('id, external_id')
+    // `kickoff_at` rides along so the caller can drop fixtures that have already
+    // started — one extra column on a query we were making anyway.
+    .select('id, external_id, kickoff_at')
     .in('external_id', externalIds);
   if (error) throw new Error(`prefetchMatchIds: ${error.message}`);
-  return new Map((data ?? []).map(r => [r.external_id, r.id]));
+  return new Map((data ?? []).map(r => [r.external_id, { id: r.id, kickoffAt: r.kickoff_at }]));
 }
 
 /**
@@ -377,6 +379,44 @@ function extractBttsRows(bookmaker) {
 // Price movement gate
 // ---------------------------------------------------------------------------
 
+// ── THE CLOSING FLOOR ────────────────────────────────────────────────────────
+//
+// Inside this window before kickoff a fixture is polled at least this often,
+// WHATEVER TIER IT IS ON.
+//
+// This exists because fixing the fetch loop is, on its own, a freshness
+// REGRESSION. The bug fetched every planned fixture on every run, so polling
+// was maximal by accident; polling only what is due drops a fixture on the
+// 180-minute 'near' tier to roughly ONE look in its final three hours — and
+// that is the window where prices move fastest. Measured over 10 days on the
+// bettable panel, price movements recorded per fixture-book:
+//
+//     T-0 to 2h    1.01   (0.51 / hour)
+//     T-2 to 6h    1.09   (0.27 / hour)
+//     T-6 to 24h   1.96   (0.11 / hour)
+//
+// Prices move about five times faster per hour in the closing two hours than a
+// day out. Polling that window least often is precisely backwards, and holding
+// a price the book has since moved off is the phantom-price condition that
+// `price_was_takeable()` measures and the 90% takeability gate fails on. We
+// would have reintroduced it with our own fix.
+//
+// NOTE the 1.01 figure is a count of PRICE MOVES, not of polls — `odds` only
+// stores a row when the price moved (`oddsHaveMoved`). It was recorded while
+// the buggy fetch was polling that fixture every run, so it says how often the
+// market moved, never how often we looked. It cannot be read as evidence that
+// any tier interval produces one poll.
+//
+// Cost is bounded and small: 3 polls per fixture inside two hours is ~300
+// requests on a 101-fixture Saturday, against the ~2,570 a day the broken fetch
+// was already spending. Net spend still falls sharply.
+//
+// This is a FLOOR, not a tier. `pollBudget` still owns tier assignment, and
+// sizing the closing tier against measured consumption is a separate decision
+// that this does not pre-empt.
+const CLOSING_FLOOR_WINDOW_MIN = parseFloat(process.env.CLOSING_FLOOR_WINDOW_MIN || '120');
+const CLOSING_FLOOR_EVERY_MIN  = parseFloat(process.env.CLOSING_FLOOR_EVERY_MIN  || '40');
+
 function oddsHaveMoved(last, newRow) {
   if (!last) return true;
   return (
@@ -469,18 +509,59 @@ async function ingest() {
       })
     : plan.fixture_ids;
 
-  if (schedule && !dueIds.length) {
-    console.log(`[ingest] 0 of ${plan.fixture_ids.length} fixture(s) due — advancing schedule only`);
-    await advancePlan(supabase, plan);
-    return;
-  }
-  console.log(`[ingest] ${dueIds.length}/${plan.fixture_ids.length} fixture(s) due: ${dueIds.join(', ')}`);
+  // NO EARLY RETURN ON AN EMPTY DUE SET. There used to be one, and it fired
+  // BEFORE the closing floor below could look at kickoff times — so on exactly
+  // the quiet runs where the floor matters most (nothing due by tier, a fixture
+  // 40 minutes from kickoff) it returned without polling. Whether there is work
+  // is now decided by `pollIds`, after both rules have had a say.
+  console.log(`[ingest] ${dueIds.length}/${plan.fixture_ids.length} fixture(s) due by schedule`);
 
   // ── Bulk prefetch phase (2 queries replace ~50 serial reads) ──────────────
 
-  // Bulk 1: resolve all fixture API IDs → Supabase match UUIDs
-  const externalIds = dueIds.map(String);
-  const fixtureToMatchId = await prefetchMatchIds(supabase, externalIds);
+  // Bulk 1: resolve EVERY planned fixture → UUID + kickoff. All of them, not
+  // just the due ones, because the closing floor below has to be able to see a
+  // fixture the schedule does not currently consider due.
+  const externalIds = plan.fixture_ids.map(String);
+  const resolved = await prefetchMatchIds(supabase, externalIds);
+
+  // ── A FIXTURE THAT HAS KICKED OFF IS NOT A PRE-MATCH FIXTURE ─────────────
+  //
+  // `planDay` builds the day's fixture list ONCE, at 05:00, and `pollBudget`
+  // correctly filters to upcoming fixtures at that moment — when everything
+  // that day still is. The list is then executed all day against a schedule
+  // that only ever asks "is this due?", never "has this started?". So a game
+  // that kicked off at 14:00 keeps being polled every tier interval until the
+  // active window closes at midnight.
+  //
+  // Measured over 10 days: 20-23% of EVERY pre-match book's rows were fetched
+  // after kickoff — marathonbet 1,376, betfair 1,333, betvictor 1,314, bet365
+  // 1,271, pinnacle 921 — against only 7.4-8.9% landing in the two hours
+  // before kickoff, which is the window that decides whether a published price
+  // is takeable. A fifth of the odds budget was being spent on quotes that are
+  // suspended or in-play and worthless to a pre-match product.
+  //
+  // Nothing downstream wants them. `closing_lines` enforces `quoted_at <=
+  // kickoff_at` at the database, `fetchResults` no longer reads
+  // `odds_snapshots` at all, and in-play is priced by The Odds API on its own
+  // path. The only consumer left was `captureSnapshot`'s 'closing' label,
+  // which is the mislabelling that made those snapshots useless in the first
+  // place.
+  //
+  // This is a filter, not a reallocation: the requests are simply not spent,
+  // and the tiers can be tightened against the freed budget separately.
+  let summaryUnresolved = 0;
+  const startedIds = [];
+  const fixtureToMatchId = new Map();
+  for (const [extId, m] of resolved) {
+    if (m.kickoffAt && new Date(m.kickoffAt).getTime() <= now.getTime()) {
+      startedIds.push(extId);
+      continue;
+    }
+    fixtureToMatchId.set(extId, m.id);
+  }
+  if (startedIds.length) {
+    console.log(`[ingest] skipping ${startedIds.length} fixture(s) past kickoff — a started game has no pre-match price`);
+  }
 
   // Bulk 2: latest odds per (matchId, bookmaker, market) for all known matches
   const knownMatchIds = [...fixtureToMatchId.values()];
@@ -490,7 +571,60 @@ async function ingest() {
 
   // Cache the league DB id so we only upsert it once per run.
 
-  const summary = { fixtures: dueIds.length, oddsInserted: 0, unresolved: 0, errors: 0 };
+  // ── WHAT THIS RUN ACTUALLY FETCHES ───────────────────────────────────────
+  //
+  // THE TIERING WAS NOT SAVING A SINGLE REQUEST. `dueIds` was computed above,
+  // logged, and used to advance the schedule — and then Phase 1 fetched
+  // `plan.fixture_ids`, the WHOLE day's plan, on every run. The block comment
+  // fifty lines up says polling only what's due "is what makes 40 leagues
+  // affordable"; the loop underneath it did the thing that comment says was
+  // replaced, and `summary.fixtures` reported the due count while the run
+  // spent requests on everything.
+  //
+  // That is the real reason the odds feed is thin. The daily budget was being
+  // burned on fixtures three days out at the same rate as fixtures in their
+  // closing hour, so `pollBudget` had to widen the tiers to fit — today's plan
+  // is 64 fixtures ALL on the 180-minute 'near' tier — which is why the last
+  // two hours before kickoff get ~1.0 snapshots and the freshest quote on the
+  // forward card is over an hour old.
+  //
+  // Fetch what is due, resolvable, and has not started. Nothing else.
+  // Due by schedule, OR inside the closing window and not looked at recently.
+  // `nextPollAt - everyMin` is when the fixture was last polled; the schedule
+  // stores no explicit timestamp and does not need one.
+  const dueSet = new Set(dueIds.map(String));
+  const floorIds = [];
+  for (const [extId, m] of resolved) {
+    if (dueSet.has(extId) || !fixtureToMatchId.has(extId) || !m.kickoffAt) continue;
+    const minsToKo = (new Date(m.kickoffAt).getTime() - now.getTime()) / 60000;
+    if (minsToKo <= 0 || minsToKo > CLOSING_FLOOR_WINDOW_MIN) continue;
+    const sched = schedule?.[extId];
+    if (!sched?.nextPollAt || !sched?.everyMin) { floorIds.push(extId); continue; }
+    const lastPolledMs = new Date(sched.nextPollAt).getTime() - sched.everyMin * 60000;
+    if (now.getTime() - lastPolledMs >= CLOSING_FLOOR_EVERY_MIN * 60000) floorIds.push(extId);
+  }
+  if (floorIds.length) {
+    console.log(`[ingest] closing floor adds ${floorIds.length} fixture(s) inside ` +
+                `${CLOSING_FLOOR_WINDOW_MIN}min of kickoff not otherwise due`);
+  }
+
+  const pollIds = [...new Set([...dueIds.map(String), ...floorIds])]
+    .filter(id => fixtureToMatchId.has(id));
+  const unresolvedCount = externalIds.length - resolved.size;
+  if (unresolvedCount > 0) {
+    // Loud, per the ruling above: an unresolvable id means planDay failed to
+    // create the match, and the gap should be visible rather than absorbed.
+    console.log(`[ingest] ${unresolvedCount} fixture(s) have no match row — planDay has not created them`);
+    summaryUnresolved = unresolvedCount;
+  }
+  if (!pollIds.length) {
+    console.log(`[ingest] nothing to poll — advancing schedule only`);
+    await advancePlan(supabase, plan);
+    return;
+  }
+  console.log(`[ingest] fetching ${pollIds.length} of ${plan.fixture_ids.length} planned fixture(s)`);
+
+  const summary = { fixtures: pollIds.length, oddsInserted: 0, unresolved: summaryUnresolved, errors: 0 };
 
   // ── Phase 1: fetch every fixture's odds in parallel (bounded) ──────────────
   // Was a serial fetch + sleep(200) between fixtures, so the network round-trips
@@ -498,7 +632,7 @@ async function ingest() {
   // state), so it parallelises safely; httpClient's Retry-After/backoff handles
   // any per-minute rate limit. (audit H6)
   const fetched = await withPool(
-    plan.fixture_ids,
+    pollIds,
     async (fixtureId) => {
       try {
         return { fixtureId, bookmakers: await fetchFixtureOdds(fixtureId) };
@@ -613,8 +747,10 @@ async function ingest() {
   // an incomplete run as complete.
   if (!DRY_RUN) {
     try {
-      // dueIds = exactly what this run polled → each advances by its own tier
-      await advancePlan(supabase, plan, dueIds);
+      // pollIds = exactly what this run polled → each advances by its own tier.
+      // It was `dueIds`, which left every closing-floor fixture un-advanced and
+      // therefore due again on the very next run.
+      await advancePlan(supabase, plan, pollIds);
     } catch (err) {
       // advancePlan failure is non-fatal to the odds data already written,
       // but we must surface it — the scheduler is now in an undefined state.

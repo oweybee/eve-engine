@@ -1,0 +1,70 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — price/consensus scale invariant
+#
+# THE RELEASE GATE FOR EV- AND KELLY-BASED SCORES.
+#
+#     market_prob × detected_odds  ∈  0.94 … 0.99,  and no row above 1.00
+#
+# `market_prob` is the de-vigged probability of the same side, at the same line,
+# out of the same vector the price came from — so the product is 1/overround of
+# the market a reader can bet into. A real book keeps margin, so it lands below
+# 1. Above 1 says the fair line beats its own price, which on a two-way market
+# is true of both legs at once: the over and the under both get flagged as
+# value. That shipped, and it is what migration 060 and the bestTwoWay rewrite
+# closed.
+#
+# Read-only against Supabase. Burns no API quota. Fails the run when red, so
+# nobody has to remember to look.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Scale Health Check
+
+on:
+  schedule:
+    # Hourly at :23 — off the mark, and often enough that a pricing regression
+    # is caught inside one slate rather than after a weekend of it.
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: scale-health-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: market_prob × detected_odds
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Check the scale invariant
+        shell: bash
+        run: |
+          # pipefail is load-bearing: without it `tee` supplies the exit code
+          # and a RED check would report success, which is the exact failure
+          # mode this workflow exists to prevent.
+          set -o pipefail
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/scaleHealthCheck.js | tee -a "$GITHUB_STEP_SUMMARY"
+          status=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit $status
