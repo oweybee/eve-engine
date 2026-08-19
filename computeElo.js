@@ -36,6 +36,8 @@ const ELO_REFRESH_HOURS = parseFloat(process.env.ELO_REFRESH_HOURS || '6');
 
 const RESULT_CODE = { home: 'H', draw: 'D', away: 'A' };
 const PAGE_SIZE = 1000; // PostgREST hard caps responses; page past it.
+/** Keys per DELETE. An `in.(...)` filter is a URL, and a long one fails. */
+const PRUNE_CHUNK = 200;
 
 async function fetchCompletedMatches(supabase, from = 0) {
   const { data, error } = await supabase
@@ -148,22 +150,50 @@ async function run() {
 
   // Upsert alone never removes a key, so a club that changes spelling — or that
   // the alias table has just merged away — leaves its old rating behind
-  // forever. Those orphans are not read by name, but they inflate every count
-  // taken over this table, which is how the ladder looked bigger and less
-  // mature than it was. team_elo is wholly derived from the corpus, so pruning
-  // is safe: the next run rebuilds anything wrongly dropped.
-  const live = rows.map(r => r.team_name);
-  const { data: stale, error: staleErr } = await supabase
-    .from('team_elo')
-    .select('team_name')
-    .not('team_name', 'in', `(${live.map(n => `"${n.replace(/"/g, '""')}"`).join(',')})`);
-  if (staleErr) {
-    console.warn(`[elo] could not check for stale rows: ${staleErr.message}`);
-  } else if (stale?.length) {
-    const { error: delErr } = await supabase
-      .from('team_elo').delete().in('team_name', stale.map(r => r.team_name));
-    if (delErr) console.warn(`[elo] could not prune stale rows: ${delErr.message}`);
-    else console.log(`[elo] pruned ${stale.length} stale rating(s)`);
+  // forever. team_elo is wholly derived from the corpus, so pruning is safe:
+  // the next run rebuilds anything wrongly dropped.
+  //
+  // THE ORPHANS ARE NOT ALWAYS UNREACHABLE, which is why this is not just
+  // hygiene. Most are keys nothing looks up any more, and those only inflate
+  // the counts taken over this table — that is how the ladder looked bigger and
+  // less mature than it was. But a key can be dropped from `elo_corpus` (the
+  // club has no completed match under that spelling) while `team_key_map` still
+  // RESOLVES to it, and then the orphan is a stale rating that a live lookup
+  // will find. On 19 Aug 2026 exactly one of 190 orphans was in that state
+  // (`guimaraes`, 1 game, 1481.61).
+  //
+  // THE FILTER IS BUILT FROM THE EXISTING KEYS, NOT FROM THE LIVE ONES. It used
+  // to send `not.in.(...)` with all 1,226 live names inline, which is a ~20KB
+  // URL, and on 19 Aug that failed outright with `TypeError: fetch failed` —
+  // logged as a warning, so the step stayed green and 190 orphans survived a
+  // run that reported success. Reading the keys and diffing in memory has no
+  // URL length in it at all.
+  const live = new Set(rows.map(r => r.team_name));
+  const existing = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error: readErr } = await supabase
+      .from('team_elo').select('team_name').range(from, from + PAGE_SIZE - 1);
+    if (readErr) throw new Error(`team_elo key read: ${readErr.message}`);
+    if (!data?.length) break;
+    existing.push(...data.map(r => r.team_name));
+    if (data.length < PAGE_SIZE) break;
+  }
+
+  const stale = existing.filter(name => !live.has(name));
+  if (stale.length) {
+    // Deleted in chunks for the same reason: `in.(...)` is a URL too.
+    for (let i = 0; i < stale.length; i += PRUNE_CHUNK) {
+      const chunk = stale.slice(i, i + PRUNE_CHUNK);
+      const { error: delErr } = await supabase
+        .from('team_elo').delete().in('team_name', chunk);
+      // THROWS, it does not warn. A prune that silently does not happen leaves
+      // a stale rating reachable by a live key, and the whole point of this
+      // block is that nobody notices when it is skipped.
+      if (delErr) throw new Error(`team_elo prune: ${delErr.message}`);
+    }
+    console.log(`[elo] pruned ${stale.length} stale rating(s)`);
+  } else {
+    console.log('[elo] no stale ratings to prune');
   }
 
   console.log(`[elo] upserted ${rows.length} rating(s)`);
