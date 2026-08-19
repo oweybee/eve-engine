@@ -30,6 +30,33 @@ const { getClient } = require('./lib/supabaseClient');
 const CLOSING_WINDOW_MIN = 60;
 const SIGNAL_EDGE        = parseFloat(process.env.SIGNAL_EDGE || '0.02'); // 2 pp minimum
 
+/**
+ * Rows per `.in(...)` filter.
+ *
+ * A PostgREST filter is a URL. `.in('match_id', ids)` inlines every id, and a
+ * uuid costs ~39 bytes once quoted and comma-separated — so 821 matches is a
+ * ~32KB request line, which the transport rejects outright before Postgres ever
+ * sees it. That is exactly what stopped this script: on 19 Aug 2026 it printed
+ * its banner and then died in the prefetch stage on every single run, and
+ * `odds_snapshots` had not been written since 18 Aug 14:17.
+ *
+ * 200 keeps a batch under ~8KB. The convention already existed in this repo —
+ * captureIndependentLines.js slices, backfillMatchStats.js chunks, and
+ * computeValues.js has a comment explaining the same hazard — this script just
+ * never got it.
+ */
+const IN_CHUNK = 200;
+
+/** Run `fn` over `ids` in IN_CHUNK-sized batches and concatenate the rows. */
+async function inChunks(ids, fn) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += IN_CHUNK) {
+    const rows = await fn(ids.slice(i, i + IN_CHUNK));
+    if (rows?.length) out.push(...rows);
+  }
+  return out;
+}
+
 const OUTCOMES = ['home', 'draw', 'away'];
 const ODDS_COL = { home: 'home_odds', draw: 'draw_odds', away: 'away_odds' };
 
@@ -79,15 +106,18 @@ function edgeBucket(edge) {
  * @returns {Promise<Set<string>>}
  */
 async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
-  const { data, error } = await supabase
-    .from('odds_snapshots')
-    .select('match_id')
-    .in('match_id', matchIds)
-    .gte('captured_at', since7dIso);
-  if (error) throw new Error(`prefetchSnapshotExistence: ${error.message}`);
+  const data = await inChunks(matchIds, async (chunk) => {
+    const { data: rows, error } = await supabase
+      .from('odds_snapshots')
+      .select('match_id')
+      .in('match_id', chunk)
+      .gte('captured_at', since7dIso);
+    if (error) throw new Error(`prefetchSnapshotExistence: ${error.message}`);
+    return rows;
+  });
 
   // Deduplicate in JS — we only need existence, not row count.
-  return new Set((data ?? []).map(r => r.match_id));
+  return new Set(data.map(r => r.match_id));
 }
 
 /**
@@ -105,17 +135,23 @@ async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
  *   Outer key: matchId.  Inner key: bookmaker.  Value: odds row.
  */
 async function prefetchLatestOdds(supabase, matchIds, since48hIso) {
-  const { data, error } = await supabase
-    .from('odds')
-    .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds)
-    .eq('market', 'h2h')
-    .gte('fetched_at', since48hIso)
-    .order('fetched_at', { ascending: false });
-  if (error) throw new Error(`prefetchLatestOdds: ${error.message}`);
+  // Ordered WITHIN each chunk, which is all the DISTINCT ON below needs: the
+  // map is keyed by (match, bookmaker) and a match lives in exactly one chunk,
+  // so a row can only ever be compared against its own match's rows.
+  const data = await inChunks(matchIds, async (chunk) => {
+    const { data: rows, error } = await supabase
+      .from('odds')
+      .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
+      .in('match_id', chunk)
+      .eq('market', 'h2h')
+      .gte('fetched_at', since48hIso)
+      .order('fetched_at', { ascending: false });
+    if (error) throw new Error(`prefetchLatestOdds: ${error.message}`);
+    return rows;
+  });
 
   const map = new Map();
-  for (const row of data ?? []) {
+  for (const row of data) {
     if (!map.has(row.match_id)) map.set(row.match_id, new Map());
     const byBook = map.get(row.match_id);
     // First occurrence = latest (DESC order). Never overwrite.
@@ -140,16 +176,19 @@ async function prefetchLatestOdds(supabase, matchIds, since48hIso) {
  * @returns {Promise<{existingRecsMap: Map<string, Set<string>>, openRecsForClv: Map<string, object[]>}>}
  */
 async function prefetchRecommendations(supabase, matchIds) {
-  const { data, error } = await supabase
-    .from('recommendations')
-    .select('id, match_id, selection, recommended_odds, clv_pct')
-    .in('match_id', matchIds);
-  if (error) throw new Error(`prefetchRecommendations: ${error.message}`);
+  const data = await inChunks(matchIds, async (chunk) => {
+    const { data: rows, error } = await supabase
+      .from('recommendations')
+      .select('id, match_id, selection, recommended_odds, clv_pct')
+      .in('match_id', chunk);
+    if (error) throw new Error(`prefetchRecommendations: ${error.message}`);
+    return rows;
+  });
 
   const existingRecsMap = new Map();
   const openRecsForClv  = new Map();
 
-  for (const rec of data ?? []) {
+  for (const rec of data) {
     // Signal dedup map
     if (!existingRecsMap.has(rec.match_id)) existingRecsMap.set(rec.match_id, new Set());
     existingRecsMap.get(rec.match_id).add(rec.selection);
@@ -377,4 +416,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[snapshot] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, edgeBucket };
+module.exports = { run, edgeBucket, inChunks, IN_CHUNK };

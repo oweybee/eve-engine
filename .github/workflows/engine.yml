@@ -225,7 +225,15 @@ jobs:
             ITER_START=$SECONDS
             node ingestOdds.js    || LOOP_EXIT=$?
             node computeValues.js || LOOP_EXIT=$?
-            node captureSnapshot.js 2>/dev/null || true
+            # NOT `2>/dev/null`. That discarded the reason this script failed on
+            # every run from 18 Aug 14:17 to 19 Aug 23:00 — its prefetch built a
+            # ~32KB `.in(...)` URL and the request was rejected — while the step
+            # stayed green and `odds_snapshots` quietly stopped being written.
+            # It is still non-fatal on purpose: a snapshot problem must not stop
+            # ingest or compute, which is why it does not set LOOP_EXIT. But
+            # non-fatal and SILENT are different things, and only one of them is
+            # defensible.
+            node captureSnapshot.js || echo "::warning::captureSnapshot failed (exit $?) — odds_snapshots not written this iteration"
             WORK=$(( SECONDS - ITER_START ))
 
             if [ "$i" -lt "$LOOPS" ]; then
