@@ -100,13 +100,23 @@ test('odds 3.00+ is a longshot — shown, never suggested, never tracked', () =>
 
 test('the visibility floor is evaluated before the longshot band', () => {
   // Ordering matters and migration 033's backfill mirrors it exactly: a
-  // sub-floor long-odds row maps to Value, not Longshot.
+  // sub-floor long-odds row maps to value, not longshot.
   assert.strictEqual(classifyTier({ odds: 8.0, edge: 0.01 }).tier, null);
-  assert.strictEqual(categoryFor({ odds: 8.0, edge: 0.01 }), 'Value');
+  assert.strictEqual(categoryFor({ odds: 8.0, edge: 0.01 }), 'value');
   assert.strictEqual(THRESHOLDS.VALUE_MIN_EDGE, 0.02);
 });
 
-test('categoryFor writes only the three canonical bucket names', () => {
+test('categoryFor writes only the three canonical bucket names, LOWER CASE', () => {
+  // The database is the authority and it admits exactly these three:
+  //   value_signals_signal_category_check
+  //     CHECK (signal_category IS NULL OR signal_category = ANY
+  //            (ARRAY['prime', 'value', 'longshot']))
+  // This test asserted the TITLE-CASED words for twelve days after
+  // categoryFor stopped producing them, so it failed on every run and told
+  // nobody anything. Had the code actually still emitted 'Prime', every 1X2
+  // insert would have been rejected by that constraint — the test was red
+  // about the one thing that could not have been true.
+  const BUCKETS = ['prime', 'value', 'longshot'];
   const seen = new Set([
     categoryFor({ odds: 2.0, edge: 0.06 }),
     categoryFor({ odds: 2.0, edge: 0.30 }),
@@ -114,7 +124,13 @@ test('categoryFor writes only the three canonical bucket names', () => {
     categoryFor({ odds: 6.0, edge: 0.001 }),
     categoryFor(null),
   ]);
-  for (const v of seen) assert.ok(['Prime', 'Value', 'Longshot'].includes(v), v);
+  for (const v of seen) {
+    assert.ok(BUCKETS.includes(v), v);
+    // The property that actually broke, asserted as a property rather than as
+    // a list of literals: a re-title-cased bucket key fails here even if
+    // somebody remembers to update the list above.
+    assert.strictEqual(v, v.toLowerCase(), `${v} is a badge word, not a bucket key`);
+  }
 });
 
 /* ── The line between them ─────────────────────────────────────────────── */

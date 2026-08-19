@@ -251,8 +251,13 @@ const SCORED = ['model_prob', 'market_prob', 'prob_gap', 'model_sigma', 'mxs', '
     assert.strictEqual(c1.rows[0].gap_basis, 'devigged');
     assert.strictEqual(c1.rows[0].mxs, 86);
     assert.strictEqual(c1.rows[0].mxs_band, bandFor(c1.rows[0].mxs));
-    // Both ladders on one row, and they are allowed to differ.
-    assert.strictEqual(c1.rows[0].signal_category, 'Prime');
+    // Both ladders on one row, and they are allowed to differ. The eligibility
+    // bucket is LOWER CASE — it is a key, not the badge word the conviction
+    // ladder prints. See the note on categoryFor in lib/signalTier.js, and the
+    // CHECK constraint on value_signals, which admits only these three.
+    assert.strictEqual(c1.rows[0].signal_category, 'prime');
+    assert.strictEqual(c1.rows[0].signal_category,
+      c1.rows[0].signal_category.toLowerCase());
   });
 
   // The same row with no de-vigged probability to hand: it must still be

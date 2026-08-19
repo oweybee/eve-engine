@@ -87,7 +87,7 @@ const inplaySignal = {
 const prematchSignal = {
   phase: 'prematch', outcome: 'away', detected_odds: 2.5, detected_edge: 0.03,
   detected_mes: 60, bookmaker: 'Bet365', kickoff_at: new Date(KO).toISOString(),
-  signal_category: 'Value',
+  signal_category: 'value',
   match: { home_team: { name: 'A' }, away_team: { name: 'B' }, league: { name: 'L' } },
 };
 test('isInplay true for inplay phase', () => assert.ok(isInplay(inplaySignal)));
