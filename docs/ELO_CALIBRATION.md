@@ -101,60 +101,102 @@ Held-out seasons reproduce the whole table (45.9 / 42.0 / 48.7 / 53.1 / 58.0).
   decisively in `docs/ANCHOR_INDEPENDENCE.md` §4.
 - **Coverage is now measured, and it is the binding constraint.** See §6.
 
-## 6. Coverage — measured 19 Aug 2026, and it is what blocks the feature
+## 6. Coverage — the backfill ran, and it moved the binding constraint
 
-The calibration says an Elo sentence is honest at 10pp or more. The question that
-decides whether it is a *feature* is how often a live fixture gets there.
+This section was written on the pre-backfill database and said the fix was a
+backfill rather than a model change. The backfill ran the same day
+(`backfill-fixtures.yml` run 32287324462, seasons 2022-2026, all forty tracked
+leagues, 18:26-18:30 UTC 19 Aug, success). It is worth keeping both readings,
+because the *shape* of the shortfall changed and only one of the two constraints
+was ever fixable this way.
 
-**The seven-day funnel:**
+**What the backfill did.** Completed matches **40,311 -> 92,491**. The thin
+leagues filled to the same depth as the big five, all the way back to 2022:
+
+| league | completed before | after |
+|---|---|---|
+| Championship (England) | 12 | **2,240** |
+| League One | 12 | **2,240** |
+| League Two | 12 | **2,240** |
+| National League | 24 | **2,250** |
+| Serie B (Italy) | **0** | **1,559** |
+| Segunda Division (Spain) | 11 | **1,883** |
+| Major League Soccer | 284 | **2,356** |
+| Super Lig (Turkey) | 9 | **1,378** |
+
+Every one of the 92,491 completed rows carries a `result` in
+(`home`,`draw`,`away`) and both team foreign keys, so all of them are ELO-eligible
+-- `computeElo` walks exactly this set.
+
+**What it will do to the ladder.** The rebuild is self-gated at
+`ELO_REFRESH_HOURS=6` and had last run at 15:19 UTC, so the figures below are the
+ladder *implied by the completed set*, computed with `computeElo`'s own
+normalisation (lowercase, strip non-alphanumeric) rather than read off `team_elo`:
+
+| | ladder now | after rebuild |
+|---|---|---|
+| teams rated | 968 | **1,314** |
+| teams past 10 games | 430 | **1,089** |
+| teams past 30 games | **226** | **948** |
+
+On the window that matters -- the next 48 hours, which is as far ahead as prices
+exist at all -- 72 fixtures, 67 priced by 3+ books, and **both teams past 30
+games on 53 of them: 79.1%, against 1 (1.5%) before.** Rating maturity stops
+being the binding constraint.
+
+**Why it is still not 100%, and the answer is three named causes.** All 19
+remaining gaps in that 48-hour window, enumerated:
+
+1. **No price yet -- 5 fixtures.** This is a HORIZON, not a defect, and the
+   earlier "22% market coverage" figure in this section was an artefact of
+   averaging one across seven days. Measured by days out:
+
+   | days out | fixtures | priced (3+ books) |
+   |---|---|---|
+   | today | 12 | **100%** |
+   | +1 | 46 | 93.5% |
+   | +2 | 25 | 76.0% |
+   | +3 and beyond | 272 | **0%** |
+
+   The cliff at +3 is `DAYS_AHEAD: '3'` in `engine.yml` -- planDay builds a
+   today+2 plan, so nothing further out is polled. It is a credit-budget
+   decision (`lib/oddsApiBudget.js` paces against league-days), not missing data.
+   The five inside the window are small-country ties and two South American /
+   Austrian fixtures that books put up closer to kickoff.
+
+2. **ELO immature -- 13 fixtures, and 12 are European ties.** In every one it is
+   the *smaller* side that is thin: FK Jablonec 4 games, Hapoel Tel Aviv 4,
+   Hradec Kralove 4, Kauno Zalgiris 16, Saburtalo 18, Ararat-Armenia 20, Sabah FA
+   20. These clubs play in leagues we do not track -- Faroe Islands, Georgia,
+   Lithuania, Armenia, Albania, Israel, Azerbaijan -- so the only completed
+   matches we will ever hold for them are the European ties themselves. **No
+   amount of backfilling the tracked set fixes this**: it is the boundary of the
+   forty-league list meeting a competition that reaches outside it. The other
+   two are newly promoted clubs in tracked leagues (Wieczysta Krakow 3 games,
+   Erzurumspor 1), which time fixes on its own.
+
+3. **No ELO at all -- 1 fixture.** Vicenza Virtus, promoted, no completed match
+   under that exact name string.
+
+**So the ceiling is structural and it is roughly 80% of priced fixtures.** The
+honest handling of the other 20% is the one this repo already uses everywhere
+else: withhold. A big disagreement computed from a 4-game rating is IGNORANCE,
+not insight, and it is exactly the row a "biggest disagreement" panel would rank
+first -- so any per-match treatment gates on games played, not only on the gap.
+The largest live gap measured before the backfill was 28.16pp on ratings with a
+standard deviation of ~56.
+
+**The pre-backfill funnel, kept as the record it was:**
 
 | stage | fixtures | |
 |---|---|---|
 | upcoming in 7 days | **342** | |
-| both teams have an Elo rating | 313 | 91.5% — name matching is fine |
-| a market price from 3+ books exists | **74** | **22%** |
+| both teams have an Elo rating | 313 | 91.5% |
+| a market price from 3+ books exists | **74** | 22% -- the averaging artefact |
 | both Elo and market | 68 | |
-| …and both teams past 10 games | 25 | |
-| **…and the gap reaches 10pp** | **5** | |
-| **…and both teams past 30 games** | **1** | |
-
-**Five a week at the loose bar. One a week at the honest one.** That is not a
-per-match feature, and the panel stays dark.
-
-**Two independent constraints, and neither is the calibration.**
-
-1. **Market coverage, 22%.** 268 of 342 upcoming fixtures carry no price from
-   three books. The tiering polls near kickoff by design, so a fixture four days
-   out simply has nothing to compare against.
-
-2. **Rating maturity, and it is bimodal by league.** Not a bug — the ladder walks
-   the full history (80,622 team-games = exactly 2 × 40,311 completed matches).
-   The history is just shaped wrong for what we price:
-
-   | league | upcoming (7d) | completed history |
-   |---|---|---|
-   | La Liga | 12 | 8,156 |
-   | Premier League | 10 | 7,600 |
-   | Serie A (Italy) | 10 | 7,600 |
-   | MLS | **30** | 284 |
-   | Europa Conference League | **24** | 210 |
-   | Championship | 12 | **12** |
-   | League One / League Two | 12 each | **12 each** |
-   | Serie B (Italy) | 10 | **0** |
-
-   538 of 968 teams have fewer than 10 games in the ladder, and their ratings sit
-   at 1500 ± 24 — the default wearing a number. The leagues we have depth for are
-   a small share of what we price; the leagues we price heavily have none.
-
-**And the failure mode is worse than thin coverage.** The largest live gap
-measured was **28.16pp**, on ratings with a standard deviation of ~56. A big
-disagreement from a thin rating is IGNORANCE, not insight — and it is precisely
-the row a "biggest disagreement" panel would surface first. Any per-match
-treatment must gate on games played, not only on the gap.
-
-**The fix is a backfill, not a model change.** The big five prove the pipeline
-can do it at 7,600 rows apiece; the other tracked competitions need the same
-treatment. Until then Elo is a forecast for about a fifth of the board.
+| ...and both teams past 10 games | 25 | |
+| ...and the gap reaches 10pp | **5** | |
+| ...and both teams past 30 games | **1** | |
 
 ## 7. Reproducing it
 
