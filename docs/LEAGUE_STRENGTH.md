@@ -202,7 +202,7 @@ therefore frozen data, but these are derived — a deterministic function of
 `elo_corpus` and `league_strength` — so they cannot go stale, and a new European
 tie improves a club's estimate the moment it settles.
 
-### Where that leaves it, over the next thirty days
+### Where that leaves it, over the next thirty days *(measured 19 Aug 2026 — a count, not a constant; re-run the query in §8)*
 
 | | fixtures | |
 |---|---:|---|
@@ -242,7 +242,7 @@ So there are two ways to ask, and they never disagree:
   for every upcoming fixture, so the reason is queryable now, before any surface
   exists to draw it.
 
-Over the next thirty days: 1,370 placed by the competition rule, 54 on fitted
+Over the next thirty days, measured 19 Aug 2026: 1,370 placed by the competition rule, 54 on fitted
 league offsets, 38 on opponent-derived ones, and **10 unplaced** — five
 two-legged ties, each naming its cause:
 
@@ -276,6 +276,73 @@ There is deliberately **no compiled fallback table** in `lib/leagueStrength.js`.
 database twice in production and threw neither time. If the view has not loaded,
 every cross-league pair is refused — loudly, with a reason.
 
+## 5c. How these numbers stay right
+
+Three of the artefacts here update themselves and two do not, and it matters
+which is which.
+
+**Self-updating (views).** `team_key_map`, `elo_corpus`, `team_scale`,
+`fixture_placement` and every health check are views over live tables. A new
+result, a new alias, a new fixture list — all reflected on the next read. An
+orphan club's opponent-derived offset improves the moment another tie settles.
+
+**A CLUB'S LEAGUE IS FORWARD-LOOKING, which is what makes August safe.**
+`team_scale` originally read a club's league as the division it last *completed*
+a season in, which in August is last season's for every promoted and relegated
+club. Migration 078's competition rule hid that for domestic fixtures, but not
+for cup ties, where the competition cannot tell you the division. Measured
+19 Aug, three League Cup ties six days out were affected: Coventry, Hull City and
+Ipswich were all scaled as **Championship (−108)** when they had been promoted to
+the **Premier League (0)**. A 108-point error, in the same direction every time,
+on a well-formed forecast that looked fine.
+
+A club's league is now the league of its **soonest upcoming domestic fixture**,
+falling back to the most recent completed one only when nothing is scheduled. A
+fixture list is published before a season starts, so a promoted club is right
+from the moment its calendar lands. `team_scale_stale_league` is the invariant
+and is empty.
+
+**Frozen (the fit).** `league_strength` holds fitted parameters and does not move
+on its own — correctly, since a parameter that drifts under you is not a
+parameter. Two things keep it honest:
+
+- **`fitLeagueStrength.js` is the refit**, and it is the artefact that was
+  missing: the original offsets were produced by hand in scratch SQL tables that
+  were then dropped, so nothing could reproduce or check them. The script
+  replays the ladder with `lib/elo.js` and evaluates the likelihood through
+  `lib/eloProbs.js` — the SAME maths every forecast uses, rather than the second
+  plpgsql implementation the first fit relied on. `--dry-run` reports without
+  writing. It marks every league it cannot identify `not_estimable`, so a stale
+  row can never survive a refit as though it had been re-measured, and it warns
+  on any league that moves by more than its own standard error.
+- **`league_strength_staleness`** shows how much cross-league evidence has landed
+  since `fitted_at`, per league. Empty means current. A league appearing there
+  with `status = not_estimable` and `n_obs_now > 0` has become fittable and is
+  being refused for no reason any more.
+
+**The estimator is checked against ground truth, not against plausibility.**
+−108 for the Championship looks reasonable whether the fit is right or subtly
+wrong, so `engine.fitleaguestrength.test.js` simulates matches from offsets it
+chose itself and asks the fitter to recover them. It does, to within 25 ELO
+points on 6,000 observations — well inside the 18–67 standard errors the real fit
+reports. The pinned league stays at the origin, a common shift leaves the
+likelihood unchanged, and the profile interval brackets the estimate and narrows
+with data.
+
+**Refit when** `league_strength_staleness` is non-empty and the new evidence is
+material — as a rule of thumb, when a league has gained a season's worth of
+European ties (roughly 20+ observations, or `pct_new` above ~20%). The natural
+cadence is once per European season. **The published values below were produced
+by the original SQL fit; run `node fitLeagueStrength.js --dry-run` once against
+production and confirm it reproduces them** before relying on the script for a
+real refit.
+
+**Known limits that time does not fix.** The offsets average 2022–2026 and a
+league's strength drifts; the fit has no time-varying term. And the 14
+`not_estimable` leagues will stay that way until they play someone outside their
+own pool, which for MLS, Liga MX, J1, the Chinese Super League, the Russian
+Premier League and Argentina means never, within this corpus.
+
 ## 6. What this does NOT license
 
 **It does not make the untracked small leagues comparable.** That was the
@@ -296,21 +363,30 @@ fit averages 2022–2026. Refit when the corpus grows materially.
 
 ## 7. Reproducing it
 
-```sql
--- 1. Corpus: select * from elo_corpus  (migration 076 does the dedup + merge)
--- 2. Replay ELO chronologically over it, K=30 / homeAdv=80 / default=1500
---    (lib/elo.js verbatim), recording the pre-match rating pair and games
---    played for every fixture in a genuinely inter-league competition.
--- 3. Fit set: both clubs past 30 games; competition in the three UEFA
---    competitions or the League Cup; the clubs' modal domestic leagues that
---    season differ.
--- 4. theta: coordinate ascent, golden-section per league over [-500, 500],
---    Premier League pinned at 0, until the log-likelihood moves < 1e-4.
---    P(draw) = 0.26 * exp(-(d/400)^2) from goal_model_params ELO_1X2 v1,
---    pHome = E - pD/2, clamped at 2*min(E,1-E).
--- 5. se: profile likelihood, the theta at which LL falls 0.5 from the maximum.
--- 6. Robustness: refit with the League Cup dropped; compare.
-```
+    node fitLeagueStrength.js --dry-run     # fit and report, write nothing
+    node fitLeagueStrength.js               # fit and write league_strength
 
-The working tables were dropped after the run. Only the parameters survive, and
-they are in `league_strength`.
+That script IS the recipe — it replays `elo_corpus` with `lib/elo.js`, evaluates
+the likelihood through `lib/eloProbs.js`, coordinate-ascends with the Premier
+League pinned, and takes standard errors from the profile likelihood at
+ΔLL = 0.5. The knobs (`MIN_GAMES` 30, `MIN_OBS` 27, `MAX_SE` 70, `REFERENCE`,
+`INTER_LEAGUE`) are exported constants at the top of the file.
+
+## 8. The health checks, and what each one means
+
+All five should be empty. Query them after any ingest change, alias rebuild, or
+refit.
+
+| view | non-empty means |
+|---|---|
+| `team_alias_false_merges` | two clubs that have PLAYED each other share one canonical key |
+| `team_alias_cross_country` | one canonical key plays domestic football in two countries |
+| `team_scale_stale_league` | a club is scaled by a division it is not next scheduled to play in |
+| `league_strength_staleness` | cross-league evidence has landed since the last fit |
+| `fixture_placement` where `status='unplaced'` | fixtures that will get no forecast, each with a reason naming the club |
+
+The last is not a defect — it is the visible form of a withheld forecast, and it
+should be read rather than emptied.
+
+    select status, basis, count(*) from fixture_placement
+    where kickoff_at < now() + interval '30 days' group by 1,2;
