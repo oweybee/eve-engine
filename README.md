@@ -32,6 +32,46 @@ pipeline on a tighter cadence (`*/5`). See "In-play signals" below.
 
 ---
 
+## A PostgREST filter is a URL — and that has stopped two writers
+
+Twice on 19 Aug 2026 a script stopped writing to the database, stayed green, and
+went unnoticed for more than a day. Both had the same cause, and it is worth
+stating as a rule rather than as two anecdotes.
+
+`supabase.from(t).select().in('col', ids)` puts every id **in the request line**.
+A uuid costs ~39 bytes once quoted and comma-separated, so:
+
+| ids | approximate URL |
+| --- | --- |
+| 200 | ~8 KB — safe |
+| 821 | **~32 KB — rejected by the transport** |
+| 1,226 | ~48 KB — rejected |
+
+The request never reaches Postgres. It fails as `TypeError: fetch failed`, which
+looks nothing like a query error and carries no SQL in it.
+
+**What it cost:**
+
+- `computeElo.js` built `not.in.(...)` from all 1,226 live team names to find
+  stale rows. It failed, the handler was a `console.warn`, and 190 orphan
+  ratings survived a run that reported success — inflating every count taken
+  over `team_elo` and leaving one stale rating reachable by a live lookup.
+- `captureSnapshot.js` built `.in('match_id', ids)` from 821 matches in all
+  three of its prefetches. It failed on every run from **18 Aug 14:17 to 19 Aug
+  23:33**, and the workflow ran it as `2>/dev/null || true`, so both the reason
+  and the exit code were discarded. `odds_snapshots` and `recommendations` both
+  stopped dead at the same second.
+
+**The rule, and it already existed here.** `captureIndependentLines.js` slices,
+`backfillMatchStats.js` chunks, and `computeValues.js` carries a comment
+explaining the hazard. Chunk any id filter at ~200, or derive the set by reading
+keys and diffing in memory. Never inline an unbounded list.
+
+**And never silence the writer.** Non-fatal is a legitimate choice — a snapshot
+failure should not stop ingest or compute. Silent is not: `2>/dev/null` is what
+turned a crash into a month-shaped gap in the price history. If a step may fail
+without failing the run, it must still say so.
+
 ## The ELO forecast, and what it refuses to say
 
 `.github/workflows/elo-forecasts.yml` runs `computeEloForecasts.js` twice a day
