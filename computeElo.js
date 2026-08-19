@@ -169,17 +169,23 @@ async function run() {
   // run that reported success. Reading the keys and diffing in memory has no
   // URL length in it at all.
   const live = new Set(rows.map(r => r.team_name));
-  const existing = [];
+  const existing = new Set();
   for (let from = 0; ; from += PAGE_SIZE) {
     const { data, error: readErr } = await supabase
-      .from('team_elo').select('team_name').range(from, from + PAGE_SIZE - 1);
+      .from('team_elo').select('team_name')
+      // ORDERED, because an unordered range() is not stable across pages and a
+      // row that shifts between two of them is a key never read — which would
+      // leave behind exactly the orphan this block exists to remove. Same rule
+      // fetchCompletedMatches states for the corpus.
+      .order('team_name', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
     if (readErr) throw new Error(`team_elo key read: ${readErr.message}`);
     if (!data?.length) break;
-    existing.push(...data.map(r => r.team_name));
+    for (const r of data) existing.add(r.team_name);
     if (data.length < PAGE_SIZE) break;
   }
 
-  const stale = existing.filter(name => !live.has(name));
+  const stale = [...existing].filter(name => !live.has(name));
   if (stale.length) {
     // Deleted in chunks for the same reason: `in.(...)` is a URL too.
     for (let i = 0; i < stale.length; i += PRUNE_CHUNK) {
