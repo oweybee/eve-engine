@@ -1,9 +1,53 @@
 # MaxEdge Engine Consolidation Plan
-## v2 — consolidated 18 August 2026
+## v3 — 19 August 2026
 
-Supersedes v1 and Revisions 2–7, which are preserved in `MaxEdge_Consolidation_Revision_Archive.md`. Several v1 figures were withdrawn under scrutiny; where a number appears here it is the surviving one. Appendix B records what changed and why, because the corrections are reusable.
+Supersedes v1 and Revisions 2–7, which are preserved in `CONSOLIDATION_REVISION_ARCHIVE.md`. Several v1 figures were withdrawn under scrutiny; where a number appears here it is the surviving one. Appendix B records what changed and why, because the corrections are reusable.
 
-**Status:** Phase 0 code complete on `claude/maxedge-formula-returns-fixes-r21p7h`, **not merged**. Migrations 060–071 live ahead of the code. Phase 1 not started. `paper_trades` at 0 rows.
+> ## ⚠ v3 (i) — MXDC_V1 ABANDONED
+>
+> The architecture in §4 was calibrated and tested before being built, and **failed**. ρ = −0.061 fitted on 38,023 fixtures of realised goals (no market input). With the model correctly calibrated, the 1X2↔totals residual carries **no information**: regressing realised over-2.5 against it gives slope **0.093 ± 0.123** where real signal gives 1.0. Not a power failure — the same pipeline detects Pinnacle-minus-book-average, a residual four times smaller, at slope **1.50, t 3.12**. Realised ROI does not move as claimed EV doubles. `paper_models.MXDC_V1` = `failed`. Full write-up in `docs/MXDC_V1_CALIBRATION.md`.
+>
+> **A book does not disagree with itself by enough to pay for its own margin.** The §4 residual thesis is falsified. **Phases 1–4 below are void.**
+
+> ## ⚠ v3 (ii) — AND THE PROPOSED REPLACEMENT EVIDENCE DOES NOT HOLD EITHER
+>
+> A draft of this banner offered the counterfactual CLV split — `MARKET_ANCHORED`'s chosen outcome at **+3.24%** against **−3.16%** for the two it did not pick, a 6.4pp spread — as "the only isolated, controlled evidence of model skill in this project." **It is not evidence of skill. It is the selection rule restated.**
+>
+> `MARKET_ANCHORED` selects the outcome whose best bettable price most exceeds **Pinnacle's Shin-de-vigged fair line**. `no_vig_clv` measures that same price against **Pinnacle's Shin-de-vigged closing line**. Same book, same de-vig, two timestamps — so
+>
+>     no_vig_clv  =  ln(1 + detected_edge)  +  ln(p_anchor_close / p_anchor_detect)
+>                    └── the selection rule ──┘   └──── where skill would live ────┘
+>
+> The identity was verified exactly against `closing_lines` (max error 5e-5). Measured on the 89 fixtures that have both, fixture-clustered:
+>
+> | | value |
+> |---|---|
+> | no-vig CLV | **+3.475%** |
+> | edge at detection, vs the same anchor | **+3.844%** |
+> | **anchor line movement toward the selection** | **−0.369%  (z −0.91)** |
+>
+> **The whole +3.5% is the detection-time threshold. The sharp line does not move toward the selection — it drifts very slightly away, statistically zero.** The counterfactual leg is the same tautology mirrored: the two outcomes it did *not* pick are, by construction, the ones whose price fell *below* the anchor's fair line, so their CLV is mechanically negative. The 6.4pp spread is the width of the selection rule.
+>
+> This is Appendix B lesson #1 — *a raw CLV figure is not evidence of skill; decompose it* — recurring one level up. Note the decomposition above is **not** the retired "CLV remainder" of §7: both sides here are de-vigged against the same book, so the raw→de-vig conversion cancels and the term is not biased by construction.
+>
+> **`MARKET_ANCHORED` is uniquely exposed to this** because it is the only architecture whose selection yardstick and whose CLV yardstick are the same de-vigged anchor line. `API_PREDICTIVE` and `LAMBDA_MC` select against a model probability, so their takeable CLV of −3.02% (z −5.19) and −2.52% (z −4.14) is a real verdict. Read that way, on the only non-tautological term available, `MARKET_ANCHORED` scores **zero** where the killed architectures score **negative**. Zero is better than negative. It is not skill, and it must not be certified as skill.
+>
+> Realised P&L says the same thing: **+13.58% clustered yield over 90 settled fixtures at z 1.06** — the figure `/performance` already withholds as `insufficient`.
+>
+> **Revised direction:** the honest position is that this project has **no demonstrated edge in any architecture**, and the gate in §6 is the instrument that will say so or not. Do not treat `MARKET_ANCHORED` as validated pending accrual; treat it as **on the same footing as anything else that has not passed a gate**. §7 (measurement rules) and §8 (odds feed) stand in full.
+>
+> **Gate accrual is real, and faster than three weeks.** 88 takeable fixtures in 13 days (6.8/day) — the 150-fixture bar lands in roughly **9 more days**, not three weeks. But the 85.4% takeability behind it was measured under the pre-fix maximal-polling regime (§3 qualification 1) and will fall; re-derive the timeline after one clean week.
+
+> ## ✅ v3 (iii) — PHASE 0 IS MERGED AND VERIFIED
+>
+> The v2 status line below said "not merged" and is superseded. Merged to `main` as `4c408e9` at **08:58 UTC on 19 Aug 2026**.
+>
+> - **A1 PASSES.** Last `API_PREDICTIVE` write 08:10:22, last `LAMBDA_MC` write 08:10:24 — both **before** the merge, on the pre-merge SHA. Three engine ticks have since completed on `4c408e9` (09:05, 09:49, 10:06), all success, and neither architecture has written a row.
+> - **§8 check 1 PASSES.** The run log now reads `[ingest] 0/84 fixture(s) due by schedule` / `nothing to poll — advancing schedule only`, where pre-fix it was N ≡ M on every run. The ~30× overspend is closed.
+> - **§8 checks 2–4 are not yet answerable** and need a full day of post-merge slate, as §8 requires. `[oddsApi] pace=behind throttle=1.4 progress=74% → 1342 credits/league-day` is the first real consumption reading.
+> - Unrelated and pre-existing: the `Team statistics & referee tendencies` step times out at 2 minutes on every tick, and `[values] data-quality gate rejected 1 candidate(s)` fires on every loop iteration. Neither blocks Phase 0.
+
+**Status:** Phase 0 **merged to `main` (`4c408e9`, 19 Aug)** and verified live. Migrations 060–072 applied. Phase 1 **abandoned** — see v3 (i). `paper_trades` at 0 rows.
 
 This file is the current statement; `docs/CONSOLIDATION_REVISION_ARCHIVE.md` holds v1 and Revisions 2–7 verbatim. Read this one.
 
@@ -201,7 +245,9 @@ These are gate-design invariants, not one-off findings.
 
 ## 9. Board during the gap — decided
 
-**Ship thin.** Post-merge the forward board is ~3 signals; the gap runs until `MXDC_V1` publishes. Not filled by republishing negative-CLV architectures, not delayed, not compressed.
+**Ship thin — but the board was never as thin as this said, and `MXDC_V1` is never publishing.** The "~3 signals" was a **pending-rows snapshot** taken at a quiet moment and should not have been generalised into a 4–6 week gap: `MARKET_ANCHORED` alone runs at **109 rows over 93 fixtures in 14 days — 7.8 signals/day** (verified 19 Aug), and the 3 was simply how many happened to be un-kicked-off at the instant it was read. With `MXDC_V1` abandoned there is no gap to bridge; the board carries what the surviving architectures emit. Still not filled by republishing negative-CLV architectures.
+
+**A pending count is a snapshot of an inventory, not a rate.** Measure emission over a window and divide.
 
 **Public framing: customer-facing, internals unpublicised.** No rebuild announcement, no methodology banner.
 
@@ -260,5 +306,8 @@ Seven revisions produced six corrections worth keeping as standing discipline. F
 | 4 | Tier behaviour inferred from the `odds` table | **`odds` is a change log.** Its timestamps track volatility, not polling. Verify from the run log. |
 | 5 | Unmeasurable takeability silently left the denominator; the gate's z counted rows | **Excluding the unmeasurable flatters the measure** — the same shape as the +14.79% yield, one level down. |
 | 6 | A √m clustering adjustment applied globally | **Compute the estimator; don't adjust the threshold.** The factor is not √m and can go either way. |
+| 7 | The forward board sized from a count of `pending` rows | **A pending count is inventory, not throughput.** It reads low at any quiet moment. Measure emission over a window. |
+| 8 | `MARKET_ANCHORED`'s +3.2% CLV read as skill | **Check whether the selection rule and the metric share a yardstick.** Selecting on price-vs-de-vigged-anchor and scoring on price-vs-de-vigged-anchor-at-close makes CLV the threshold restated. Decompose into detection edge plus line movement; only the movement can be skill. |
+| 9 | A counterfactual control built from outcomes the model declined | **A control the selection rule already sorted is not a control.** The unpicked legs are unpicked *because* their price was below fair, so their CLV is negative by construction and the spread measures the rule's width. |
 
-A seventh, from the harness: **a pass with no bar set must say so.** `PASS (takeability X% — not yet thresholded)` rather than a bare `PASS`, or a criterion nobody has set reads as one something has met.
+A tenth, from the harness: **a pass with no bar set must say so.** `PASS (takeability X% — not yet thresholded)` rather than a bare `PASS`, or a criterion nobody has set reads as one something has met.
