@@ -1,0 +1,71 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — ELO scale invariants
+#
+# Three questions that must always answer zero, and two that are information:
+#
+#   RED    two clubs that have PLAYED each other share one canonical key
+#   RED    one canonical key plays domestic football in two countries
+#   RED    a club is scaled by a division it is not next scheduled to play in
+#   NOTE   cross-league evidence has landed since league_strength was fitted
+#   INFO   fixtures that will get no ELO forecast, each naming its cause
+#
+# Every one of the three reds has already been true in production, and none of
+# them announced itself: a false merge gave LAFC Galaxy's form, a cross-country
+# merge made Liga MX come out stronger than the Premier League, and a stale
+# league scaled three promoted clubs 108 points low six days before kickoff.
+# A view nobody queries is documentation, not a control.
+#
+# Read-only against Supabase. Burns no API quota. Fails the run when red.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge ELO Scale Health
+
+on:
+  schedule:
+    # Daily at 06:47 — these move on ingest and refits, not minute to minute,
+    # and the promotion case is worst right after a fixture list lands.
+    - cron: '47 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: elo-scale-health-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ELO scale invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Check the ELO scale invariants
+        shell: bash
+        run: |
+          # pipefail is load-bearing: without it `tee` supplies the exit code
+          # and a RED check would report success, which is the exact failure
+          # this workflow exists to prevent.
+          set -o pipefail
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/eloScaleHealthCheck.js | tee -a "$GITHUB_STEP_SUMMARY"
+          status=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit $status

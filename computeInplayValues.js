@@ -37,6 +37,7 @@ const ma             = require('./lib/marketAnchor');
 const sm             = require('./lib/secondaryMarkets');
 const { buildHalftimeVector } = require('./lib/halftimeFeatures');
 const { liveWinProb } = require('./lib/inplayWinProb');
+const { resolveTeamKey, initTeamKeyResolver } = require('./lib/teamKey');
 const { sniperCandidates } = require('./lib/secondHalfSniper');
 const {
   fetchMatchesForComputation,
@@ -85,8 +86,6 @@ const SECOND_HALF_SNIPER_ENABLED = (process.env.SECOND_HALF_SNIPER_ENABLED || ''
 // the model's constant-λ assumption is weakest there.
 const INPLAY_WINPROB_MINUTE_CAP = parseInt(process.env.INPLAY_WINPROB_MINUTE_CAP || '85', 10);
 
-const normTeam = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-
 /** Live matches = kicked off and inside the live window (status may lag). */
 async function fetchLiveMatches(supabase) {
   const candidates = await fetchMatchesForComputation(supabase, ['scheduled', 'live']);
@@ -111,9 +110,14 @@ async function withPool(items, fn, concurrency) {
 
 // ── STAGE 2: model-vs-market (gated) ─────────────────────────────────────────
 
-const normTeam2 = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-
-/** team_elo lookup keyed by normalised team name for these matches. */
+/**
+ * team_elo lookup, keyed exactly as computeElo WROTE it.
+ *
+ * This used a local normaliser that deleted accented letters rather than
+ * folding them, so "Bayern München" looked up bayernmnchen while the ladder
+ * held bayernmunchen — a miss that returns undefined rather than throwing.
+ * lib/teamKey's shared resolver is the one key now.
+ */
 async function fetchEloLookup(supabase) {
   const map = new Map();
   const { data, error } = await supabase.from('team_elo').select('team_name, elo, games');
@@ -132,8 +136,8 @@ async function fetchEloLookup(supabase) {
  * @returns {number[]|null}
  */
 function buildHalftimeFeatures(match, ctx) {
-  const hKey = normTeam2(match.home_team?.name);
-  const aKey = normTeam2(match.away_team?.name);
+  const hKey = resolveTeamKey(match.home_team?.name);
+  const aKey = resolveTeamKey(match.away_team?.name);
   const { vector, reason } = buildHalftimeVector({
     league:    match.league?.name,
     homeStats: ctx.statsByName.get(hKey),
@@ -363,11 +367,12 @@ async function main() {
 
   // Secondary live markets (O/U, BTTS, …) priced off the live consensus.
   try {
+    await initTeamKeyResolver(supabase);
     const { statsByName, refByName } = await fetchStatsLookups(supabase, live.map(r => r.match));
     const secondary = [];
     for (const r of live) {
-      const hs = statsByName.get(normTeam(r.match.home_team?.name));
-      const as = statsByName.get(normTeam(r.match.away_team?.name));
+      const hs = statsByName.get(resolveTeamKey(r.match.home_team?.name));
+      const as = statsByName.get(resolveTeamKey(r.match.away_team?.name));
       const rs = r.match.referee ? refByName.get(r.match.referee) : null;
       for (const c of sm.buildSecondarySignals(r.match, r.consensus, hs, as, rs)) {
         secondary.push({ ...c, kickoff_at: r.match.kickoff_at ?? null });
@@ -382,6 +387,8 @@ async function main() {
   if (INPLAY_MODEL_ENABLED) {
     try {
       // Shared lookups: team form (team_statistics) + ELO ladder (team_elo).
+      // The resolver first, so both are keyed the way computeElo wrote them.
+      await initTeamKeyResolver(supabase);
       const { statsByName } = await fetchStatsLookups(supabase, matches);
       const eloByName = await fetchEloLookup(supabase);
       const ctx = { statsByName, eloByName };
