@@ -1,0 +1,69 @@
+name: Fit League Strength
+
+# Refits the per-league ELO offsets in `league_strength` from `elo_corpus`.
+#
+# WHY IT IS MANUAL. These are fitted parameters, not a feed. They should move
+# when a season's worth of European ties has accrued, on a decision, not on a
+# timer — a parameter that changes under you is not a parameter. Check
+# `league_strength_staleness` first: empty means there is nothing to refit.
+#
+# ALWAYS DRY-RUN FIRST. The default is dry_run=true, which fits and prints the
+# table without writing. Compare it against the current `league_strength` and
+# only re-run with dry_run=false if the movement is explainable. The script
+# warns on any league that moves by more than its own standard error, which is
+# how a corrupted corpus announces itself — the cross-country alias merges
+# showed up first as Liga MX coming out stronger than the Premier League.
+#
+# COST: none beyond runner time. It reads the database and writes one table;
+# no API-Football and no Odds API credit is spent.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Fit and report without writing (leave true unless you have already reviewed a dry run)'
+        type: boolean
+        default: true
+
+concurrency:
+  group: fit-league-strength
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  fit:
+    name: Refit league_strength
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      # The fitter is checked against ground truth rather than plausibility —
+      # it recovers offsets simulated from values the test chose itself. If that
+      # is broken there is no point running it against production.
+      - name: Test the fitter
+        run: node engine.fitleaguestrength.test.js
+
+      - name: Fit
+        run: |
+          if [ "${{ inputs.dry_run }}" = "false" ]; then
+            echo "WRITING to league_strength"
+            node fitLeagueStrength.js
+          else
+            node fitLeagueStrength.js --dry-run
+          fi
