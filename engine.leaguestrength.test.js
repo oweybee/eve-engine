@@ -15,21 +15,25 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { teamKey } = require('./lib/teamKey');
 const {
-  adjustPair, comparable, refusalReason, scaleFor,
-  USABLE, DEFAULT_MIN_RATED_OPPONENTS,
+  adjustPair, comparable, refusalReason, scaleFor, placement,
+  USABLE, MIN_RATED_OPPONENTS,
 } = require('./lib/leagueStrength');
 const { eloProbs } = require('./lib/eloProbs');
 
 // arsenal: Premier League (reference). bayern: Bundesliga. monza: Serie B last
 // season, Serie A this one. shamrock: no domestic league, placed by 9 rated
 // opponents. hbtorshavn: no domestic league, only 2 rated opponents.
+// Shaped as loadTeamScale() returns it: is_usable comes from the view, so the
+// fixtures carry it rather than the test re-deriving the gate.
+const L = (theta) => ({ theta, source: 'league', nRatedOpponents: null, isUsable: true, minRatedOpponents: 4 });
+const O = (theta, n) => ({ theta, source: 'opponents', nRatedOpponents: n, isUsable: n >= 4, minRatedOpponents: 4 });
 const scale = new Map([
-  ['arsenal',    { theta:    0.0, source: 'league',    nRatedOpponents: null }],
-  ['bayern',     { theta:  -38.1, source: 'league',    nRatedOpponents: null }],
-  ['inter',      { theta:  -68.3, source: 'league',    nRatedOpponents: null }],
-  ['monza',      { theta: -238.1, source: 'league',    nRatedOpponents: null }],
-  ['shamrock',   { theta: -290.0, source: 'opponents', nRatedOpponents: 9 }],
-  ['hbtorshavn', { theta: -150.0, source: 'opponents', nRatedOpponents: 2 }],
+  ['arsenal',    L(0.0)],
+  ['bayern',     L(-38.1)],
+  ['inter',      L(-68.3)],
+  ['monza',      L(-238.1)],
+  ['shamrock',   O(-290.0, 9)],
+  ['hbtorshavn', O(-150.0, 2)],
 ]);
 const DOM = { competitionIsDomesticLeague: true };
 const CUP = { competitionIsDomesticLeague: false };
@@ -114,7 +118,7 @@ test('a club placed by too few opponents is refused', () => {
 });
 
 test('the opponent gate is tunable, and the default is four', () => {
-  assert.equal(DEFAULT_MIN_RATED_OPPONENTS, 4);
+  assert.equal(MIN_RATED_OPPONENTS, 4);
   const out = adjustPair(scale, { eloHome: 1600, eloAway: 1700, homeKey: 'hbtorshavn',
                                   awayKey: 'arsenal', minRatedOpponents: 2, ...CUP });
   assert.equal(out.eloHome, 1450);
@@ -123,7 +127,7 @@ test('the opponent gate is tunable, and the default is four', () => {
 test('an unknown club refuses rather than defaulting to zero', () => {
   assert.equal(adjustPair(scale, { eloHome: 1600, eloAway: 1700, homeKey: 'nosuchclub', awayKey: 'arsenal', ...CUP }), null);
   assert.match(refusalReason(scale, { homeKey: 'nosuchclub', awayKey: 'arsenal', ...CUP }),
-    /home club has no place on the global scale/);
+    /home club has no place on the ELO scale/);
 });
 
 test('an empty table refuses every cross-league pair', () => {
@@ -159,4 +163,71 @@ test('scaleFor applies the opponent gate but never gates a fitted league', () =>
 
 test('only reference and fitted are usable league statuses', () => {
   assert.deepEqual([...USABLE].sort(), ['fitted', 'reference']);
+});
+
+// ── the verdict is reported, not swallowed ─────────────────────────────────
+test('placement names the club it could not place', () => {
+  const v = placement(scale, { eloHome: 1600, eloAway: 1700, homeKey: 'hbtorshavn', awayKey: 'arsenal', ...CUP });
+  assert.equal(v.placed, false);
+  assert.equal(v.code, 'club_thinly_placed');
+  assert.equal(v.sides.length, 1);
+  assert.equal(v.sides[0].side, 'home');
+  assert.equal(v.sides[0].nRatedOpponents, 2);
+  assert.match(v.reason, /2 rated opponent\(s\), under the 4 required/);
+});
+
+test('an entirely unplaceable club is a different code from a thin one', () => {
+  const v = placement(scale, { eloHome: 1600, eloAway: 1700, homeKey: 'nosuchclub', awayKey: 'arsenal', ...CUP });
+  assert.equal(v.code, 'club_unplaced');
+  assert.match(v.reason, /no domestic league in the corpus and no rated opponent/);
+});
+
+test('when BOTH clubs are unplaceable, both are named', () => {
+  const v = placement(scale, { eloHome: 1600, eloAway: 1600, homeKey: 'nope', awayKey: 'nope2', ...CUP });
+  assert.equal(v.sides.length, 2);
+  assert.deepEqual(v.sides.map(s => s.side), ['home', 'away']);
+});
+
+test('a placed pair reports placed:true and carries the numbers', () => {
+  const v = placement(scale, { eloHome: 1700, eloAway: 1700, homeKey: 'arsenal', awayKey: 'bayern', ...CUP });
+  assert.equal(v.placed, true);
+  assert.equal(v.eloAway, 1661.9);
+  assert.equal(v.basis, 'league');
+});
+
+test('a missing competition flag has its own code, not a club code', () => {
+  const v = placement(scale, { eloHome: 1600, eloAway: 1600, homeKey: 'arsenal', awayKey: 'bayern' });
+  assert.equal(v.code, 'no_competition_context');
+  assert.deepEqual(v.sides, []);
+});
+
+test('a missing rating is reported as such, before placement is blamed', () => {
+  const v = placement(scale, { eloHome: null, eloAway: 1600, homeKey: 'arsenal', awayKey: 'bayern', ...CUP });
+  assert.equal(v.code, 'no_rating');
+  assert.deepEqual(v.sides.map(s => s.side), ['home']);
+});
+
+test('refusalReason never disagrees with placement', () => {
+  for (const args of [
+    { homeKey: 'arsenal', awayKey: 'bayern', ...CUP },
+    { homeKey: 'hbtorshavn', awayKey: 'arsenal', ...CUP },
+    { homeKey: 'nope', awayKey: 'arsenal', ...CUP },
+    { homeKey: 'inter', awayKey: 'monza', ...DOM },
+    { homeKey: 'arsenal', awayKey: 'bayern' },
+  ]) {
+    const v = placement(scale, { eloHome: 1500, eloAway: 1500, ...args });
+    assert.equal(refusalReason(scale, args), v.placed ? null : v.reason, JSON.stringify(args));
+  }
+});
+
+test('the gate is read from the view, not re-decided here', () => {
+  // A club the view marks usable is usable even with a low opponent count —
+  // because is_usable is the one definition and this module does not own it.
+  const odd = new Map([
+    ['weird',   { theta: -100, source: 'opponents', nRatedOpponents: 1, isUsable: true,  minRatedOpponents: 4 }],
+    ['blocked', { theta: -100, source: 'opponents', nRatedOpponents: 99, isUsable: false, minRatedOpponents: 4 }],
+    ['arsenal', L(0)],
+  ]);
+  assert.ok(adjustPair(odd, { eloHome: 1600, eloAway: 1600, homeKey: 'weird', awayKey: 'arsenal', ...CUP }));
+  assert.equal(adjustPair(odd, { eloHome: 1600, eloAway: 1600, homeKey: 'blocked', awayKey: 'arsenal', ...CUP }), null);
 });

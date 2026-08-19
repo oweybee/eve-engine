@@ -216,17 +216,65 @@ The two that remain are ties in which *both* clubs are untracked-nation sides
 that have only ever played each other's kind — there is genuinely nothing to
 anchor them to, and the honest output is silence.
 
-## 5b. What it still refuses, and why zero is not an option
+## 5b. An unplaceable fixture says so, by name
 
 `adjustPair` returns **null**, never 0. Zero is a claim — it says this club sits
 exactly on the Premier League scale — and for an MLS club that is wrong by
 around two hundred rating points and nobody would ever see it happen, because a
 wrong probability looks exactly like a right one.
 
+But a withheld forecast was, until now, withheld *silently*, and a fixture that
+produces no number looks exactly like a fixture nobody asked about. This repo
+has ruled on that shape twice already: `value_signals.score_withheld_reason`
+strips the claim and records why, and `/api/inplay` reports which of four causes
+made it empty, because three features shipped dead when "returns nothing" was
+confused with "cannot return anything".
+
+So there are two ways to ask, and they never disagree:
+
+- **`placement()`** in `lib/leagueStrength.js` returns a structured verdict —
+  either the adjusted pair, or `{placed: false, code, reason, sides}` with a
+  machine code (`club_unplaced`, `club_thinly_placed`, `no_rating`,
+  `no_competition_context`) and a reason naming the club. `adjustPair` stays as
+  the thin numbers-only wrapper returning null, so no caller can read a rating
+  off a refusal by accident.
+- **`fixture_placement`** (migration 079) is the same verdict computed in SQL
+  for every upcoming fixture, so the reason is queryable now, before any surface
+  exists to draw it.
+
+Over the next thirty days: 1,370 placed by the competition rule, 54 on fitted
+league offsets, 38 on opponent-derived ones, and **10 unplaced** — five
+two-legged ties, each naming its cause:
+
+| tie | why |
+|---|---|
+| Rangers v FK Jablonec (both legs) | FK Jablonec has no place on the ELO scale — no domestic league in the corpus and no rated opponent |
+| Beşiktaş v Kauno Žalgiris | Kauno Žalgiris is placed only by 2 rated opponent(s), under the 4 required |
+| Atalanta v Hapoel Tel Aviv | Hapoel Tel Aviv, 2 rated opponents |
+| Egnatia Rrogozhinë v Lillestrom | Egnatia Rrogozhinë, 2 rated opponents |
+| Dinamo Tirana v Pafos | Dinamo Tirana, 2 rated opponents |
+
+Eight of the ten are the 4-opponent gate, not a total absence — they would place
+on a looser threshold, and `min_rated_opponents` is a column so that judgement
+can be revisited in one place.
+
+### One definition of each rule
+
+Migration 079 also removes two duplications that were about to appear:
+
+- **`team_key_map`** — the team-id-to-canonical-key mapping was inline in
+  `elo_corpus`, which was fine while `elo_corpus` was the only consumer. Upcoming
+  fixtures need it too, so it is a view of its own now and the accent-folding
+  string exists in exactly one place in SQL.
+- **`team_scale.is_usable`** — the four-rated-opponents gate was about to live in
+  both the SQL view and `lib/leagueStrength.js`. It is a column; the module reads
+  it rather than re-deciding it. A threshold written in two languages is two
+  thresholds.
+
 There is deliberately **no compiled fallback table** in `lib/leagueStrength.js`.
 `MODEL_SIGMA` is the cautionary tale: a hand-copy that disagreed with the
 database twice in production and threw neither time. If the view has not loaded,
-every cross-league pair is refused.
+every cross-league pair is refused — loudly, with a reason.
 
 ## 6. What this does NOT license
 
