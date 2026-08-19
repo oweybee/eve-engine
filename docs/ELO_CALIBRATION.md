@@ -198,7 +198,105 @@ standard deviation of ~56.
 | ...and the gap reaches 10pp | **5** | |
 | ...and both teams past 30 games | **1** | |
 
-## 7. Reproducing it
+## 7. Tracking the small leagues would NOT cover European ties
+
+Asked on 19 Aug 2026: can we track the extra leagues so European ties are
+covered? Mechanically yes, and it is cheap. It would also make the ratings
+worse, and the reason is not the league list.
+
+**The clubs.** 413 teams appear in our UEFA fixtures; **231 of them have no
+domestic league in our data at all**, and 93 of those are in this season's ties.
+They come from about 34 countries outside the tracked forty -- Faroe Islands,
+San Marino, Andorra, Gibraltar, Kosovo, Armenia, Azerbaijan, Georgia, Moldova,
+Malta, Luxembourg, Estonia, Latvia, Lithuania, Iceland, Wales, Northern Ireland,
+Israel, Kazakhstan and the rest.
+
+**The cost is not the objection.** ELO needs RESULTS, not prices, and those are
+two different ingest paths. `backfillSeasonFixtures.js` loads a whole season in
+one API-Football request and fills in scorelines and results for finished
+fixtures; it spends no Odds API credit at all. Thirty-four leagues over five
+seasons is ~170 one-off requests against a 75,000/day allowance. Adding them to
+`lib/trackedLeagues.js` is the expensive route, because that list also drives
+planDay's odds polling and is mirrored by `AVAILABLE_LEAGUES` in the frontend --
+which would put competitions in the league picker that we never price, the exact
+failure the header of `trackedLeagues.js` warns about. A ratings-only list is the
+correct shape if this is ever done.
+
+**The objection is that the ladder is not one scale.** ELO ratings are only
+comparable inside a pool that plays itself. Measured across the completed set,
+the share of each league's games that are against a club whose home league is
+different:
+
+| league | completed games | cross-league |
+|---|---|---|
+| Major League Soccer | 4,712 | **0.0%** |
+| Liga MX | 2,790 | **0.0%** |
+| J1 League | 3,144 | **0.0%** |
+| Chinese Super League | 2,410 | **0.0%** |
+| Premier League (Russia) | 2,016 | **0.0%** |
+| Liga Profesional (Argentina) | 4,356 | 0.0% (2 games) |
+| Serie A (Brazil) | 3,501 | 0.3% |
+| ... | | |
+| Premier League (England) | 19,294 | 9.9% |
+| Championship (England) | 3,952 | **50.3%** |
+| Serie B (Italy) | 2,172 | **50.0%** |
+| Ligue 2 (France) | 1,868 | **53.7%** |
+
+Six leagues are **closed pools**: every game is against themselves, so ELO pins
+their mean at exactly the 1500 default. An MLS club on 1620 and a Premier League
+club on 1620 are not comparable, and `eloProbs` would call that fixture 50/50.
+The European pyramids are fine -- promotion, relegation and the League Cup bridge
+them, which is why the Championship and Ligue 2 read above 50%.
+
+**Adding 34 small leagues adds 34 more islands.** Each new pool becomes
+internally dense -- a small-nation season is ~36 games, so five backfilled
+seasons puts essentially every club past 30 -- and stays unanchored. The clubs
+would then PASS the games-played gate while their ratings remained
+non-comparable to the opponent's. That is strictly worse than the situation
+today, where thin ratings are caught precisely because they are thin. **The gate
+would stop catching the failure it exists to catch.**
+
+**And the calibration was never measured on this.** `research_dc_preds` holds
+16,480 matches and every one is English: E0/E1/E2/E3/EC, 2019/20 to 2025/26. The
+10pp `min_publishable_gap` for ELO was fit on the most densely connected pool we
+own and has never been tested on a cross-border tie, which is the only place the
+expansion would apply it.
+
+**The prerequisite is a league-strength offset**, estimated from the inter-league
+matches we already hold. Of 3,873 completed UEFA ties, 1,536 are
+tracked-vs-tracked, **1,270 bridge an untracked club to a tracked one** -- the
+anchoring observations -- and 1,067 are island-to-island, which anchor nothing.
+1,270 across ~34 countries is ~37 per league: enough to fit one offset per
+league, not enough to fit it precisely. That is a modelling job, not a
+configuration change.
+
+**The correct order, if it is done at all:**
+
+1. Fit per-league strength offsets from the 1,270 anchoring ties.
+2. Then backfill the small leagues, as a ratings-only list, so each pool is
+   internally dense.
+3. Re-measure the disagreement calibration on cross-border ties SPECIFICALLY,
+   and give it its own `min_publishable_gap` row -- migration 075 already made
+   the threshold a property of the model rather than a constant, and a
+   cross-border tie is a different measurement regime.
+
+**There is no urgency, and the calendar says so.** The thin-side problem is
+almost entirely a qualifying-round phenomenon. Share of UEFA fixtures with a
+side under 30 games, by month across the whole history:
+
+| Jul | Aug | Sep | Oct | Nov | Dec | Jan-Mar | Apr-May |
+|---|---|---|---|---|---|---|---|
+| **77.4%** | **43.1%** | 6.7% | 6.7% | 6.9% | 7.3% | 1-5% | **0%** |
+
+1,250 of the 1,352 thin-side ties in the database fall in July and August. We are
+in the worst fortnight of the year for it. From September the league phase is
+tracked clubs playing tracked clubs and the gap collapses on its own. Today it
+costs 15 of 44 upcoming UEFA fixtures; in three weeks it costs about one.
+
+Withholding those rows remains the right behaviour, and it is the behaviour we
+already have.
+
+## 8. Reproducing it
 
 ```sql
 -- 1. Pre-match ratings. lib/elo.js: K=30, homeAdv=80, default 1500.
