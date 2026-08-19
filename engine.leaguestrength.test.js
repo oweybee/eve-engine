@@ -13,7 +13,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { teamKey } = require('./lib/teamKey');
+const { teamKey, resolveTeamKey, setTeamKeyResolver, loadTeamKeyResolver } = require('./lib/teamKey');
 const {
   adjustPair, comparable, refusalReason, scaleFor, placement,
   USABLE, MIN_RATED_OPPONENTS,
@@ -230,4 +230,36 @@ test('the gate is read from the view, not re-decided here', () => {
   ]);
   assert.ok(adjustPair(odd, { eloHome: 1600, eloAway: 1600, homeKey: 'weird', awayKey: 'arsenal', ...CUP }));
   assert.equal(adjustPair(odd, { eloHome: 1600, eloAway: 1600, homeKey: 'blocked', awayKey: 'arsenal', ...CUP }), null);
+});
+
+// ── the shared resolver ────────────────────────────────────────────────────
+// computeElo WRITES team_elo with the canonical key; computeValues and
+// computeInplayValues READ it. They also share fetchStatsLookups across files,
+// so the resolver has to be one instance, not one per module.
+test('the resolver joins aliases that no folding rule could', async () => {
+  const stub = { from: () => ({ select: () => ({ eq: async () => ({ data: [
+    { raw_name: 'Tottenham Hotspur', canonical_key: 'tottenham' },
+    { raw_name: 'Wolves',            canonical_key: 'wolves' },
+    { raw_name: 'Bayern Munich',     canonical_key: 'bayernmunchen' },
+  ] }) }) }) };
+  const resolve = await loadTeamKeyResolver(stub);
+  assert.equal(resolve('Tottenham Hotspur'), 'tottenham');
+  assert.equal(resolve('Bayern Munich'), 'bayernmunchen');
+  assert.equal(resolve('Bayern München'), 'bayernmunchen', 'the fold covers the other spelling');
+  assert.equal(resolve('Some New Club'), 'somenewclub', 'an unknown name still folds');
+});
+
+test('a failed alias read degrades to folding and says so', async () => {
+  const stub = { from: () => ({ select: () => ({ eq: async () => ({ error: { message: 'nope' } }) }) }) };
+  const resolve = await loadTeamKeyResolver(stub);
+  assert.equal(resolve('Atlético Madrid'), 'atleticomadrid');
+});
+
+test('the shared resolver is one instance across modules', () => {
+  setTeamKeyResolver(null);
+  assert.equal(resolveTeamKey('Tottenham Hotspur'), 'tottenhamhotspur', 'uninitialised folds only');
+  setTeamKeyResolver((n) => (n === 'Tottenham Hotspur' ? 'tottenham' : teamKey(n)));
+  assert.equal(resolveTeamKey('Tottenham Hotspur'), 'tottenham');
+  assert.equal(resolveTeamKey('Arsenal'), 'arsenal');
+  setTeamKeyResolver(null);
 });

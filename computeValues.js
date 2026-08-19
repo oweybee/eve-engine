@@ -29,6 +29,7 @@ const ma = require('./lib/marketAnchor');
 const { BETTABLE_BOOKS } = ma;
 const { buildPrematchVector } = require('./lib/halftimeFeatures');
 const { checkQuality, thresholdsFromEnv } = require('./lib/dataQuality');
+const { resolveTeamKey, initTeamKeyResolver } = require('./lib/teamKey');
 
 // Config
 const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '2',    10);
@@ -703,14 +704,20 @@ async function insertValueSignals(
   return toInsert.length;
 }
 
-const normTeam = s => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+// The canonical club key comes from lib/teamKey now, shared with computeElo
+// (which WRITES team_elo with it) and with the SQL view team_key_map. It was a
+// local copy that deleted accented letters rather than folding them, so
+// "Bayern München" keyed as bayernmnchen while the ladder held bayernmunchen,
+// and the rating silently failed to resolve.
 
-/** team_elo lookup keyed by the SAME normalised name as team_statistics. */
+/** team_elo lookup, keyed exactly as computeElo wrote it. */
 async function fetchEloLookup(supabase) {
   const map = new Map();
   const { data, error } = await supabase.from('team_elo').select('team_name, elo, games');
   if (error) { console.warn('[ensemble] team_elo read failed:', error.message); return map; }
-  for (const r of data ?? []) map.set(normTeam(r.team_name), r);
+  // team_elo is ALREADY keyed canonically; re-resolving a canonical key is a
+  // no-op, so this is safe either way.
+  for (const r of data ?? []) map.set(r.team_name, r);
   return map;
 }
 
@@ -718,7 +725,7 @@ async function fetchEloLookup(supabase) {
 async function fetchStatsLookups(supabase, matches) {
   const statsByName = new Map();
   const { data: teamStats } = await supabase.from('team_statistics').select('*');
-  for (const t of teamStats ?? []) statsByName.set(normTeam(t.team_name), t);
+  for (const t of teamStats ?? []) statsByName.set(resolveTeamKey(t.team_name), t);
 
   const refs = [...new Set(matches.map(m => m.referee).filter(Boolean))];
   const refByName = new Map();
@@ -865,10 +872,11 @@ async function main() {
   let secondaryCandidates = [];
   try {
     const live = results.filter(r => r && !r.skipped);
+    await initTeamKeyResolver(supabase);
     const { statsByName, refByName } = await fetchStatsLookups(supabase, live.map(r => r.match));
     for (const r of live) {
-      const hs = statsByName.get(normTeam(r.match.home_team?.name));
-      const as = statsByName.get(normTeam(r.match.away_team?.name));
+      const hs = statsByName.get(resolveTeamKey(r.match.home_team?.name));
+      const as = statsByName.get(resolveTeamKey(r.match.away_team?.name));
       const rs = r.match.referee ? refByName.get(r.match.referee) : null;
       Object.assign(r.row, sm.secondaryComputedValues(r.match, r.consensus, hs, as, rs));
       for (const c of sm.buildSecondarySignals(r.match, r.consensus, hs, as, rs)) {
@@ -889,14 +897,17 @@ async function main() {
     const infer = require('./ensemble/inference');
     if (infer.ensembleAvailable?.()) {
       const live = results.filter(r => r && !r.skipped);
+      // Resolve names the way computeElo WROTE them before any lookup keyed
+      // on a name is built — team_alias first, accent folding second.
+      await initTeamKeyResolver(supabase);
       const [{ statsByName }, eloByName] = await Promise.all([
         fetchStatsLookups(supabase, live.map(r => r.match)),
         fetchEloLookup(supabase),
       ]);
       let filled = 0;
       for (const r of live) {
-        const hKey = normTeam(r.match.home_team?.name);
-        const aKey = normTeam(r.match.away_team?.name);
+        const hKey = resolveTeamKey(r.match.home_team?.name);
+        const aKey = resolveTeamKey(r.match.away_team?.name);
         const { vector } = buildPrematchVector({
           league:    r.match.league?.name,
           homeStats: statsByName.get(hKey),
