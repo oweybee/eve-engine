@@ -99,11 +99,64 @@ Held-out seasons reproduce the whole table (45.9 / 42.0 / 48.7 / 53.1 / 58.0).
   behind everywhere, and the honest sentence is always the market's.
 - **It does not license** a bet. This is accuracy, not profit — the two came apart
   decisively in `docs/ANCHOR_INDEPENDENCE.md` §4.
-- **Coverage is unmeasured.** How often a live fixture actually reaches a 10pp Elo
-  disagreement has not been counted; at 43 model-probability rows in seven days
-  the binding constraint may be coverage rather than calibration.
+- **Coverage is now measured, and it is the binding constraint.** See §6.
 
-## 6. Reproducing it
+## 6. Coverage — measured 19 Aug 2026, and it is what blocks the feature
+
+The calibration says an Elo sentence is honest at 10pp or more. The question that
+decides whether it is a *feature* is how often a live fixture gets there.
+
+**The seven-day funnel:**
+
+| stage | fixtures | |
+|---|---|---|
+| upcoming in 7 days | **342** | |
+| both teams have an Elo rating | 313 | 91.5% — name matching is fine |
+| a market price from 3+ books exists | **74** | **22%** |
+| both Elo and market | 68 | |
+| …and both teams past 10 games | 25 | |
+| **…and the gap reaches 10pp** | **5** | |
+| **…and both teams past 30 games** | **1** | |
+
+**Five a week at the loose bar. One a week at the honest one.** That is not a
+per-match feature, and the panel stays dark.
+
+**Two independent constraints, and neither is the calibration.**
+
+1. **Market coverage, 22%.** 268 of 342 upcoming fixtures carry no price from
+   three books. The tiering polls near kickoff by design, so a fixture four days
+   out simply has nothing to compare against.
+
+2. **Rating maturity, and it is bimodal by league.** Not a bug — the ladder walks
+   the full history (80,622 team-games = exactly 2 × 40,311 completed matches).
+   The history is just shaped wrong for what we price:
+
+   | league | upcoming (7d) | completed history |
+   |---|---|---|
+   | La Liga | 12 | 8,156 |
+   | Premier League | 10 | 7,600 |
+   | Serie A (Italy) | 10 | 7,600 |
+   | MLS | **30** | 284 |
+   | Europa Conference League | **24** | 210 |
+   | Championship | 12 | **12** |
+   | League One / League Two | 12 each | **12 each** |
+   | Serie B (Italy) | 10 | **0** |
+
+   538 of 968 teams have fewer than 10 games in the ladder, and their ratings sit
+   at 1500 ± 24 — the default wearing a number. The leagues we have depth for are
+   a small share of what we price; the leagues we price heavily have none.
+
+**And the failure mode is worse than thin coverage.** The largest live gap
+measured was **28.16pp**, on ratings with a standard deviation of ~56. A big
+disagreement from a thin rating is IGNORANCE, not insight — and it is precisely
+the row a "biggest disagreement" panel would surface first. Any per-match
+treatment must gate on games played, not only on the gap.
+
+**The fix is a backfill, not a model change.** The big five prove the pipeline
+can do it at 7,600 rows apiece; the other tracked competitions need the same
+treatment. Until then Elo is a forecast for about a fifth of the board.
+
+## 7. Reproducing it
 
 ```sql
 -- 1. Pre-match ratings. lib/elo.js: K=30, homeAdv=80, default 1500.
