@@ -70,3 +70,18 @@ jobs:
           else
             node captureClosingLines.js | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+
+      # The Pinnacle-EXCLUDED benchmark. It runs beside the anchor, never
+      # instead of it: a model that selects against Pinnacle cannot be scored
+      # against Pinnacle, and a model that does not still deserves the sharper
+      # benchmark. Both are captured from the same pre-kickoff window so the
+      # two figures are comparable fixture by fixture.
+      - name: Capture independent closing lines
+        shell: bash
+        run: |
+          set -o pipefail
+          if [ "${{ inputs.backfill }}" = "true" ]; then
+            node captureIndependentLines.js --backfill | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            node captureIndependentLines.js | tee -a "$GITHUB_STEP_SUMMARY"
+          fi

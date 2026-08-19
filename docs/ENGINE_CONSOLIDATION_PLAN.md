@@ -35,6 +35,70 @@ Supersedes v1 and Revisions 2–7, which are preserved in `CONSOLIDATION_REVISIO
 > Realised P&L says the same thing: **+13.58% clustered yield over 90 settled fixtures at z 1.06** — the figure `/performance` already withholds as `insufficient`.
 >
 > **Revised direction:** the honest position is that this project has **no demonstrated edge in any architecture**, and the gate in §6 is the instrument that will say so or not. Do not treat `MARKET_ANCHORED` as validated pending accrual; treat it as **on the same footing as anything else that has not passed a gate**. §7 (measurement rules) and §8 (odds feed) stand in full.
+
+> ## ⚠ v3 (iv) — THE CIRCULARITY IS FIXED, AND SOMETHING SURVIVES IT
+>
+> The gate could not fail `MARKET_ANCHORED`, so it was rebuilt before the
+> architecture reaches the 150-fixture bar. Full write-up in
+> `docs/ANCHOR_INDEPENDENCE.md`; migrations 073 and 074, both applied and
+> verified in production 19 Aug 2026.
+>
+> **An independent anchor exists.** `closing_lines_independent` — the last
+> strictly-pre-kickoff vector, median across the bettable panel with **Pinnacle
+> excluded**, Shin-de-vigged, minimum five books. 635 h2h / 615 BTTS / 610
+> totals fixtures against Pinnacle's 705. Stored alongside `closing_lines`,
+> never replacing it. The SQL backfill was verified against `lib/devig.js` to
+> 1.5e-10; `captureIndependentLines.js` is the ongoing writer and shares that
+> single implementation.
+>
+> **§6 gains a precondition, ahead of every threshold.** Every model declares
+> its selection anchor as **books + de-vig + line**; `paper_trade_gate` HOLDs
+> when the scoring anchor equals it, when the model has not declared one, when a
+> group mixes two anchors, or when the anchor is not in the catalogue — and
+> PASSes with an explicit `WARNING` when the book sets merely overlap. The
+> anchor is a **column on the trade**, not a gate parameter, so it cannot be
+> overridden by the caller. All six branches probed in a rolled-back
+> transaction.
+>
+> **Re-baselined, takeable-only, fixture-clustered:**
+>
+> | architecture | market | fx | CLV vs Pinnacle | CLV vs independent | edge at detection | movement | z |
+> |---|---|---|---|---|---|---|---|
+> | `MARKET_ANCHORED` | h2h | 75 | **+3.05%** (z 7.05) | **+1.38%** (z 2.89) | +0.40% | **+0.98%** | **2.75** |
+> | `API_PREDICTIVE` | h2h | 54 | −3.15% | −3.40% | −2.99% | −0.40% | −0.54 |
+> | `LAMBDA_MC` | h2h | 44 | −3.02% | −2.53% | −3.51% | +0.98% | 1.76 |
+> | `DIXON_COLES` | totals | 20 | −0.55% | +0.87% | +1.37% | −0.50% | −0.64 |
+> | `DIXON_COLES` | btts | 20 | +0.40% | +0.40% | +0.09% | +0.30% | 0.38 |
+>
+> **The circularity was worth 1.67pp — 55% of the headline — and the remainder
+> is not zero.** +1.38% at z 2.89 survives, of which +0.98% (z 2.75) is genuine
+> movement of a Pinnacle-free consensus toward the selection. It is
+> differential, not drift: the two outcomes the model declined move −0.44%
+> (z −1.95) on the same fixtures.
+>
+> **But read the claim precisely.** Pinnacle's de-vigged probability exceeds the
+> soft panel's by +3.43% on the selected outcome, and the panel closes ~29% of
+> that gap by kickoff. The mechanism is **soft books converging on Pinnacle**.
+> The independent anchor takes Pinnacle out of the price, not out of the causal
+> chain. The publishable sentence is *"the soft market came to us"*, resting on
+> Pinnacle being sharper than the panel — **not** *"our model beat the market"*.
+>
+> **The other three lose for a reason the Pinnacle figures never showed.** Their
+> movement terms are nil; the entire loss is a detection edge of −2.99% and
+> −3.51% against the independent fair line. They take the panel maximum
+> (93–100% of the time) and it is still short of fair, because they pick the
+> outcome their model likes rather than the one the price favours. They were not
+> unlucky — they paid above fair value from the first tick.
+>
+> **BTTS cannot be scored independently at all, and that is a real limit.**
+> Pinnacle does not price BTTS, so every BTTS closing line is already the panel
+> median: all 1,224 matched rows are identical between the two anchors, to the
+> last decimal. Excluding Pinnacle from a benchmark it was never in is a no-op.
+> A genuine BTTS benchmark needs held-out books — not built. `DIXON_COLES`
+> totals is separately uninformative at 20 takeable fixtures.
+>
+> Everything above is measured on **pre-ingest-fix data** and is a measurement,
+> not a threshold. No threshold was set from it.
 >
 > **Gate accrual is real, and faster than three weeks.** 88 takeable fixtures in 13 days (6.8/day) — the 150-fixture bar lands in roughly **9 more days**, not three weeks. But the 85.4% takeability behind it was measured under the pre-fix maximal-polling regime (§3 qualification 1) and will fall; re-derive the timeline after one clean week.
 
@@ -200,8 +264,18 @@ Retired codepaths, config, calibration rows, and the multi-architecture branchin
 
 **A5 takes no arguments.** The first parameter is now a **fixture floor**, not a row count — passing the old `(300, 0.0, 2.0)` would demand 300 *fixtures*. Call it bare and let the derived bar apply.
 
-The gate asks three questions in order:
+The gate asks **four** questions in order, and the first was added on 19 Aug
+2026 (migration 074) because without it the gate could not fail
+`MARKET_ANCHORED` — see the v3 (iv) banner and `docs/ANCHOR_INDEPENDENCE.md`.
 
+0. **Anchor independence.** Every model declares its selection anchor as
+   **books + de-vig + line**. The gate HOLDs when the scoring anchor equals it,
+   when nothing is declared, when a group mixes two anchors, or when the anchor
+   is not in the catalogue; it PASSes with an explicit `WARNING` when the book
+   sets merely overlap. The anchor is a column on the trade, not a gate
+   parameter, so a caller cannot override it. **This runs before every
+   threshold**, because a PASS on a self-referential benchmark is not a weak
+   result — it is not a result.
 1. **Sample size**, self-calibrating to the model's own variance:
    `required_fixtures = max(150, ceil((2.802 × sd_hi90 / 0.010)²))`
    powered to detect a **+1.0% clustered CLV**, using the upper bound of a 90% CI on sd rather than the point estimate. On the sd profile `MXDC_V1` should have (3.6–3.9%) this resolves to the **150 floor**; at an 11% longshot-style sd it demands ~1,245 fixtures. That is the +92.7% failure mode closed structurally — a wide-variance book cannot be certified on a short sample.
@@ -309,5 +383,7 @@ Seven revisions produced six corrections worth keeping as standing discipline. F
 | 7 | The forward board sized from a count of `pending` rows | **A pending count is inventory, not throughput.** It reads low at any quiet moment. Measure emission over a window. |
 | 8 | `MARKET_ANCHORED`'s +3.2% CLV read as skill | **Check whether the selection rule and the metric share a yardstick.** Selecting on price-vs-de-vigged-anchor and scoring on price-vs-de-vigged-anchor-at-close makes CLV the threshold restated. Decompose into detection edge plus line movement; only the movement can be skill. |
 | 9 | A counterfactual control built from outcomes the model declined | **A control the selection rule already sorted is not a control.** The unpicked legs are unpicked *because* their price was below fair, so their CLV is negative by construction and the spread measures the rule's width. |
+| 10 | The gate scored `MARKET_ANCHORED` against the line it selects on | **A benchmark is books + de-vig + line — and a later timestamp does not make it a different benchmark.** Declare what each model optimises against, and refuse to score it against that. Worth 1.67pp of a 3.05pp headline. |
+| 11 | "Pinnacle-excluded" assumed to mean independent | **Check the exclusion actually excludes something.** Pinnacle does not price BTTS, so every BTTS closing line was already the panel median: all 1,224 rows identical between the two anchors. |
 
-A tenth, from the harness: **a pass with no bar set must say so.** `PASS (takeability X% — not yet thresholded)` rather than a bare `PASS`, or a criterion nobody has set reads as one something has met.
+A twelfth, from the harness: **a pass with no bar set must say so.** `PASS (takeability X% — not yet thresholded)` rather than a bare `PASS`, or a criterion nobody has set reads as one something has met.
