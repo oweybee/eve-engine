@@ -74,11 +74,22 @@ const NON_DOMESTIC_COUNTRIES = new Set(['World', 'International', 'Europe', 'Afr
 // pure
 // ---------------------------------------------------------------------------
 
-/** API-Football seasons run Aug-Jul; label by the start year. */
+/**
+ * API-Football seasons are labelled by their START YEAR and turn over in JULY,
+ * not August. `backfillSeasonFixtures.currentSeasonYear` is the repo's existing
+ * statement of that and this must agree with it.
+ *
+ * It did not. The first version read `getUTCMonth() >= 7`, which is
+ * ZERO-INDEXED — August — so every July fixture was filed under the previous
+ * season. July is the single busiest month in the UEFA calendar (1,038 fixtures
+ * in the corpus, more than any other), so those ties were matched against the
+ * clubs' OLD divisions. The verification run against production is what caught
+ * it: the offsets came out 2 to 3 points adrift of the SQL fit across the board
+ * and 8 points adrift on the Championship.
+ */
 function seasonOf(kickoffAt) {
   const d = new Date(kickoffAt);
-  const m = d.getUTCMonth(); // 0-11
-  return m >= 7 ? d.getUTCFullYear() : d.getUTCFullYear() - 1;
+  return d.getUTCMonth() + 1 >= 7 ? d.getUTCFullYear() : d.getUTCFullYear() - 1;
 }
 
 /**
