@@ -133,16 +133,31 @@ Every one of the 92,491 completed rows carries a `result` in
 ladder *implied by the completed set*, computed with `computeElo`'s own
 normalisation (lowercase, strip non-alphanumeric) rather than read off `team_elo`:
 
-| | ladder now | after rebuild |
+| | live ladder (stale) | corrected corpus |
 |---|---|---|
-| teams rated | 968 | **1,314** |
-| teams past 10 games | 430 | **1,089** |
-| teams past 30 games | **226** | **948** |
+| teams rated | 968 | **1,226** |
+| teams past 10 games | 430 | **1,017** |
+| teams past 30 games | **226** | **881** |
+| team-games | 80,622 | **172,594** |
+
+**The right-hand column was a projection when this section was written. It is
+now confirmed against `elo_corpus` (21:30 UTC 19 Aug), and it replaced an
+earlier projection of 1,314 / 1,089 / 948.** That earlier set was taken before
+migration 076 deduplicated the corpus, so it counted 6,199 fixtures twice and
+split ~57 clubs across two ladder entries. Measuring beats projecting twice over.
+
+**The live ladder is still the stale one, and the gap is the whole point of this
+check.** `team_elo` was last rebuilt at 15:19 UTC — before the backfill landed at
+18:26 and before the corpus view existed. Its 80,622 team-games are exactly
+2 x 40,311, the pre-backfill completed count. `computeElo` reads `elo_corpus` on
+`main` as of the merge, and self-gates at `ELO_REFRESH_HOURS=6`, so the next
+engine tick rebuilds it.
 
 On the window that matters -- the next 48 hours, which is as far ahead as prices
-exist at all -- 72 fixtures, 67 priced by 3+ books, and **both teams past 30
-games on 53 of them: 79.1%, against 1 (1.5%) before.** Rating maturity stops
-being the binding constraint.
+exist at all -- 77 fixtures, 70 priced by 3+ books, and both clubs past 30 games
+on **57 of them: 81.4%**. The same query against the live ladder, keyed the way
+that ladder was actually written, returns **5**. Rating maturity stops being the
+binding constraint the moment the rebuild lands.
 
 **Why it is still not 100%, and the answer is three named causes.** All 19
 remaining gaps in that 48-hour window, enumerated:

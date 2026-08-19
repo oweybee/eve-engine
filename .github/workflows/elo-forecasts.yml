@@ -1,0 +1,84 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — ELO 1X2 forecasts
+#
+# Writes one forecast per upcoming fixture into `elo_forecasts`, or a refusal
+# naming the club that could not be placed. /api/match-card reads it; nothing
+# else does, and nothing computes a vector of its own.
+#
+# TWICE A DAY, NOT EVERY FIVE MINUTES, and that is a property of the inputs
+# rather than a saving. A rating only moves when a result settles, the league
+# offsets only move on a refit, and the draw model's parameters are fitted
+# constants — so between settlements the vector is the same number recomputed.
+# It runs after the results sweep has had time to land, and again before the
+# evening kickoffs.
+#
+# Read-mostly against Supabase and burns no vendor API quota: every input is
+# already in our own database.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge ELO Forecasts
+
+on:
+  schedule:
+    # 05:10 UTC — after the overnight results sweep folds yesterday into the
+    # ladder, so the day opens on ratings that include it.
+    - cron: '10 5 * * *'
+    # 15:40 UTC — ahead of the European evening kickoffs, picking up any
+    # fixture list that landed during the day.
+    - cron: '40 15 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Compute and report the tally without writing'
+        type: boolean
+        default: false
+
+concurrency:
+  group: elo-forecasts-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  forecast:
+    name: Write the ELO forecasts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Unit tests
+        # The writer's whole job is deciding what may NOT be said. Running its
+        # tests before it writes means a refusal that stopped working cannot
+        # reach the table.
+        run: node --test engine.eloforecasts.test.js
+
+      - name: Compute the forecasts
+        shell: bash
+        run: |
+          # pipefail is load-bearing: without it `tee` supplies the exit code
+          # and a failed run reports success, which is how a table of stale
+          # forecasts would go unnoticed.
+          set -o pipefail
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          node computeEloForecasts.js ${{ inputs.dry_run && '--dry-run' || '' }} \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          status=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit $status
