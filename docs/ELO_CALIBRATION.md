@@ -213,6 +213,82 @@ standard deviation of ~56.
 | ...and the gap reaches 10pp | **5** | |
 | ...and both teams past 30 games | **1** | |
 
+### 6b. Post-rebuild, confirmed against the database (19 Aug 2026, 22:5x UTC)
+
+The ladder rebuilt at **21:47:09** in engine run `32305200497` (SHA `c72f069`,
+so `computeElo` was reading `elo_corpus` and this is the CORRECTED ladder, not
+the old one). Verified directly rather than inferred:
+
+| | pre-rebuild (15:19) | post-rebuild (21:47) |
+|---|---|---|
+| teams rated | 968 | **1,226** |
+| past 10 games | — | **1,017** |
+| past 30 games | 226 | **881** |
+| team-games | 80,622 | **172,594** |
+
+Every figure lands on the projection exactly. `elo_corpus` fed it 86,297
+completed matches.
+
+**The next-48h window, re-measured:**
+
+| stage | fixtures | |
+|---|---|---|
+| priced by 3+ books | **70** | |
+| both clubs past 30 games | **56** | **80.0%** |
+
+Against **5** on the old ladder. The 14 that miss are 13 genuinely-immature
+pairings and 1 club with no rating row at all — so the ceiling really is the
+structural ~80% section 6 predicted, and the constraint has moved off the
+ladder and onto the fixtures' own history. (The projection said 57 / 81.4%;
+one fixture had dropped out of the window by the time this was measured, and
+the difference is that fixture, not a discrepancy in the ladder.)
+
+`team_alias_false_merges` and `team_alias_cross_country` are both still **0**.
+
+### 6c. THE PRUNE FAILED SILENTLY, AND THAT IS THE FINDING
+
+The rebuild wrote 1,226 correct rows and the table held **1,416**. The other 190
+were orphans from 15:19 that `computeElo`'s prune step should have deleted and
+did not. From the run log:
+
+    [elo] 1226 team(s) rated
+    [elo] could not check for stale rows: TypeError: fetch failed
+    [elo] upserted 1226 rating(s)
+
+The prune asked PostgREST for `not.in.(...)` with all 1,226 live team names
+inline — a **~20KB URL** — and the request failed outright. The handler was a
+`console.warn`, so the step exited 0, the workflow went green, and the count
+over the table was wrong by 190 rows in the direction that makes the ladder look
+BIGGER and LESS MATURE than it is: 1,416 / 916 instead of 1,226 / 881. That is
+the same shape as the duplicate-fixture bug this whole document exists because
+of, arriving through the cleanup step rather than the input.
+
+**Most orphans were unreachable, but not all of them.** A key can drop out of
+`elo_corpus` (no completed match under that spelling) while `team_key_map` still
+RESOLVES to it — and then the orphan is a stale rating a live lookup will find.
+Exactly one of the 190 was in that state: `guimaraes`, **1 game**, elo 1481.61.
+No `elo_forecasts` row used it (checked: 0), so nothing shipped wrong — but
+"nothing shipped wrong" was luck about which clubs had fixtures, not a control.
+
+Both halves are fixed in `computeElo.js`:
+
+- the stale set is computed by **reading the existing keys and diffing in
+  memory**, so there is no URL length in it at all, and deletes go in chunks of
+  200 for the same reason;
+- a failed prune now **throws instead of warning**. A prune that silently does
+  not happen is precisely the failure nobody notices.
+
+The 190 orphans were deleted. The table now reads 1,226 / 1,017 / 881 /
+172,594 with every row stamped 21:47:09 and `bayernmunich`, `intermilan` and
+`guimaraes` all gone.
+
+**One correction to the check-list this was verified against:**
+`tottenhamhotspur` was expected to be a stale split-identity key and is not —
+it is the LIVE canonical key (841 games, written at 21:47), because folding
+accents does not shorten "Hotspur". The genuine split-identity orphans were
+`bayernmunich` (against the live `bayernmunchen`) and `intermilan` (against the
+live `inter`).
+
 ## 7. Tracking the small leagues would NOT cover European ties
 
 Asked on 19 Aug 2026: can we track the extra leagues so European ties are
