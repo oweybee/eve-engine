@@ -32,6 +32,56 @@ pipeline on a tighter cadence (`*/5`). See "In-play signals" below.
 
 ---
 
+## The ELO forecast, and what it refuses to say
+
+`.github/workflows/elo-forecasts.yml` runs `computeEloForecasts.js` twice a day
+(05:10 and 15:40 UTC) and writes one row per upcoming fixture into
+`elo_forecasts`. The frontend's `/api/match-card` reads it and nothing computes
+a vector of its own — the engine writes the verdict, the surface reads it.
+
+Twice a day rather than every tick is a property of the inputs: a rating only
+moves when a result settles, the league offsets only move on a refit, and the
+draw model's parameters are fitted constants. Between settlements it is the same
+number recomputed.
+
+**Three things have to hold before a fixture gets a forecast**, and each is
+owned by exactly one place:
+
+| Question | Owner |
+| --- | --- |
+| Do both clubs have a rating? | `team_elo`, written by `computeElo.js` from `elo_corpus` |
+| Can the two ratings be compared? | `fixture_placement` → `lib/leagueStrength.js` |
+| What is the 1X2 vector? | `lib/eloProbs.js`, over the adjusted pair |
+
+A rating is only meaningful inside the pool it was earned in — ELO is zero-sum
+within a match, so a set of clubs that only plays itself never leaves the
+default. Migration 077 fits one offset per league so two pools can be compared;
+15 leagues have no cross-league fixture anywhere in the record and get no
+offset at all.
+
+**A refusal is a row, and it names the club.** `status = 'withheld'` carries a
+`withheld_code` and a `withheld_reason`, and the database rejects a withheld row
+that has neither. Same shape as `value_signals.score_withheld_reason` and
+`/api/inplay`'s source block: "we have no forecast for this" and "nobody asked
+about this fixture" are different facts, and three features in this product
+shipped silently dead when they were confused.
+
+**It never defaults a rating.** `eloProbs` returns null for a missing side
+rather than substituting 1500 — a defaulted rating is the absence of a forecast
+wearing a number, and it would be scored as though it were a read.
+
+`node computeEloForecasts.js --dry-run` prints the tally without writing. As of
+19 Aug 2026: 8,967 forecasts, 124 withheld for a missing rating, 10 unplaceable,
+across 9,101 upcoming fixtures.
+
+**A caution for anyone reading `team_elo` in JS.** `elo` is `numeric`, and
+PostgREST serialises numeric as a JSON **string**. `Number.isFinite(row.elo)` is
+therefore false for every row — coerce first, then check. Written the wrong way
+round it produces an empty ratings map, a full table of confident-looking
+refusals, and a run that reports success.
+
+---
+
 ## In-play signals
 
 The pre-match engine and the in-play engine are **separate pipelines that share
