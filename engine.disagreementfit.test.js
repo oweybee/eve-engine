@@ -239,3 +239,42 @@ test('a well-sampled corpus keeps every point — the floor only ever merges', (
   }
   assert.deepStrictEqual(edgesWithMinSample(sel, 1, 10), bandsOf(1));
 });
+
+test('MARKET_ANCHORED is sharp-vs-consensus, with no forecast in it', () => {
+  const { selectionsFrom } = require('./lib/disagreementFit');
+  const row = {
+    id: 1, match_date: '2021-01-01', home_tid: 1, away_tid: 2, ftr: 'H',
+    // Pinnacle shorter on the home side than the crowd — the architecture's
+    // own claim, that the sharp book has it right and the crowd has not.
+    odds: { PSCH: 2.00, PSCD: 3.40, PSCA: 3.60, AvgCH: 2.20, AvgCD: 3.30, AvgCA: 3.40 },
+    p_home: 0.5, p_draw: 0.27, p_away: 0.23,
+  };
+  const { MARKET_ANCHORED } = selectionsFrom([row], {}, { minGames: 0 });
+  assert.strictEqual(MARKET_ANCHORED.length, 3);
+  // The MODEL side is Pinnacle de-vigged; the MARKET side is the consensus.
+  // Pinnacle is shorter on home, so its probability must be the higher one.
+  assert.ok(MARKET_ANCHORED[0].modelP > MARKET_ANCHORED[0].marketP,
+    'the sharp book is the model side');
+  for (const s of MARKET_ANCHORED) {
+    assert.ok(Number.isFinite(s.modelP) && Number.isFinite(s.marketP));
+  }
+  const mSum = MARKET_ANCHORED.reduce((t, s) => t + s.modelP, 0);
+  const kSum = MARKET_ANCHORED.reduce((t, s) => t + s.marketP, 0);
+  assert.ok(Math.abs(mSum - 1) < 1e-9, `model vector sums to one (${mSum})`);
+  assert.ok(Math.abs(kSum - 1) < 1e-9, `market vector sums to one (${kSum})`);
+});
+
+test('MARKET_ANCHORED is SKIPPED when the consensus is missing, never faked', () => {
+  const { selectionsFrom } = require('./lib/disagreementFit');
+  const row = {
+    id: 1, match_date: '2021-01-01', home_tid: 1, away_tid: 2, ftr: 'H',
+    odds: { PSCH: 2.0, PSCD: 3.4, PSCA: 3.6 },   // no AvgC* at all
+    p_home: 0.5, p_draw: 0.27, p_away: 0.23,
+  };
+  const out = selectionsFrom([row], {}, { minGames: 0 });
+  assert.strictEqual(out.MARKET_ANCHORED.length, 0);
+  // The forecasting models still measure — one model's missing input must not
+  // cost the others their rows.
+  assert.strictEqual(out.DIXON_COLES.length, 3);
+  assert.strictEqual(out.ELO.length, 3);
+});

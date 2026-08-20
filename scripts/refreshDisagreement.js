@@ -110,9 +110,15 @@ async function refit() {
 
   const sel = selectionsFrom(corpus, eloParams);
 
-  const MIN_GAP = { DIXON_COLES: 0.06, ELO: 0.10 };
+  // The publishable bar per model. MARKET_ANCHORED has never had one: it is
+// being MEASURED here for the first time, so it is deliberately parked at 1 —
+// a bar nothing can clear — until its own count-vs-Brier picture is read.
+// Publishing a record the moment it exists is how a number nobody has looked
+// at reaches a match card.
+const MIN_GAP = { DIXON_COLES: 0.06, ELO: 0.10, MARKET_ANCHORED: 1 };
+const MODELS = ['DIXON_COLES', 'ELO', 'MARKET_ANCHORED'];
   const result = {};
-  for (const model of ['DIXON_COLES', 'ELO']) {
+  for (const model of MODELS) {
     // PER MODEL, because the two corpora differ in size and the point where a
     // per-point band stops being a measurement is a property of the sample.
     const edges = VERIFY
@@ -137,7 +143,7 @@ async function refit() {
     if (error) throw new Error(`live read: ${error.message}`);
     console.log('\n  [verify] recomputed vs published');
     let mismatches = 0;
-    for (const model of ['DIXON_COLES', 'ELO']) {
+    for (const model of MODELS) {
       for (const b of result[model]) {
         const pub = live.find(l => l.model === model && l.gap_bucket === b.gap_bucket);
         const same = pub && Number(pub.n) === b.n
@@ -157,7 +163,7 @@ async function refit() {
   }
 
   const rows = [];
-  for (const model of ['DIXON_COLES', 'ELO']) {
+  for (const model of MODELS) {
     for (const b of result[model]) {
       rows.push({ ...b, model, min_publishable_gap: MIN_GAP[model], computed_at: new Date().toISOString() });
     }
@@ -166,7 +172,7 @@ async function refit() {
   // the old ones behind would let `bucketFor` match a stale band that overlaps
   // a new one.
   const { error: delErr } = await supabase
-    .from('disagreement_calibration').delete().in('model', ['DIXON_COLES', 'ELO']);
+    .from('disagreement_calibration').delete().in('model', MODELS);
   if (delErr) throw new Error(`clear: ${delErr.message}`);
   const { error: insErr } = await supabase.from('disagreement_calibration').insert(rows);
   if (insErr) throw new Error(`insert: ${insErr.message}`);
