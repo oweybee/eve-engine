@@ -23,6 +23,7 @@
 
 const https            = require('https');
 const { createClient } = require('@supabase/supabase-js');
+const { inChunks, pageAll } = require('./lib/pagedRead');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -93,6 +94,55 @@ async function httpGet(path, retries = 3, baseDelayMs = 60_000) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+/**
+ * Wall-clock budget, seconds. MUST stay under the step's `timeout-minutes`,
+ * because being killed is not the same as stopping.
+ *
+ * This ran 191 matches at ~2s each — two API calls with a 300ms sleep apiece —
+ * against a 2-minute step timeout, so it was SIGKILLed every run partway
+ * through. Two things live after the loop and were therefore discarded every
+ * time: the summary line, so nothing recorded that it happened, and the
+ * `engine_plan.details_calls_used` increment, so quota reporting has never once
+ * been updated by this script. Identical to the referee-aggregate loss in
+ * fetchTeamStats.
+ */
+const BUDGET_SECONDS = parseFloat(process.env.DETAILS_BUDGET_SECONDS || '100');
+
+/**
+ * How long each kind of detail stays fresh, in minutes.
+ *
+ * Without this the budget is spent re-fetching the nearest fixtures every 15
+ * minutes and the rest of the window is never reached at all. The three differ
+ * because the underlying data does: a predictions model barely moves, a lineup
+ * changes right up to kickoff, and a finished match's stats are final.
+ */
+const TTL_MIN = {
+  predictions: parseFloat(process.env.DETAILS_TTL_PREDICTIONS_MIN || '720'),  // 12h
+  lineups:     parseFloat(process.env.DETAILS_TTL_LINEUPS_MIN     || '20'),
+  stats:       Infinity,   // final once written
+};
+
+/** fixture_id → fetched_at ms, for one detail table. Paged and chunked. */
+async function prefetchFreshness(supabase, table, fixtureIds) {
+  const rows = await inChunks(fixtureIds, 'fixture_id', table, (chunk) => supabase
+    .from(table).select('fixture_id, fetched_at').in('fixture_id', chunk));
+  const map = new Map();
+  for (const r of rows) {
+    const t = r.fetched_at ? new Date(r.fetched_at).getTime() : NaN;
+    if (!Number.isFinite(t)) continue;
+    const prev = map.get(r.fixture_id);
+    if (prev == null || t > prev) map.set(r.fixture_id, t);   // newest wins
+  }
+  return map;
+}
+
+/** Is this fixture's `kind` still inside its TTL? Absent = never fetched. */
+function isFresh(map, fixtureId, kind, now) {
+  const t = map.get(Number(fixtureId)) ?? map.get(String(fixtureId));
+  if (t == null) return false;
+  return now - t < TTL_MIN[kind] * 60_000;
+}
+
 // ---------------------------------------------------------------------------
 // Query matches to process
 //
@@ -109,16 +159,24 @@ async function queryMatches(supabase) {
   const in48h = new Date(now.getTime() + 48 * 60 * 60 * 1000).toISOString();
   const ago6h = new Date(now.getTime() -  6 * 60 * 60 * 1000).toISOString();
 
-  const { data, error } = await supabase
+  // ORDERED BY KICKOFF, and the order is the priority. Recently-completed
+  // fixtures sort first (their kickoff is in the past) and they are the only
+  // time-limited work here — a 6h window to collect final stats. Then upcoming
+  // fixtures nearest-first, which is both the most useful order and a
+  // self-healing one: a fixture 47h out that the budget never reaches today is
+  // near the front tomorrow.
+  //
+  // Paged, because the read was unbounded. 191 rows today, under the 1,000-row
+  // cap — but so was computed_values once.
+  const data = await pageAll(() => supabase
     .from('matches')
     .select('id, external_id, kickoff_at, status')
     .not('external_id', 'is', null)
     .or(
       `and(status.in.(scheduled,live),kickoff_at.lte.${in48h}),` +
       `and(status.eq.completed,kickoff_at.gte.${ago6h})`
-    );
+    ), 'kickoff_at', 'queryMatches');
 
-  if (error) throw new Error(`queryMatches: ${error.message}`);
   // Only numeric external_ids are valid API-Football fixture IDs
   return (data ?? []).filter(m => /^\d+$/.test(m.external_id ?? ''));
 }
@@ -267,21 +325,51 @@ async function main() {
     return;
   }
 
-  console.log(`[details] processing ${matches.length} match(es)`);
+  const started  = Date.now();
+  const deadline = started + BUDGET_SECONDS * 1000;
 
-  const counts = { predictions: 0, lineups: 0, stats: 0, errors: 0 };
+  // Freshness in three bulk reads, not one per fixture. Without it the budget
+  // is spent re-fetching the nearest fixtures every cycle and the rest of the
+  // 48h window is never reached.
+  const ids = matches.map(m => Number(m.external_id));
+  const [predFresh, lineFresh, statFresh] = await Promise.all([
+    prefetchFreshness(supabase, 'match_predictions', ids),
+    prefetchFreshness(supabase, 'lineups', ids),
+    prefetchFreshness(supabase, 'match_stats', ids),
+  ]);
+
+  console.log(`[details] processing ${matches.length} match(es), nearest kickoff first`);
+
+  const counts = { predictions: 0, lineups: 0, stats: 0, errors: 0, skippedFresh: 0 };
+  let processed = 0;
+  let budgetStopped = false;
 
   for (const match of matches) {
+    // STOP, DO NOT GET KILLED. The summary and the engine_plan quota update
+    // below are the whole reason: a SIGKILL discards both, and has every run.
+    if (Date.now() >= deadline) {
+      budgetStopped = true;
+      console.log(`  [budget] ${BUDGET_SECONDS}s spent — stopping after ${processed}/${matches.length} `
+                + `match(es); the rest are nearest-first next run`);
+      break;
+    }
+    processed++;
+
     const fixtureId = match.external_id;
+    const now = Date.now();
 
     if (isUpcoming(match)) {
       // Predictions
       try {
+        if (isFresh(predFresh, fixtureId, 'predictions', now)) {
+          counts.skippedFresh++;
+        } else {
         const prediction = await fetchPredictions(fixtureId);
         await sleep(300);
         if (prediction) {
           await upsertPrediction(supabase, fixtureId, prediction);
           counts.predictions++;
+        }
         }
       } catch (err) {
         counts.errors++;
@@ -290,11 +378,15 @@ async function main() {
 
       // Lineups (API returns both teams in the same response)
       try {
-        const lineupTeams = await fetchLineups(fixtureId);
-        await sleep(300);
-        for (const teamEntry of lineupTeams) {
-          await upsertLineup(supabase, fixtureId, teamEntry);
-          counts.lineups++;
+        if (isFresh(lineFresh, fixtureId, 'lineups', now)) {
+          counts.skippedFresh++;
+        } else {
+          const lineupTeams = await fetchLineups(fixtureId);
+          await sleep(300);
+          for (const teamEntry of lineupTeams) {
+            await upsertLineup(supabase, fixtureId, teamEntry);
+            counts.lineups++;
+          }
         }
       } catch (err) {
         counts.errors++;
@@ -304,12 +396,17 @@ async function main() {
     } else if (isRecentlyCompleted(match)) {
       // Match stats (API returns home team first, then away)
       try {
-        const statTeams = await fetchStats(fixtureId);
-        await sleep(300);
-        const sides = ['home', 'away'];
-        for (let i = 0; i < statTeams.length && i < 2; i++) {
-          await upsertMatchStats(supabase, fixtureId, statTeams[i], sides[i]);
-          counts.stats++;
+        // Final once written — a completed match's stats never change.
+        if (isFresh(statFresh, fixtureId, 'stats', now)) {
+          counts.skippedFresh++;
+        } else {
+          const statTeams = await fetchStats(fixtureId);
+          await sleep(300);
+          const sides = ['home', 'away'];
+          for (let i = 0; i < statTeams.length && i < 2; i++) {
+            await upsertMatchStats(supabase, fixtureId, statTeams[i], sides[i]);
+            counts.stats++;
+          }
         }
       } catch (err) {
         counts.errors++;
@@ -319,9 +416,12 @@ async function main() {
   }
 
   const totalCalls = counts.predictions + counts.lineups + counts.stats;
+  const secs = Math.round((Date.now() - started) / 1000);
   console.log(
-    `[details] predictions: ${counts.predictions}, lineups: ${counts.lineups}, ` +
-    `stats: ${counts.stats}, api_calls: ${totalCalls}, errors: ${counts.errors}`
+    `[details] done in ${secs}s — ${processed}/${matches.length} match(es), ` +
+    `predictions: ${counts.predictions}, lineups: ${counts.lineups}, ` +
+    `stats: ${counts.stats}, skippedFresh: ${counts.skippedFresh}, ` +
+    `api_calls: ${totalCalls}, errors: ${counts.errors}, budgetStopped: ${budgetStopped}`
   );
 
   // Increment details_calls_used in today's engine_plan for quota reporting
@@ -337,7 +437,12 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('[details] fatal:', err.message);
-  process.exit(1);
-});
+// Only self-execute when run directly, so the pure helpers above are testable.
+if (require.main === module) {
+  main().catch(err => {
+    console.error('[details] fatal:', err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { isFresh, prefetchFreshness, isUpcoming, isRecentlyCompleted, TTL_MIN, BUDGET_SECONDS };

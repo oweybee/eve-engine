@@ -329,7 +329,7 @@ jobs:
       - name: Fetch match details (lineups + stats)
         id: details
         continue-on-error: true
-        timeout-minutes: 2
+        timeout-minutes: 3
         run: node fetchMatchDetails.js
 
       - name: Team statistics & referee tendencies
@@ -340,7 +340,7 @@ jobs:
         # kills it, because `referee_stats` is written after the team loop and a
         # SIGKILL discards the whole aggregate and prints no summary. The
         # timeout is now the backstop it was meant to be, not the mechanism.
-        timeout-minutes: 3
+        timeout-minutes: 4
         shell: bash
         run: |
           # Rolling last-N form / corners / cards / xG per team. Run every

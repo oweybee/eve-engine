@@ -51,8 +51,14 @@ const HORIZON_DAYS = parseFloat(process.env.TEAM_STATS_HORIZON_DAYS || '3');
  * the entire referee aggregate it just spent two minutes computing — and prints
  * no summary, so nothing records that it happened. Stopping on budget writes
  * what it has and says how far it got.
+ *
+ * RAISED 100 -> 150 ON A MEASUREMENT, not a guess. At 100s, run 32383218392
+ * spent its whole resolve half on 141 of 246 fixtures and then processed just
+ * 16 of the 277 teams it had resolved — a full sweep would have taken ~17 runs.
+ * The step's timeout went to 4 minutes with it, so the budget is still the
+ * thing that stops this script and the timeout is still only a backstop.
  */
-const BUDGET_SECONDS = parseFloat(process.env.TEAM_STATS_BUDGET_SECONDS || '100');
+const BUDGET_SECONDS = parseFloat(process.env.TEAM_STATS_BUDGET_SECONDS || '150');
 
 const YELLOW_POINTS = 10;   // Betfair booking-points convention
 const RED_POINTS    = 25;

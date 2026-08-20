@@ -271,6 +271,45 @@ anything.
 doing nothing — and it is worth knowing that the older hand-rolled harnesses in
 this repo are only safe for synchronous tests.
 
+## BEING KILLED IS NOT THE SAME AS STOPPING
+
+Two engine steps were SIGKILLed at their `timeout-minutes` on every single run,
+and both had the same consequence: **the aggregate written after the loop was
+discarded, every time, silently.**
+
+`fetchTeamStats` computes the referee tally across all teams and upserts
+`referee_stats` after the team loop. It had not been written since 3 Aug.
+`fetchMatchDetails` prints its summary and increments
+`engine_plan.details_calls_used` after its loop, so quota reporting has never
+once been updated by that script — and with no summary line, nothing recorded
+that any of it had happened.
+
+Both are `continue-on-error: true`, so the job concluded success throughout.
+That is exactly how it stayed invisible for a fortnight.
+
+**The fix is a wall-clock budget under the step timeout**, so the script stops
+and writes rather than being killed mid-flight. Both now print how far they got
+and whether they stopped on budget. The timeout stays as a backstop, and the
+budget must remain strictly under it — a budget at or above the timeout is a
+budget that never fires, which is the state these were already in.
+
+**Order the work so consecutive budget-stopped runs converge.**
+`fetchTeamStats` takes teams stalest-first; `fetchMatchDetails` takes fixtures
+by kickoff, which puts recently-completed ones first (their 6h stats window is
+the only time-limited work) and is self-healing for the rest — a fixture 47h out
+that today's budget never reaches is near the front tomorrow.
+
+**And skip what is already fresh, per kind.** Without it the budget goes on
+re-fetching the nearest fixtures every 15 minutes and the far end of the window
+is never reached. The TTLs differ because the data does: a predictions model
+barely moves (12h), a lineup changes up to kickoff (20m), a finished match's
+stats are final (fetch once). A missing row must read as STALE — treating
+absence as fresh would permanently skip precisely the fixtures with no data.
+
+Measured, not guessed. `fetchTeamStats` at a 100s budget got through 141 of 246
+fixtures and 16 of 277 teams — a full sweep would have taken ~17 runs — so the
+budget went to 150s and its step timeout to 4 minutes.
+
 ## A JOB THAT STILL PROCESSES A FINISHED MATCH STILL WRITES
 
 `computed_values` is not pruned, so it accumulates. On 20 Aug 2026 it held
