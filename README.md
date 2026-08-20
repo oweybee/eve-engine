@@ -144,13 +144,43 @@ totals but 4 on h2h**. Secondary markets come from the computed_values row's own
 best-price columns, so a stale fixture still writes them; h2h needs a matching
 recent row in `odds`, which a stale fixture does not have.
 
-`pageAll(query, orderBy)` walks the whole table, and **it orders** — paging
-without an order is not paging, it is sampling with replacement. A short page
-ends the walk; an error throws rather than truncating the corpus quietly.
+`pageAll(query, orderBy, label)` walks the whole table, and **it orders** —
+paging without an order is not paging, it is sampling with replacement. Order
+on a **unique** column: a walk ordered by one with ties has the same skip-and-
+repeat hazard at every page boundary that lands inside a tie, which is why the
+first version of this fix paged `computed_values` on `match_id` (1,509 rows,
+830 distinct) and was itself wrong. A short page ends the walk; an error throws
+rather than truncating the corpus quietly.
+
+### CHUNKING A READ IS NOT EVIDENCE IT IS BOUNDED
+
+The first fix corrected the driving query and left the three prefetches, and
+that was not enough — coverage went 11 → 44 of 66 and then STOPPED, across
+three iterations of the loop. The prefetches chunk their `.in(...)` filters at
+200 ids, which answers the URL-length rule and says nothing whatever about how
+many ROWS come back. Measured on production, per 200-match chunk:
+
+    prefetchSnapshotExistence   35,159 rows ->  4,931 returned   86% discarded
+    prefetchLatestOdds           4,671 rows ->  4,078 returned   13% discarded
+
+The first of those is the one that hurt. That Set is the only thing deciding
+`open` vs `current`, so a fixture whose existence rows fell outside the
+returned 1,000 was tagged `open` again on every single run — and both
+`/api/match-card` and `/api/match-reads` read `current` only. **22 board
+fixtures could never graduate, however many times the loop ran.** `inChunks`
+now pages each chunk through `pageAll`.
+
+`prefetchLatestOdds` changed shape with it. It took the first occurrence of
+each (match, bookmaker) out of a `fetched_at DESC` result, which is "latest"
+only while the server's sort survives to the caller — and it does not once a
+read is paged by `id` ascending. It compares the timestamp now, which is
+correct under any arrival order. Getting that wrong prints a **stale price
+under a live fixture**, a failure with no shape anything downstream can detect.
 
 Two silent caps, two outages, one lesson: **a PostgREST read that returns
 "fewer rows than you expected" has not necessarily failed, and has not
-necessarily succeeded either.** Bound the request explicitly, both ways.
+necessarily succeeded either.** Bound the request explicitly, both ways — and
+check both bounds on every read, not on the one that was in the traceback.
 
 ## `available()` is two questions, and a skip is not a pass
 

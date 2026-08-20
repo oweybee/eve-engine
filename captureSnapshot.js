@@ -63,17 +63,21 @@ const PAGE_SIZE = 1000;
  *
  * ORDERED, because paging without one is not paging. Postgres may return rows
  * in any order between statements, so an unordered `.range()` walk can skip a
- * row and repeat another — the same failure the computeElo prune had.
+ * row and repeat another — the same failure the computeElo prune had. Page on
+ * a UNIQUE column: a walk ordered by a column with ties has that same hazard
+ * at every page boundary that lands inside a tie.
  *
- * @param {string} orderBy a stable, unique-enough column to page on
+ * @param {() => object} query builds a FRESH query — it is called once per page
+ * @param {string} orderBy a stable, unique column to page on
+ * @param {string} label   names the read in an error, so a throw is placeable
  */
-async function pageAll(query, orderBy) {
+async function pageAll(query, orderBy, label = 'paged read') {
   const out = [];
   for (let from = 0; ; from += PAGE_SIZE) {
     const { data, error } = await query()
       .order(orderBy, { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
-    if (error) throw new Error(`paged read (${orderBy}): ${error.message}`);
+    if (error) throw new Error(`${label}: ${error.message}`);
     if (!data?.length) break;
     out.push(...data);
     if (data.length < PAGE_SIZE) break;
@@ -81,14 +85,39 @@ async function pageAll(query, orderBy) {
   return out;
 }
 
-/** Run `fn` over `ids` in IN_CHUNK-sized batches and concatenate the rows. */
-async function inChunks(ids, fn) {
+/**
+ * Run a query over `ids` in IN_CHUNK-sized batches, PAGING EACH BATCH, and
+ * concatenate the rows.
+ *
+ * THE TWO CAPS ARE INDEPENDENT AND BOTH BITE HERE. Chunking answers the URL
+ * length limit — 200 ids keeps a request line under ~8KB. It says nothing
+ * about how many ROWS come back, and these tables hold many rows per match:
+ * measured 20 Aug 2026, one 200-match chunk of `odds_snapshots` over 7 days is
+ * ~8,900 rows against a 1,000-row cap, so 86% of the existence data was being
+ * discarded on every run. That Set is what decides `open` vs `current`, so 22
+ * board fixtures could never graduate out of `open` however many times the
+ * loop ran — and /api/match-card and /api/match-reads read `current` only.
+ *
+ * Chunking a read is therefore not evidence it is bounded. Bound it both ways.
+ *
+ * @param {string[]} ids
+ * @param {string}   orderBy unique column to page each chunk on
+ * @param {string}   label   names the read in an error
+ * @param {(chunk: string[]) => object} buildQuery builds a FRESH query per page
+ */
+async function inChunks(ids, orderBy, label, buildQuery) {
   const out = [];
   for (let i = 0; i < ids.length; i += IN_CHUNK) {
-    const rows = await fn(ids.slice(i, i + IN_CHUNK));
-    if (rows?.length) out.push(...rows);
+    const chunk = ids.slice(i, i + IN_CHUNK);
+    out.push(...await pageAll(() => buildQuery(chunk), orderBy, label));
   }
   return out;
+}
+
+/** Epoch ms for a timestamp, or -Infinity if it cannot be read as one. */
+function tsOf(v) {
+  const t = v == null ? NaN : new Date(v).getTime();
+  return Number.isFinite(t) ? t : -Infinity;
 }
 
 const OUTCOMES = ['home', 'draw', 'away'];
@@ -140,15 +169,14 @@ function edgeBucket(edge) {
  * @returns {Promise<Set<string>>}
  */
 async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
-  const data = await inChunks(matchIds, async (chunk) => {
-    const { data: rows, error } = await supabase
+  // `id` and not `captured_at`: a whole cycle's rows share a timestamp to the
+  // millisecond, so paging on it would straddle a tie at every boundary.
+  const data = await inChunks(matchIds, 'id', 'prefetchSnapshotExistence',
+    (chunk) => supabase
       .from('odds_snapshots')
-      .select('match_id')
+      .select('id, match_id')
       .in('match_id', chunk)
-      .gte('captured_at', since7dIso);
-    if (error) throw new Error(`prefetchSnapshotExistence: ${error.message}`);
-    return rows;
-  });
+      .gte('captured_at', since7dIso));
 
   // Deduplicate in JS — we only need existence, not row count.
   return new Set(data.map(r => r.match_id));
@@ -157,10 +185,16 @@ async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
 /**
  * Latest h2h odds row per (match_id, bookmaker) for all provided matches.
  *
- * Fetches all h2h rows from the last 48 hours in descending fetched_at order.
- * The first occurrence of each (match_id, bookmaker) key in the result is the
- * most recent row — this is the JavaScript equivalent of DISTINCT ON.
- * 48 hours is sufficient because ingestOdds runs at least hourly.
+ * Fetches all h2h rows from the last 48 hours and keeps the latest per
+ * (match_id, bookmaker). 48 hours is sufficient because ingestOdds runs at
+ * least hourly.
+ *
+ * IT COMPARES `fetched_at` RATHER THAN TRUSTING ARRIVAL ORDER. This used to
+ * take the first occurrence of each key out of a `fetched_at DESC` result,
+ * which is only "latest" while the server's order survives to here — and it
+ * does not once a read is paged, because pages are walked by `id` ascending.
+ * A max is correct under any arrival order, which is the property worth having
+ * whatever the transport does next.
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string[]} matchIds
@@ -169,27 +203,24 @@ async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
  *   Outer key: matchId.  Inner key: bookmaker.  Value: odds row.
  */
 async function prefetchLatestOdds(supabase, matchIds, since48hIso) {
-  // Ordered WITHIN each chunk, which is all the DISTINCT ON below needs: the
-  // map is keyed by (match, bookmaker) and a match lives in exactly one chunk,
-  // so a row can only ever be compared against its own match's rows.
-  const data = await inChunks(matchIds, async (chunk) => {
-    const { data: rows, error } = await supabase
+  const data = await inChunks(matchIds, 'id', 'prefetchLatestOdds',
+    (chunk) => supabase
       .from('odds')
-      .select('match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
+      .select('id, match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
       .in('match_id', chunk)
       .eq('market', 'h2h')
-      .gte('fetched_at', since48hIso)
-      .order('fetched_at', { ascending: false });
-    if (error) throw new Error(`prefetchLatestOdds: ${error.message}`);
-    return rows;
-  });
+      .gte('fetched_at', since48hIso));
 
   const map = new Map();
   for (const row of data) {
     if (!map.has(row.match_id)) map.set(row.match_id, new Map());
     const byBook = map.get(row.match_id);
-    // First occurrence = latest (DESC order). Never overwrite.
-    if (!byBook.has(row.bookmaker)) byBook.set(row.bookmaker, row);
+    const held = byBook.get(row.bookmaker);
+    // Keep the later quote. An unparseable timestamp loses to a real one and
+    // ties keep the incumbent, so the map never holds a row we cannot date.
+    if (!held || tsOf(row.fetched_at) > tsOf(held.fetched_at)) {
+      byBook.set(row.bookmaker, row);
+    }
   }
   return map;
 }
@@ -210,14 +241,14 @@ async function prefetchLatestOdds(supabase, matchIds, since48hIso) {
  * @returns {Promise<{existingRecsMap: Map<string, Set<string>>, openRecsForClv: Map<string, object[]>}>}
  */
 async function prefetchRecommendations(supabase, matchIds) {
-  const data = await inChunks(matchIds, async (chunk) => {
-    const { data: rows, error } = await supabase
+  // 451 rows across the whole table today, well under the cap — paged anyway,
+  // because "small enough right now" is exactly what `computed_values` was
+  // until it passed a thousand rows and started dropping them in silence.
+  const data = await inChunks(matchIds, 'id', 'prefetchRecommendations',
+    (chunk) => supabase
       .from('recommendations')
       .select('id, match_id, selection, recommended_odds, clv_pct')
-      .in('match_id', chunk);
-    if (error) throw new Error(`prefetchRecommendations: ${error.message}`);
-    return rows;
-  });
+      .in('match_id', chunk));
 
   const existingRecsMap = new Map();
   const openRecsForClv  = new Map();
@@ -249,7 +280,7 @@ async function run() {
   const rows = await pageAll(() => supabase
     .from('computed_values')
     .select(`
-      match_id, best_outcome, confidence_score, max_edge_score,
+      id, match_id, best_outcome, confidence_score, max_edge_score,
       best_home_odds, best_draw_odds, best_away_odds,
       best_home_book, best_draw_book, best_away_book,
       home_edge, draw_edge, away_edge,
@@ -259,7 +290,7 @@ async function run() {
       corners_over_odds, corners_under_odds,
       bookings_over_odds, bookings_under_odds,
       match:matches ( kickoff_at, league:leagues ( name ) )
-    `), 'match_id');
+    `), 'id', 'computed_values');
 
   if (!rows?.length) {
     console.log('[snapshot] no computed_values rows — nothing to snapshot');
@@ -449,4 +480,6 @@ if (require.main === module) {
   run().catch(err => { console.error('[snapshot] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, edgeBucket, inChunks, IN_CHUNK, pageAll, PAGE_SIZE };
+module.exports = {
+  run, edgeBucket, inChunks, IN_CHUNK, pageAll, PAGE_SIZE, prefetchLatestOdds,
+};
