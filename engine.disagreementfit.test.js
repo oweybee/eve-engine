@@ -151,7 +151,9 @@ test('THE ELO VECTOR IS READ BY ITS REAL FIELD NAMES', () => {
     odds: { PSCH: 2.0, PSCD: 3.4, PSCA: 3.6 },
     p_home: 0.5, p_draw: 0.27, p_away: 0.23,
   }];
-  const { ELO, DIXON_COLES } = selectionsFrom(rows, {});
+  // minGames 0: this test is about FIELD NAMES, not the maturity cohort, and
+  // a single fixture has both clubs on zero prior games.
+  const { ELO, DIXON_COLES } = selectionsFrom(rows, {}, { minGames: 0 });
   assert.strictEqual(ELO.length, 3, 'three outcomes');
   assert.strictEqual(DIXON_COLES.length, 3);
   for (const s of ELO) {
@@ -160,4 +162,25 @@ test('THE ELO VECTOR IS READ BY ITS REAL FIELD NAMES', () => {
   }
   const sum = ELO.reduce((t, s) => t + s.modelP, 0);
   assert.ok(Math.abs(sum - 1) < 1e-9, `the vector sums to one (${sum})`);
+});
+
+test('THE ELO COHORT IS THE MATURE ONE, and DIXON_COLES is not filtered', () => {
+  // docs/ELO_CALIBRATION.md §8: the fit uses home_games_pre >= 30 and
+  // away_games_pre >= 30. Evaluating on a wider cohort than the fit was built
+  // for measures a different model — it put the recomputed total at 44,820
+  // against the published 38,784. DIXON_COLES has no such notion and must keep
+  // every row, or its exact reproduction breaks.
+  const { selectionsFrom } = require('./lib/disagreementFit');
+  const odds = { PSCH: 2.0, PSCD: 3.4, PSCA: 3.6 };
+  const dc = { p_home: 0.5, p_draw: 0.27, p_away: 0.23 };
+  // Two clubs meeting repeatedly: the first fixtures are immature, later ones
+  // are not. minGames of 2 keeps the fixture small and the intent identical.
+  const rows = [];
+  for (let i = 1; i <= 5; i++) {
+    rows.push({ id: i, match_date: `2021-01-0${i}`, home_tid: 1, away_tid: 2, ftr: 'H', odds, ...dc });
+  }
+  const { ELO, DIXON_COLES } = selectionsFrom(rows, {}, { minGames: 2 });
+  // Fixtures 3, 4, 5 have both clubs on 2+ prior games. 1 and 2 do not.
+  assert.strictEqual(ELO.length, 3 * 3, 'only the mature fixtures are evaluated');
+  assert.strictEqual(DIXON_COLES.length, 5 * 3, 'every fixture counts for the goals model');
 });
