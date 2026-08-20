@@ -262,3 +262,72 @@ test('books are kept apart — one stale book cannot hide another', async () => 
   assert.strictEqual(map.get('m1').size, 2);
   assert.strictEqual(map.get('m1').get('bet365').home_odds, 2.10);
 });
+
+/* ── captured_at IS THE ROW'S TIMESTAMP, not the row's birthday ───────────
+   It was a column default, so it was written on INSERT and never again —
+   while `odds` and `snapshot_type` ARE overwritten, because the upsert
+   conflicts on (match, book, selection, market, hour_bucket) and every re-run
+   inside the same hour lands on the same physical row. The row carried the
+   LATEST price under the FIRST time it was seen.
+
+   That cost two false readings on 20 Aug 2026 in opposite directions: a cycle
+   that promoted 22 fixtures open -> current in place reported "5 fixtures
+   written" (only 5 rows were new), and a query asking when each fixture first
+   reached `current` answered with the rows' creation stamps. */
+
+const { snapshotRow } = require('./captureSnapshot');
+
+const stampOf = (iso, snapType = 'current') => ({
+  snapType, hourBucket: Math.floor(Date.parse(iso) / 3_600_000), capturedAt: iso,
+});
+
+test('EVERY SNAPSHOT ROW CARRIES ITS OWN captured_at', () => {
+  const at = '2026-08-20T12:51:00.000Z';
+  const row = snapshotRow({
+    matchId: 'm1', marketType: 'h2h', selection: 'home',
+    bookmaker: 'pinnacle', odds: 2.5, stamp: stampOf(at),
+  });
+  assert.strictEqual(row.captured_at, at,
+    'without this the upsert leaves the timestamp at the first write of the hour');
+});
+
+test('BOTH MARKETS GET THE STAMP — one builder, so neither can be missed', () => {
+  // The bug was per-call-site: two near-identical payload literals, and a
+  // field absent from both. A shared builder makes that shape impossible.
+  const at = '2026-08-20T12:51:00.000Z';
+  const stamp = stampOf(at, 'open');
+  for (const marketType of ['h2h', 'totals', 'btts']) {
+    const row = snapshotRow({
+      matchId: 'm1', marketType, selection: 'over', bookmaker: 'best',
+      odds: 1.9, stamp,
+    });
+    assert.strictEqual(row.captured_at, at, marketType);
+    assert.strictEqual(row.snapshot_type, 'open', marketType);
+    assert.strictEqual(row.hour_bucket, stamp.hourBucket, marketType);
+  }
+});
+
+test('the row carries exactly the upsert conflict key, and nothing stray', () => {
+  const row = snapshotRow({
+    matchId: 'm1', marketType: 'h2h', selection: 'home',
+    bookmaker: 'pinnacle', odds: 2.5, stamp: stampOf('2026-08-20T12:51:00.000Z'),
+  });
+  // onConflict: match_id,bookmaker,selection,market_type,hour_bucket
+  for (const k of ['match_id', 'bookmaker', 'selection', 'market_type', 'hour_bucket']) {
+    assert.ok(row[k] != null, `conflict key ${k} is absent — the upsert would insert duplicates`);
+  }
+  assert.deepStrictEqual(Object.keys(row).sort(), [
+    'bookmaker', 'captured_at', 'hour_bucket', 'market_type',
+    'match_id', 'odds', 'selection', 'snapshot_type',
+  ]);
+});
+
+test('captured_at AND hour_bucket AGREE — same instant, not two clocks', () => {
+  // A DB trigger's now() would fire at statement time, so a batch crossing the
+  // hour boundary would stamp a row into the next hour while its bucket says
+  // this one. Both fields derive from the one `now` the cycle chose.
+  const now = Date.UTC(2026, 7, 20, 12, 59, 59, 900);
+  const hourBucket = Math.floor(now / 3_600_000);
+  const capturedAt = new Date(now).toISOString();
+  assert.strictEqual(Math.floor(Date.parse(capturedAt) / 3_600_000), hourBucket);
+});

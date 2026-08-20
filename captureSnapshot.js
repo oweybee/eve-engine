@@ -120,6 +120,28 @@ function tsOf(v) {
   return Number.isFinite(t) ? t : -Infinity;
 }
 
+/**
+ * One odds_snapshots row.
+ *
+ * `stamp` carries the three fields every row in a cycle shares — the tag, the
+ * bucket and the instant — so a call site cannot supply two of them and forget
+ * the third. That is not hypothetical: `captured_at` was missing from both
+ * payloads for the life of the file, which left the upsert updating the price
+ * and the tag while the timestamp stayed at the row's first write.
+ */
+function snapshotRow({ matchId, marketType, selection, bookmaker, odds, stamp }) {
+  return {
+    match_id:      matchId,
+    market_type:   marketType,
+    selection,
+    bookmaker,
+    odds,
+    snapshot_type: stamp.snapType,
+    hour_bucket:   stamp.hourBucket,
+    captured_at:   stamp.capturedAt,
+  };
+}
+
 const OUTCOMES = ['home', 'draw', 'away'];
 const ODDS_COL = { home: 'home_odds', draw: 'draw_odds', away: 'away_odds' };
 
@@ -303,6 +325,33 @@ async function run() {
   const now        = Date.now();
   const hourBucket = Math.floor(now / 3_600_000);
 
+  // THE ROW'S TIMESTAMP MUST BE THE ROW'S TIMESTAMP.
+  //
+  // `captured_at` was a column default, so it was written on INSERT and never
+  // again — while `odds` and `snapshot_type` ARE overwritten, because the
+  // upsert below conflicts on (match, book, selection, market, hour_bucket)
+  // and every re-run inside the same hour lands on the same physical row. The
+  // row therefore carried the LATEST price under the FIRST time it was seen,
+  // and nothing about it looked wrong.
+  //
+  // It cost two false readings on 20 Aug 2026, in opposite directions. A cycle
+  // that promoted 22 fixtures from `open` to `current` in place reported "5
+  // fixtures written", because only 5 rows were new. And a query asking when
+  // each fixture first reached `current` answered 12:25–12:27 for all of them,
+  // which is when the ROWS were created, not when they were tagged — evidence
+  // that looked strong enough to retract a correct result over.
+  //
+  // Stamped from the SAME `now` that derives hour_bucket, deliberately, and
+  // not from a DB trigger's now(): a batch that crosses the hour boundary
+  // would otherwise stamp a row into the next hour while its bucket says this
+  // one, and those two fields have to agree.
+  //
+  // NOT BACKFILLED. Every existing row's last-write time is unrecoverable, and
+  // inventing one would put noise on the only price history the product has —
+  // the same ruling as `gap_basis`. Rows written before this change mean
+  // "first seen"; rows after mean "last confirmed".
+  const capturedAt = new Date(now).toISOString();
+
   const matchIds = [...new Set(rows.map(r => r.match_id).filter(Boolean))];
 
   const since48hIso = new Date(now - 48 * 60 * 60 * 1000).toISOString();
@@ -343,6 +392,10 @@ async function run() {
       snapType = 'open';
     }
 
+    // What every row this fixture writes shares. snapType varies per fixture;
+    // the bucket and the instant are the cycle's and are the same throughout.
+    const stamp = { snapType, hourBucket, capturedAt };
+
     // ── 2. Depth rows — O(1) Map lookup, zero DB calls ───────────────────────
     const byBook    = latestOddsMap.get(r.match_id) ?? new Map();
     const depthRows = [];
@@ -351,15 +404,10 @@ async function run() {
       for (const [, br] of byBook) {
         const px = parseFloat(br[ODDS_COL[o]]);
         if (!Number.isFinite(px) || px <= 1) continue;
-        depthRows.push({
-          match_id:      r.match_id,
-          market_type:   'h2h',
-          selection:     o,
-          bookmaker:     br.bookmaker,
-          odds:          px,
-          snapshot_type: snapType,
-          hour_bucket:   hourBucket,
-        });
+        depthRows.push(snapshotRow({
+          matchId: r.match_id, marketType: 'h2h', selection: o,
+          bookmaker: br.bookmaker, odds: px, stamp,
+        }));
       }
     }
 
@@ -367,15 +415,10 @@ async function run() {
     for (const s of SECONDARY_SNAP) {
       const px = parseFloat(r[s.col]);
       if (!Number.isFinite(px) || px <= 1) continue;
-      depthRows.push({
-        match_id:      r.match_id,
-        market_type:   s.market,
-        selection:     s.selection,
-        bookmaker:     'best',
-        odds:          px,
-        snapshot_type: snapType,
-        hour_bucket:   hourBucket,
-      });
+      depthRows.push(snapshotRow({
+        matchId: r.match_id, marketType: s.market, selection: s.selection,
+        bookmaker: 'best', odds: px, stamp,
+      }));
     }
 
     if (depthRows.length) {
@@ -482,4 +525,5 @@ if (require.main === module) {
 
 module.exports = {
   run, edgeBucket, inChunks, IN_CHUNK, pageAll, PAGE_SIZE, prefetchLatestOdds,
+  snapshotRow,
 };

@@ -182,6 +182,47 @@ Two silent caps, two outages, one lesson: **a PostgREST read that returns
 necessarily succeeded either.** Bound the request explicitly, both ways — and
 check both bounds on every read, not on the one that was in the traceback.
 
+## AN UPSERT UPDATES THE VALUE AND NOT THE DEFAULT
+
+`odds_snapshots.captured_at` was a column default. A default is evaluated on
+INSERT and never again — while `odds` and `snapshot_type` **are** overwritten,
+because `captureSnapshot` upserts on
+`(match_id, bookmaker, selection, market_type, hour_bucket)` and every re-run
+inside the same hour lands on the same physical row. So the row carried the
+**latest price under the first time it was seen**, and nothing about it looked
+wrong from either end.
+
+It produced two false readings on 20 Aug 2026, in opposite directions, within
+half an hour of each other:
+
+* a cycle that promoted 22 fixtures from `open` to `current` **in place**
+  reported "5 fixtures written", because only 5 rows were new;
+* a query asking when each fixture first reached `current` answered
+  12:25–12:27 for all 66 — the rows' creation stamps, not their tagging — and
+  that looked like strong enough evidence to retract a correct result over.
+
+Both are the same mistake: **`captured_at` was answering a question about the
+row's birth while every other column answered one about its present.**
+
+Fixed at the write layer. `snapshotRow()` is the single declaration of the row
+shape, and it takes a `stamp` carrying the tag, the bucket and the instant
+together, so no call site can supply two and forget the third — which is
+precisely how the field went missing from two near-identical payload literals.
+
+**Stamped from the app's `now`, deliberately not from a trigger's.** A trigger
+fires at statement time, so a batch crossing the hour boundary would stamp a
+row into the next hour while its `hour_bucket` says this one. Those two fields
+have to agree, and only the caller knows the instant it meant.
+
+**Not backfilled.** Every existing row's last-write time is unrecoverable and
+inventing one would put noise on the only price history the product has — the
+same ruling as `gap_basis`. Rows written before this change mean *first seen*;
+rows after mean *last confirmed*. Anything reasoning about quote age across
+that boundary is reading two different columns with one name.
+
+The sibling rule already in this file: **`odds` is a price-CHANGE log, not a
+poll log** — never infer polling frequency or quote age from its timestamps.
+
 ## `available()` is two questions, and a skip is not a pass
 
 `lib/lambdaBoard.available()` checked that the three λ-model artifacts were on
