@@ -201,6 +201,41 @@ fetched** — "OK — 1000 computed rows" reads as a thousand rows verified when
 the real figure was ~116, so the log now prints both. And **a client-side
 `.limit()` is never evidence a read is bounded**; only paging is.
 
+## BEING KILLED IS NOT STOPPING
+
+`fetchTeamStats` resolved teams for EVERY scheduled match — **9,152** of them on
+20 Aug 2026, one HTTP call plus a 120ms sleep each — before any team work began.
+The workflow step kills it at its timeout, so it never reached the team loop:
+**`team_statistics` had not been written since 6 Aug**, a fortnight, while the
+step's own comment claimed the cadence had been fixed so stats would populate.
+They did not. A step that runs, burns two minutes and is killed looks identical
+to one that works.
+
+Only **242** of those 9,152 kick off inside three days. The run spent its whole
+budget on fixtures weeks away and died before the ones a reader is about to
+look at.
+
+**A SIGKILL DISCARDS THE WORK.** `referee_stats` is written AFTER the team loop,
+so being killed at the timeout throws away the entire aggregate the run just
+computed — and prints no summary, so nothing records that it happened. The
+script holds its own `BUDGET_SECONDS` (100) under the step's `timeout-minutes`
+(3) now, and **the order of those two numbers is the guard** — pinned by a test,
+because lowering the timeout to the budget silently restores the data loss.
+
+Three other things came with it, and each is load-bearing:
+
+* **The horizon is bounded** to `TEAM_STATS_HORIZON_DAYS` (3) and ordered
+  nearest-kickoff-first, so the budget is spent on fixtures that matter.
+* **Freshness is one read, not one per team.** `isFresh` fired a query per team
+  to decide whether to make a query.
+* **Teams are worked STALEST FIRST.** Stopping partway through a stable order
+  would refresh the same head every cycle and starve the tail forever — busy,
+  covering a fixed subset, and indistinguishable from working. That is the same
+  shape as the truncated reads elsewhere in this file.
+
+That match read was also unpaged, against 9,152 rows and a 1,000-row cap. It is
+the sixth instance.
+
 ## ONE REQUEST PER FIXTURE, NOT ONE PER PRICE
 
 `ingestOdds` awaited a separate `insert` for every odds row. Measured on run

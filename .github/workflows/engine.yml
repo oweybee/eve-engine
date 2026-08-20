@@ -335,7 +335,12 @@ jobs:
       - name: Team statistics & referee tendencies
         id: teamstats
         continue-on-error: true
-        timeout-minutes: 2
+        # 3m against the script's own 100s budget. THE ORDER OF THOSE TWO
+        # NUMBERS IS THE POINT: the script must stop itself before the step
+        # kills it, because `referee_stats` is written after the team loop and a
+        # SIGKILL discards the whole aggregate and prints no summary. The
+        # timeout is now the backstop it was meant to be, not the mechanism.
+        timeout-minutes: 3
         shell: bash
         run: |
           # Rolling last-N form / corners / cards / xG per team. Run every
@@ -343,6 +348,14 @@ jobs:
           # default 20h), so re-running it is cheap and it only refetches stale
           # teams. The previous wall-clock gate never aligned with the real
           # dispatch-driven cadence, so stats never populated.
+          #
+          # AND IT STILL DID NOT POPULATE THEM. Until 20 Aug 2026 the script
+          # resolved teams for EVERY scheduled match — 9,152 of them, one HTTP
+          # call plus a 120ms sleep each — before any team work began, so it was
+          # killed at the timeout every run and `team_statistics` had not been
+          # written since 6 Aug. It is bounded to a 3-day kickoff horizon now
+          # (242 fixtures, not 9,152), ordered nearest-first, and works through
+          # teams stalest-first so consecutive budget-stopped runs cover the set.
           node fetchTeamStats.js
 
       - name: Alert on pipeline failure

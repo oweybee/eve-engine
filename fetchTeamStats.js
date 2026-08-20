@@ -23,12 +23,36 @@
 
 const https         = require('https');
 const { getClient } = require('./lib/supabaseClient');
+const { pageAll } = require('./lib/pagedRead');
 
 const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY;
 const API_HOST         = 'v3.football.api-sports.io';
 const DRY_RUN          = process.argv.includes('--dry-run');
 const LAST_N           = parseInt(process.env.TEAM_STATS_LAST_N || '10', 10);
 const REFRESH_HOURS    = parseFloat(process.env.TEAM_STATS_REFRESH_HOURS || '20');
+
+/**
+ * How far ahead a fixture must kick off to be worth resolving teams for.
+ *
+ * IT USED TO BE EVERY SCHEDULED MATCH — 9,152 of them on 20 Aug 2026, each one
+ * an HTTP call plus a 120ms sleep, before ANY team work began. It never
+ * finished: the workflow step kills it at 2 minutes, and `team_statistics` had
+ * not been written since 6 Aug. Only 242 of those 9,152 kick off inside three
+ * days, so the run was spending its whole budget on fixtures weeks away and
+ * then dying before the ones that matter.
+ */
+const HORIZON_DAYS = parseFloat(process.env.TEAM_STATS_HORIZON_DAYS || '3');
+
+/**
+ * Wall-clock budget, seconds. MUST stay under the workflow step's
+ * `timeout-minutes`, because being killed is not the same as stopping.
+ *
+ * `referee_stats` is written AFTER the team loop, so a killed process discards
+ * the entire referee aggregate it just spent two minutes computing — and prints
+ * no summary, so nothing records that it happened. Stopping on budget writes
+ * what it has and says how far it got.
+ */
+const BUDGET_SECONDS = parseFloat(process.env.TEAM_STATS_BUDGET_SECONDS || '100');
 
 const YELLOW_POINTS = 10;   // Betfair booking-points convention
 const RED_POINTS    = 25;
@@ -154,17 +178,31 @@ function aggregateTeamStats(results, fxStats) {
  * resolved via its numeric fixture id.
  * @returns {Promise<Map<number, string>>} teamId → teamName
  */
-async function resolveUpcomingTeams(supabase) {
-  const { data, error } = await supabase
-    .from('matches').select('id, external_id, status').in('status', ['scheduled', 'live']);
-  if (error) throw new Error(`resolveUpcomingTeams: ${error.message}`);
+async function resolveUpcomingTeams(supabase, deadline) {
+  // BOUNDED AND ORDERED. Nearest kickoff first, because that is the fixture a
+  // reader is about to look at, and paged because 9,152 rows against
+  // PostgREST's silent 1,000-row cap took an arbitrary tenth of the slate.
+  const horizonIso = new Date(Date.now() + HORIZON_DAYS * 86_400_000).toISOString();
+  const rows = await pageAll(() => supabase
+    .from('matches')
+    .select('id, external_id, status, kickoff_at')
+    .in('status', ['scheduled', 'live'])
+    .lte('kickoff_at', horizonIso)
+    .gte('kickoff_at', new Date(Date.now() - 3 * 3_600_000).toISOString()),
+    'kickoff_at', 'matches');
 
   const teams = new Map();
-  for (const m of data ?? []) {
+  let resolved = 0, spent = 0;
+  for (const m of rows) {
+    if (Date.now() > deadline) {
+      console.log(`  [budget] resolve stopped after ${resolved}/${rows.length} fixture(s)`);
+      break;
+    }
     if (!m.external_id || !/^\d+$/.test(String(m.external_id))) continue;   // skip bf_* etc.
     try {
       const j  = await httpGet(`/fixtures?id=${m.external_id}`);
       const fx = j.response?.[0];
+      resolved++;
       if (!fx) continue;
       const ref = fx.fixture?.referee ?? null;
       if (ref && !DRY_RUN) await supabase.from('matches').update({ referee: ref }).eq('id', m.id);
@@ -172,17 +210,30 @@ async function resolveUpcomingTeams(supabase) {
         const t = fx.teams?.[side];
         if (t?.id) teams.set(t.id, t.name ?? null);
       }
+      spent++;
       await sleep(120);
     } catch (e) { console.warn(`  [warn] resolve fixture ${m.external_id}: ${e.message}`); }
   }
+  console.log(`[teamstats] resolve — ${rows.length} fixture(s) inside ${HORIZON_DAYS}d, `
+            + `${spent} polled, ${teams.size} distinct team(s)`);
   return teams;
 }
 
-async function isFresh(supabase, teamId) {
-  const { data } = await supabase
-    .from('team_statistics').select('updated_at').eq('team_id', teamId).maybeSingle();
-  if (!data?.updated_at) return false;
-  return Date.now() - new Date(data.updated_at).getTime() < REFRESH_HOURS * 3_600_000;
+/**
+ * `updated_at` for every team in one read, replacing a per-team `isFresh`
+ * query. With 400+ teams that was 400 round-trips spent deciding whether to
+ * make a round-trip.
+ * @returns {Promise<Map<number, number>>} teamId → updated_at epoch ms
+ */
+async function freshnessMap(supabase) {
+  const rows = await pageAll(() => supabase
+    .from('team_statistics').select('team_id, updated_at'), 'team_id', 'team_statistics');
+  const map = new Map();
+  for (const r of rows) {
+    const t = r.updated_at ? new Date(r.updated_at).getTime() : NaN;
+    if (Number.isFinite(t)) map.set(r.team_id, t);
+  }
+  return map;
 }
 
 async function fetchTeamWindow(teamId) {
@@ -226,15 +277,37 @@ async function main() {
   if (!API_FOOTBALL_KEY) { console.log('[teamstats] API_FOOTBALL_KEY not set — skipping'); return; }
   const supabase = getClient();
 
-  const teams = await resolveUpcomingTeams(supabase);
+  // Half the budget for resolving fixtures, half for the teams they name — so a
+  // slow resolve phase can no longer consume the entire run and leave the team
+  // loop untouched, which is exactly how this script spent two weeks writing
+  // nothing at all.
+  const started  = Date.now();
+  const deadline = started + BUDGET_SECONDS * 1000;
+  const teams = await resolveUpcomingTeams(supabase, started + BUDGET_SECONDS * 500);
   if (!teams.size) { console.log('[teamstats] no upcoming team ids resolved'); return; }
 
-  const summary = { teams: 0, skippedFresh: 0, refsUpdated: 0, errors: 0 };
+  const summary = { teams: 0, skippedFresh: 0, refsUpdated: 0, errors: 0, budgetStopped: false };
   const refereeAgg = new Map();
 
-  for (const [teamId, teamName] of teams) {
+  // STALEST FIRST, so consecutive budget-stopped runs cover the whole set
+  // instead of redoing the same head. A team never fetched sorts first.
+  const fresh = DRY_RUN ? new Map() : await freshnessMap(supabase);
+  const order = stalestFirst(teams, fresh);
+
+  for (const [teamId, teamName] of order) {
+    if (Date.now() > deadline) {
+      // STOPPING, NOT BEING KILLED. The referee aggregate below is written
+      // after this loop; a SIGKILL at the step timeout would discard it.
+      summary.budgetStopped = true;
+      console.log(`  [budget] ${BUDGET_SECONDS}s spent — stopping after ${summary.teams} team(s); `
+                + `the rest are stalest-first next run`);
+      break;
+    }
     try {
-      if (!DRY_RUN && await isFresh(supabase, teamId)) { summary.skippedFresh++; continue; }
+      const at = fresh.get(teamId);
+      if (!DRY_RUN && at != null && Date.now() - at < REFRESH_HOURS * 3_600_000) {
+        summary.skippedFresh++; continue;
+      }
 
       const { results, fxStats, refereeTally } = await fetchTeamWindow(teamId);
       const agg = aggregateTeamStats(results, fxStats);
@@ -277,8 +350,25 @@ async function main() {
     summary.refsUpdated++;
   }
 
-  console.log('[teamstats] done:', summary);
+  console.log(`[teamstats] done in ${Math.round((Date.now() - started) / 1000)}s:`, summary);
   return summary;
+}
+
+/**
+ * Teams ordered by how long since they were last written, oldest first; a team
+ * never written at all sorts ahead of every team that has been.
+ *
+ * THIS IS WHAT MAKES A BUDGET-STOPPED RUN MAKE PROGRESS. Stopping partway
+ * through a stable order would refresh the same head every cycle and starve the
+ * tail forever — the run would look busy and cover a fixed subset, which is
+ * indistinguishable from working.
+ *
+ * @param {Map<number, string>} teams teamId → teamName
+ * @param {Map<number, number>} fresh teamId → updated_at epoch ms
+ */
+function stalestFirst(teams, fresh) {
+  return [...teams.entries()]
+    .sort((a, b) => (fresh.get(a[0]) ?? -Infinity) - (fresh.get(b[0]) ?? -Infinity));
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -287,4 +377,7 @@ if (require.main === module) {
   main().catch(err => { console.error('[teamstats] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { parseFixtureResult, extractFixtureStats, statValue, aggregateTeamStats, avg };
+module.exports = {
+  parseFixtureResult, extractFixtureStats, statValue, aggregateTeamStats, avg,
+  stalestFirst, HORIZON_DAYS, BUDGET_SECONDS,
+};
