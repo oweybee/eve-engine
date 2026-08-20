@@ -16,9 +16,28 @@
  *   4. Value-flag integrity    — a selection flagged value=true must clear the
  *                                EV threshold and carry a price > 1.
  *   5. Signal self-consistency — value_signals.detected_edge ≈ model_prob·odds−1.
+ *
+ * A SMOKE ALARM THAT CANNOT SEE STILL SAYS NOTHING IS BURNING, and this file
+ * has been in that state twice. Once when its select named a column that does
+ * not exist, which errored and silently disabled the whole signal check. And
+ * again until 20 Aug 2026: both reads used `.limit(2000)`, which READS as a
+ * deliberate ceiling but is not one — PostgREST caps a response at 1,000 rows
+ * server-side and a larger client limit does not raise it. Measured against
+ * production: 1,599 rows in `computed_values`, 1,000 returned, and the run
+ * logged "OK — 1000 computed rows".
+ *
+ * That mattered more here than in the four other truncated reads fixed the
+ * same day, because those merely lost work; this one loses the CHECK. Of the
+ * 1,599 rows only 186 were live, so an arbitrary 1,000-row slice verified
+ * roughly 116 of them and missed ~70 every cycle — a different ~70 each run,
+ * since there was no `order` either. Both reads are paged through
+ * lib/pagedRead now, and the log states how many rows were CHECKED rather than
+ * how many were fetched, because those are different numbers and only one of
+ * them is the claim.
  */
 
 const { getClient } = require('./lib/supabaseClient');
+const { pageAll } = require('./lib/pagedRead');
 
 const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD || '0.005');
 const EDGE_CAP     = parseFloat(process.env.INTEGRITY_EDGE_CAP || '0.30'); // 30%
@@ -59,11 +78,31 @@ async function checkComputedValues(supabase, violations) {
     ...new Set(SELECTIONS.flatMap(s => [s[0], s[1], s[2], s[3]].filter(Boolean))),
     'btts_model_prob', 'corners_model_prob', 'bookings_model_prob',
   ];
-  const { data, error } = await supabase
-    .from('computed_values')
-    .select([...new Set(cols)].join(',') + ',match:matches(status,kickoff_at)')
-    .limit(2000);
-  if (error) { violations.push(`[query] computed_values: ${error.message}`); return 0; }
+  // `.limit(2000)` DID NOT DO WHAT IT LOOKED LIKE. PostgREST caps a response at
+  // 1,000 rows server-side and a larger client limit does not raise it — the
+  // cap simply wins, in silence. Measured 20 Aug 2026: 1,599 rows in the table,
+  // 1,000 returned, and the run printed "OK — 1000 computed rows".
+  //
+  // A LIMIT THAT LOOKS DELIBERATE IS WORSE THAN NONE. The other four truncated
+  // reads in this repo had no bound at all, which at least reads as an
+  // oversight; this one reads as a considered ceiling that someone chose.
+  //
+  // And it matters most HERE. This file is the smoke alarm — a truncated read
+  // makes it report "no violations" while never looking at the rows. Only 186
+  // of those 1,599 are live, so an arbitrary 1,000-row slice checked roughly
+  // 116 of them and missed ~70 EVERY CYCLE, a different ~70 each run because
+  // there was no order either. This file has already had one silent-disabling
+  // bug (see checkSignals below); that is the failure mode to design against.
+  let data;
+  try {
+    data = await pageAll(() => supabase
+      .from('computed_values')
+      .select([...new Set(cols)].join(',') + ',match:matches(status,kickoff_at)'),
+      'id', 'computed_values');
+  } catch (e) {
+    violations.push(`[query] computed_values: ${e.message}`);
+    return { fetched: 0, checked: 0 };
+  }
 
   let checked = 0;
   for (const row of data ?? []) {
@@ -100,7 +139,11 @@ async function checkComputedValues(supabase, violations) {
       }
     }
   }
-  return data?.length ?? 0;
+  // BOTH NUMBERS, because they answer different questions. `fetched` is how
+  // much of the table was read; `checked` is how much was actually verified.
+  // The old log printed the fetched count alone — "OK — 1000 computed rows" —
+  // which reads as a thousand rows verified when the real figure was ~116.
+  return { fetched: data?.length ?? 0, checked };
 }
 
 async function checkSignals(supabase, violations) {
@@ -108,12 +151,21 @@ async function checkSignals(supabase, violations) {
   // detected_odds, from which the implied model probability is (edge+1)/odds.
   // (The previous select of a non-existent model_prob column errored, silently
   // disabling the entire signal check.)
-  const { data, error } = await supabase
-    .from('value_signals')
-    .select('id, market, outcome, detected_edge, detected_odds')
-    .eq('result', 'pending')
-    .limit(2000);
-  if (error) { violations.push(`[query] value_signals: ${error.message}`); return 0; }
+  // Paged for the same reason, though it is not truncated TODAY: 20 pending
+  // signals against the 1,000 cap. An unbounded read that happens to fit is
+  // still unbounded, and `computed_values` was comfortably under a thousand
+  // once too.
+  let data;
+  try {
+    data = await pageAll(() => supabase
+      .from('value_signals')
+      .select('id, market, outcome, detected_edge, detected_odds')
+      .eq('result', 'pending'),
+      'id', 'value_signals');
+  } catch (e) {
+    violations.push(`[query] value_signals: ${e.message}`);
+    return 0;
+  }
 
   for (const s of data ?? []) {
     const tag = `signal ${String(s.id).slice(0, 8)} ${s.market}/${s.outcome}`;
@@ -147,15 +199,16 @@ async function run() {
   const supabase = getClient();
   const violations = [];
 
-  const cvN = await checkComputedValues(supabase, violations);
+  const cv = await checkComputedValues(supabase, violations);
   const sigN = await checkSignals(supabase, violations);
 
+  const scope = `${cv.checked} live of ${cv.fetched} computed row(s), ${sigN} pending signal(s)`;
   if (violations.length) {
-    console.error(`[integrity] ${violations.length} VIOLATION(S) across ${cvN} computed rows / ${sigN} signals:`);
+    console.error(`[integrity] ${violations.length} VIOLATION(S) across ${scope}:`);
     for (const v of violations) console.error(`  ✗ ${v}`);
     await postAlert(violations);
   } else {
-    console.log(`[integrity] OK — ${cvN} computed rows, ${sigN} pending signals, no violations`);
+    console.log(`[integrity] OK — ${scope}, no violations`);
   }
   return violations.length;
 }
@@ -164,4 +217,4 @@ if (require.main === module) {
   run().then(n => process.exit(0)).catch(err => { console.error('[integrity] unhandled:', err); process.exit(0); });
 }
 
-module.exports = { run };
+module.exports = { run, checkComputedValues, checkSignals, isLive };

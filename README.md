@@ -182,6 +182,25 @@ Two silent caps, two outages, one lesson: **a PostgREST read that returns
 necessarily succeeded either.** Bound the request explicitly, both ways — and
 check both bounds on every read, not on the one that was in the traceback.
 
+### A `.limit()` LARGER THAN THE CAP IS NOT A BOUND
+
+`verifyIntegrity.js` read both its tables with `.limit(2000)`. That reads as a
+considered ceiling and is not one: the server cap of 1,000 simply wins, in
+silence. It is the worst of the five instances found on 20 Aug 2026 for exactly
+that reason — the other four had no bound at all, which at least looks like an
+oversight.
+
+And it was the one that mattered most, because this file is the smoke alarm:
+truncating its read does not lose work, it loses the CHECK. 1,599 rows in
+`computed_values`, of which 186 live, against a 1,000-row arbitrary slice —
+roughly 116 live rows verified and **~70 missed every cycle**, a different ~70
+each run for want of an `order`. It logged `OK — 1000 computed rows` throughout.
+
+Two further rules came out of it. **Report what you CHECKED, not what you
+fetched** — "OK — 1000 computed rows" reads as a thousand rows verified when
+the real figure was ~116, so the log now prints both. And **a client-side
+`.limit()` is never evidence a read is bounded**; only paging is.
+
 ## A JOB THAT STILL PROCESSES A FINISHED MATCH STILL WRITES
 
 `computed_values` is not pruned, so it accumulates. On 20 Aug 2026 it held
