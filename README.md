@@ -201,6 +201,41 @@ fetched** — "OK — 1000 computed rows" reads as a thousand rows verified when
 the real figure was ~116, so the log now prints both. And **a client-side
 `.limit()` is never evidence a read is bounded**; only paging is.
 
+## ONE REQUEST PER FIXTURE, NOT ONE PER PRICE
+
+`ingestOdds` awaited a separate `insert` for every odds row. Measured on run
+32376915580: **137 fixtures, 3,107 rows, 638 seconds** — a flat ~160ms per row,
+which is a network round-trip each and nothing else. The fetch phase was
+already pooled; the write phase never was.
+
+That is what made the engine loop overrun. Its budget is 300s, so the loop
+managed **one iteration instead of four**, and the job's later steps were
+cancelled when the next scheduled run displaced it — the backlog behaviour the
+workflow's own header documents. Batching leaves ~137 requests where there were
+3,107.
+
+**A BATCH IS ONE STATEMENT, so one malformed row rejects all 36** — strictly
+worse than the row-at-a-time version, which lost only the bad row. So
+`insertOddsRows` falls back to per-row on any batch error: the good rows still
+land, the bad one is still named, and the fast path costs one request while the
+failure path costs exactly what the old code always cost. Only the rows that
+LANDED are returned, because the caller seeds `lastOddsMap` from them and a
+failed row recorded as present would suppress its own re-insert next cycle.
+
+### A TEST THAT CANNOT FAIL IS NOT A TEST
+
+These tests are in `engine.ingestodds.test.js` and not in
+`engine.oddsapi.test.js`, deliberately. That file's hand-rolled harness is
+`function test(n, f) { try { f(); passed++; ... } }` — it does not AWAIT `f`, so
+an async test that throws still prints a tick and increments the counter. Six
+tests were written there first and every one of them passed without asserting
+anything.
+
+`node:test` awaits. This is the same failure this repo fixed in
+`engine.lambda.test.js` on the same day — a check that reports success while
+doing nothing — and it is worth knowing that the older hand-rolled harnesses in
+this repo are only safe for synchronous tests.
+
 ## A JOB THAT STILL PROCESSES A FINISHED MATCH STILL WRITES
 
 `computed_values` is not pruned, so it accumulates. On 20 Aug 2026 it held

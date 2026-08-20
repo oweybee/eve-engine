@@ -702,8 +702,9 @@ async function ingest() {
         continue;
       }
 
-      // Insert rows where prices have moved — O(1) Map lookup per row
+      // Select rows where prices have moved — O(1) Map lookup per row.
       let fixtureInserted = 0;
+      const pending = [];
       for (const row of rows) {
         const key  = `${matchId}:${row.bookmaker}:${row.market ?? 'h2h'}:${row.market_line ?? ''}`;
         const last = lastOddsMap.get(key);
@@ -718,18 +719,32 @@ async function ingest() {
           continue;
         }
 
-        const { error } = await supabase.from('odds').insert({ match_id: matchId, ...row });
-        if (error) {
-          // DB write failure is an explicit error — not silently swallowed.
-          console.error(`    [error] odds insert failed (fixture=${fixtureId} book=${row.bookmaker}): ${error.message}`);
-          summary.errors++;
-        } else {
-          fixtureInserted++;
-          summary.oddsInserted++;
-          // Optimistic map update: prevents redundant inserts if same bookmaker
-          // appears twice in the same run (shouldn't happen, but defensive).
-          lastOddsMap.set(key, row);
-        }
+        pending.push({ key, row });
+      }
+
+      // ── ONE REQUEST PER FIXTURE, NOT ONE PER PRICE ───────────────────────
+      //
+      // This awaited a separate insert for every row. Measured on run
+      // 32376915580: 137 fixtures, 3,107 rows, 638 SECONDS — a flat ~160ms per
+      // row, which is a network round-trip each and nothing else. It is the
+      // reason the engine loop blew its own 300s budget, did one iteration
+      // instead of four, and had its later steps cancelled when the next
+      // scheduled run displaced it.
+      //
+      // Batching leaves ~137 requests where there were 3,107. The rows are
+      // independent inserts into one table with no ordering requirement, so
+      // there is nothing the row-at-a-time version bought.
+      if (!DRY_RUN && pending.length) {
+        const { ok, failed } = await insertOddsRows(supabase, matchId, pending,
+          (row, err) => console.error(
+            `    [error] odds insert failed (fixture=${fixtureId} book=${row.bookmaker}): ${err.message}`));
+
+        // Optimistic map update, for the rows that actually landed: prevents
+        // redundant inserts if the same bookmaker appears twice in one run.
+        for (const e of ok) lastOddsMap.set(e.key, e.row);
+        fixtureInserted    = ok.length;
+        summary.oddsInserted += ok.length;
+        summary.errors     += failed;
       }
 
       if (fixtureInserted > 0) {
@@ -772,6 +787,40 @@ async function ingest() {
 // Utilities
 // ---------------------------------------------------------------------------
 
+/**
+ * Insert one fixture's moved prices in a single request.
+ *
+ * FALLS BACK TO PER-ROW ON FAILURE, and that is the whole reason this is a
+ * function rather than one `.insert(array)` at the call site. A batch insert is
+ * one statement, so one malformed row rejects all 36 — strictly worse than the
+ * row-at-a-time version it replaces, which lost only the bad row. On any batch
+ * error it retries individually, so the good rows still land and the bad one is
+ * still named in the log. The fast path costs one request; the failure path
+ * costs exactly what the old code always cost.
+ *
+ * @param {object[]} entries [{ key, row }] — rows already filtered to movers
+ * @param {(row: object, err: object) => void} onError names a row that failed
+ * @returns {Promise<{ok: object[], failed: number}>} the entries that landed
+ */
+async function insertOddsRows(supabase, matchId, entries, onError) {
+  if (!entries.length) return { ok: [], failed: 0 };
+
+  const { error } = await supabase
+    .from('odds')
+    .insert(entries.map(e => ({ match_id: matchId, ...e.row })));
+  if (!error) return { ok: entries, failed: 0 };
+
+  console.warn(`    [warn] batch of ${entries.length} row(s) failed (${error.message}) — retrying individually`);
+
+  const ok = [];
+  let failed = 0;
+  for (const e of entries) {
+    const { error: rowErr } = await supabase.from('odds').insert({ match_id: matchId, ...e.row });
+    if (rowErr) { onError(e.row, rowErr); failed++; } else ok.push(e);
+  }
+  return { ok, failed };
+}
+
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // Bounded-concurrency map: runs `fn` over `items` at most `concurrency` at a
@@ -799,4 +848,7 @@ if (require.main === module) {
   });
 }
 
-module.exports = { ingest, extractH2hRows, extractTotalsRows, extractBttsRows, oddsHaveMoved };
+module.exports = {
+  ingest, extractH2hRows, extractTotalsRows, extractBttsRows, oddsHaveMoved,
+  insertOddsRows,
+};
