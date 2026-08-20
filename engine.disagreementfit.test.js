@@ -137,3 +137,27 @@ test('per-point banding produces one band per point actually present', () => {
   assert.deepStrictEqual(bands.map(b => b.gap_bucket), ['1pp', '2pp']);
   assert.deepStrictEqual(bands.map(b => b.n), [1, 2]);
 });
+
+test('THE ELO VECTOR IS READ BY ITS REAL FIELD NAMES', () => {
+  // eloProbs returns { pHome, pDraw, pAway }. Reading { home, draw, away }
+  // yields undefined, the gap becomes NaN, `NaN < edge` is false for every
+  // band, and every selection falls through to the open-ended top one — which
+  // reported "market 0% / model 0% / brier NaN" over the entire corpus. A
+  // wrong field name does not throw; it produces a complete, plausible-shaped,
+  // entirely empty scorecard. This asserts the numbers are finite.
+  const { selectionsFrom } = require('./lib/disagreementFit');
+  const rows = [{
+    id: 1, match_date: '2021-01-01', home_tid: 1, away_tid: 2, ftr: 'H',
+    odds: { PSCH: 2.0, PSCD: 3.4, PSCA: 3.6 },
+    p_home: 0.5, p_draw: 0.27, p_away: 0.23,
+  }];
+  const { ELO, DIXON_COLES } = selectionsFrom(rows, {});
+  assert.strictEqual(ELO.length, 3, 'three outcomes');
+  assert.strictEqual(DIXON_COLES.length, 3);
+  for (const s of ELO) {
+    assert.ok(Number.isFinite(s.modelP), `modelP finite (${s.modelP})`);
+    assert.ok(s.modelP > 0 && s.modelP < 1, `modelP is a probability (${s.modelP})`);
+  }
+  const sum = ELO.reduce((t, s) => t + s.modelP, 0);
+  assert.ok(Math.abs(sum - 1) < 1e-9, `the vector sums to one (${sum})`);
+});

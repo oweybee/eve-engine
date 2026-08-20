@@ -89,7 +89,8 @@ async function refit() {
   const { bandsOf, aggregate, selectionsFrom } = require('../lib/disagreementFit');
   const supabase = getClient();
 
-  const eloParams = await loadEloParams(supabase, 'ELO_1X2', 'v1');
+  // loadEloParams takes an OPTIONS OBJECT, not positional model/version.
+  const eloParams = await loadEloParams(supabase, { model: 'ELO_1X2', version: 'v1' });
   const corpus = await fetchCorpus(supabase);
   console.log(`\n[refit] ${corpus.length} research rows, elo params ` +
     `d0=${eloParams.drawAtParity} s=${eloParams.drawSpread} homeAdv=${eloParams.homeAdv}`);
