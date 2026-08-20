@@ -31,10 +31,44 @@ const { pageAll, inChunks, IN_CHUNK, PAGE_SIZE } = require('./lib/pagedRead');
 const CLOSING_WINDOW_MIN = 60;
 const SIGNAL_EDGE        = parseFloat(process.env.SIGNAL_EDGE || '0.02'); // 2 pp minimum
 
+/**
+ * How long after kickoff a fixture stays in this job's corpus, in minutes.
+ *
+ * ONE CONSTANT, TWO USES, AND THAT COUPLING IS THE POINT. It bounds the
+ * `closing` snapshot window below, and it is also the retention filter on the
+ * driving query. A fixture dropped from the corpus while still inside the
+ * closing window would never have its CLV back-filled — the back-fill runs
+ * ONLY under `snapType === 'closing'` — so the filter must not be a different
+ * number from the window it is protecting. Change it in one place or the two
+ * silently disagree, which is the failure this file has already had twice with
+ * a cap and a page order.
+ */
+const POST_KICKOFF_GRACE_MIN = 180;
+
 /** Epoch ms for a timestamp, or -Infinity if it cannot be read as one. */
 function tsOf(v) {
   const t = v == null ? NaN : new Date(v).getTime();
   return Number.isFinite(t) ? t : -Infinity;
+}
+
+/**
+ * The rows this job can still do something for: fixtures not yet past the
+ * post-kickoff grace window.
+ *
+ * FAILS OPEN. A fixture whose kickoff is absent or unparseable is KEPT and
+ * handled by the loop exactly as before — a row we cannot date is not a row we
+ * know to be finished, and silently dropping it would be indistinguishable
+ * from the job working.
+ *
+ * @param {object[]} rows computed_values rows with an embedded `match`
+ * @param {number}   now  epoch ms
+ */
+function retainedRows(rows, now) {
+  const cutoff = now - POST_KICKOFF_GRACE_MIN * 60_000;
+  return rows.filter((r) => {
+    const t = tsOf(r.match?.kickoff_at);
+    return t === -Infinity || t > cutoff;
+  });
 }
 
 /**
@@ -269,7 +303,41 @@ async function run() {
   // "first seen"; rows after mean "last confirmed".
   const capturedAt = new Date(now).toISOString();
 
-  const matchIds = [...new Set(rows.map(r => r.match_id).filter(Boolean))];
+  // ── RETENTION: drop fixtures this job can no longer do anything for ──────
+  //
+  // `computed_values` is not pruned, so it accumulates. Of 1,510 rows on
+  // 20 Aug 2026, 97 were upcoming and 1,413 had kicked off more than three
+  // hours earlier — 830 distinct fixtures where 66 were live.
+  //
+  // THIS IS NOT ONLY A COST SAVING. A past fixture still ran the whole loop,
+  // and the loop WRITES: it stamps `current` snapshots onto a finished match's
+  // price history, and it INSERTS recommendations. 150 of the 587
+  // recommendations in the table (26%) were recorded more than three hours
+  // after their match kicked off, 98 of them in the last seven days. A
+  // recommendation freezes a price as a claim, and lib/feed.js draws it on the
+  // price terminal from `recommendation_timestamp` — so a claim recorded after
+  // the result was known plots as a signal after the match ended. That is the
+  // engine-side form of the bug `expireKickedOffClaims()` fixed in the browser.
+  //
+  // The filter runs HERE, before matchIds is derived, so the three prefetches
+  // narrow with it — they are keyed on this list, and it is what makes them
+  // large. FAILS OPEN on an unreadable kickoff: a fixture we cannot date is
+  // kept and handled by the loop as before, never silently dropped.
+  const live = retainedRows(rows, now);
+
+  // Say what was dropped. A job that silently processes a tenth of what it did
+  // yesterday looks identical to one that broke.
+  console.log(
+    `[snapshot] retention — ${live.length} of ${rows.length} row(s) within `
+    + `${POST_KICKOFF_GRACE_MIN}m of kickoff; ${rows.length - live.length} past fixture(s) skipped`,
+  );
+
+  if (!live.length) {
+    console.log('[snapshot] no live computed_values rows — nothing to snapshot');
+    return { snaps: 0, recs: 0, clvUpdated: 0, writeErrors: 0 };
+  }
+
+  const matchIds = [...new Set(live.map(r => r.match_id).filter(Boolean))];
 
   const since48hIso = new Date(now - 48 * 60 * 60 * 1000).toISOString();
   const since7dIso  = new Date(now -  7 * 24 * 60 * 60 * 1000).toISOString();
@@ -284,14 +352,14 @@ async function run() {
 
   console.log(
     `[snapshot] prefetch complete — ` +
-    `${rows.length} match(es) | ` +
+    `${live.length} live row(s) | ` +
     `${snapshotExistsSet.size} with existing snapshots | ` +
     `${latestOddsMap.size} with recent odds`,
   );
 
   let snaps = 0, recs = 0, clvUpdated = 0, writeErrors = 0;
 
-  for (const r of rows) {
+  for (const r of live) {
     const kickoff    = r.match?.kickoff_at ? new Date(r.match.kickoff_at).getTime() : null;
     const minsToKick = kickoff != null ? (kickoff - now) / 60000 : null;
     const league     = r.match?.league?.name ?? null;
@@ -303,7 +371,8 @@ async function run() {
 
     // ── 1. Snap type — O(1) Set lookup, zero DB calls ────────────────────────
     let snapType = 'current';
-    if (minsToKick != null && minsToKick <= CLOSING_WINDOW_MIN && minsToKick > -180) {
+    if (minsToKick != null && minsToKick <= CLOSING_WINDOW_MIN
+        && minsToKick > -POST_KICKOFF_GRACE_MIN) {
       snapType = 'closing';
     } else if (!snapshotExistsSet.has(r.match_id)) {
       snapType = 'open';
@@ -442,5 +511,5 @@ if (require.main === module) {
 
 module.exports = {
   run, edgeBucket, inChunks, IN_CHUNK, pageAll, PAGE_SIZE, prefetchLatestOdds,
-  snapshotRow,
+  snapshotRow, retainedRows, POST_KICKOFF_GRACE_MIN,
 };

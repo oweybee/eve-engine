@@ -331,3 +331,55 @@ test('captured_at AND hour_bucket AGREE — same instant, not two clocks', () =>
   const capturedAt = new Date(now).toISOString();
   assert.strictEqual(Math.floor(Date.parse(capturedAt) / 3_600_000), hourBucket);
 });
+
+/* ── RETENTION: the filter and the closing window are ONE number ──────────
+   `computed_values` is not pruned. On 20 Aug 2026 it held 1,510 rows, of which
+   1,413 had kicked off more than three hours earlier — 830 distinct fixtures
+   where 66 were live. Those past rows still ran the whole loop, and the loop
+   WRITES: 150 of 587 recommendations (26%) were recorded more than three hours
+   after their match kicked off, and lib/feed.js plots them on the price
+   terminal from `recommendation_timestamp`.
+
+   The hazard in fixing it is dropping a fixture that is still inside the
+   CLOSING window, because the CLV back-fill runs ONLY under
+   `snapType === 'closing'`. One constant serves both, and these pin that. */
+
+const { POST_KICKOFF_GRACE_MIN, retainedRows } = require('./captureSnapshot');
+
+const at = (minsToKick) => ({
+  match: { kickoff_at: new Date(Date.UTC(2026, 7, 20, 12, 0) + minsToKick * 60_000).toISOString() },
+});
+const NOW = Date.UTC(2026, 7, 20, 12, 0);
+
+test('A FIXTURE INSIDE THE CLOSING WINDOW IS NEVER DROPPED', () => {
+  // Anything the closing branch would claim must survive the filter, or its
+  // CLV is never back-filled and nothing reports the loss.
+  for (const mins of [60, 0, -1, -POST_KICKOFF_GRACE_MIN + 1]) {
+    assert.strictEqual(retainedRows([at(mins)], NOW).length, 1,
+      `dropped a fixture at ${mins}m to kickoff, inside the closing window`);
+  }
+});
+
+test('a fixture past the grace window is dropped', () => {
+  assert.strictEqual(retainedRows([at(-POST_KICKOFF_GRACE_MIN - 1)], NOW).length, 0);
+  assert.strictEqual(retainedRows([at(-60 * 24)], NOW).length, 0);
+});
+
+test('IT FAILS OPEN — an undatable fixture is kept, not silently dropped', () => {
+  const undatable = [
+    { match: { kickoff_at: null } },
+    { match: {} },
+    {},
+    { match: { kickoff_at: 'not a date' } },
+  ];
+  assert.strictEqual(retainedRows(undatable, NOW).length, undatable.length);
+});
+
+test('the boundary is exactly the closing window, not a second number', () => {
+  // If these ever disagree, a fixture leaves the corpus while the closing
+  // branch still wants it. The test exists to make that impossible silently.
+  const justInside = retainedRows([at(-POST_KICKOFF_GRACE_MIN + 0.5)], NOW).length;
+  const justOutside = retainedRows([at(-POST_KICKOFF_GRACE_MIN - 0.5)], NOW).length;
+  assert.strictEqual(justInside, 1);
+  assert.strictEqual(justOutside, 0);
+});

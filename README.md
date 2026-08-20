@@ -182,6 +182,36 @@ Two silent caps, two outages, one lesson: **a PostgREST read that returns
 necessarily succeeded either.** Bound the request explicitly, both ways — and
 check both bounds on every read, not on the one that was in the traceback.
 
+## A JOB THAT STILL PROCESSES A FINISHED MATCH STILL WRITES
+
+`computed_values` is not pruned, so it accumulates. On 20 Aug 2026 it held
+1,510 rows: **97 upcoming and 1,413 kicked off more than three hours earlier**,
+830 distinct fixtures where 66 were live. captureSnapshot ran its whole loop
+over all of them.
+
+That is not just wasted work, because the loop WRITES. **150 of the 587 rows in
+`recommendations` (26%) were recorded more than three hours after their match
+kicked off**, 98 of them in the last seven days, the most recent while this was
+being investigated. A recommendation freezes a price as a claim, and
+eve-frontend's `lib/feed.js` plots it on the price terminal from
+`recommendation_timestamp` — so a claim recorded after the result was known
+draws as a signal after the match ended. It is the engine-side form of the bug
+`expireKickedOffClaims()` fixed in the browser.
+
+**THE HAZARD IN FIXING IT IS THE OBVIOUS FILTER.** `kickoff_at > now()` is
+wrong: the CLV back-fill runs ONLY under `snapType === 'closing'`, which spans
+60 minutes BEFORE kickoff to 180 minutes AFTER, so a fixture dropped at kickoff
+never has its CLV written and nothing reports the loss. `POST_KICKOFF_GRACE_MIN`
+is therefore ONE constant serving BOTH the closing window and the retention
+filter — change it in one place, or the two disagree in silence. Pinned by
+mutation: the naive filter fails the test, as does failing closed on a fixture
+whose kickoff cannot be read.
+
+The filter runs before `matchIds` is derived, so the three prefetches narrow
+with it — they are keyed on that list and it is what made them large. And the
+job LOGS what it skipped, because a job that quietly processes a tenth of
+yesterday's corpus looks exactly like one that broke.
+
 ## AN UPSERT UPDATES THE VALUE AND NOT THE DEFAULT
 
 `odds_snapshots.captured_at` was a column default. A default is evaluated on
