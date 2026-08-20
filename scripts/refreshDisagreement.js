@@ -36,23 +36,45 @@ const PAGE = 1000;
  * computed_values rows. A fit built on a truncated corpus is not a smaller fit,
  * it is a wrong one, and it would look entirely plausible.
  */
-async function fetchCorpus(supabase) {
+async function pageAll(supabase, table, columns, order = 'id') {
   const out = [];
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
-      .from('research_dc_preds')
-      .select('id, match_date, ftr, odds, p_home, p_draw, p_away, '
-            + 'ratings:research_match_ratings!inner ( home_tid, away_tid )')
-      .order('id', { ascending: true })
+      .from(table).select(columns)
+      .order(order, { ascending: true })
       .range(from, from + PAGE - 1);
-    if (error) throw new Error(`research corpus read: ${error.message}`);
+    if (error) throw new Error(`${table} read: ${error.message}`);
     if (!data?.length) break;
-    for (const r of data) {
-      out.push({ ...r, home_tid: r.ratings?.home_tid ?? null, away_tid: r.ratings?.away_tid ?? null });
-    }
+    out.push(...data);
     if (data.length < PAGE) break;
   }
   return out;
+}
+
+async function fetchCorpus(supabase) {
+  // JOINED IN NODE, NOT BY POSTGREST. There is no foreign key between these two
+  // tables — they are row-aligned on `id` and nothing declares it — so an
+  // embedded select fails with "Could not find a relationship ... in the schema
+  // cache". Two paged reads and a Map is the honest version of the join the
+  // research corpus actually supports.
+  const preds = await pageAll(supabase, 'research_dc_preds',
+    'id, match_date, ftr, odds, p_home, p_draw, p_away');
+  const ratings = await pageAll(supabase, 'research_match_ratings',
+    'id, home_tid, away_tid');
+
+  const byId = new Map(ratings.map(r => [r.id, r]));
+  let unmatched = 0;
+  const rows = preds.map(p => {
+    const r = byId.get(p.id);
+    if (!r) unmatched++;
+    return { ...p, home_tid: r?.home_tid ?? null, away_tid: r?.away_tid ?? null };
+  });
+  // A row with no ratings partner still counts for DIXON_COLES and is skipped
+  // by the Elo replay, so the two models can legitimately have different
+  // sample sizes. Said out loud rather than left to be inferred from a total.
+  console.log(`[refit] ${preds.length} preds, ${ratings.length} ratings, ` +
+    `${unmatched} pred(s) with no ratings row`);
+  return rows;
 }
 
 /**
