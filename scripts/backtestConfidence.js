@@ -70,9 +70,14 @@ async function fetchSnapshots(supabase) {
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
       .from('odds_snapshots')
-      .select('match_id, bookmaker, selection, odds, snapshot_type, captured_at')
+      .select('id, match_id, bookmaker, selection, odds, snapshot_type, captured_at')
       .eq('market_type', 'h2h')
-      .order('captured_at', { ascending: true })
+      // PAGED ON `id`, NOT `captured_at`. A page boundary landing inside a tie
+      // can skip one row and repeat another, and the ties here are large: 45
+      // rows share a single timestamp to the microsecond, and a whole cycle now
+      // shares one instant since captured_at became the cycle's own stamp. The
+      // walk needs a unique column; nothing downstream depends on the order.
+      .order('id', { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) throw new Error(`odds_snapshots: ${error.message}`);
     if (!data?.length) break;
