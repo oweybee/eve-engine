@@ -27,7 +27,7 @@
 'use strict';
 
 const { getClient } = require('./lib/supabaseClient');
-const { priceFixture, available } = require('./lib/lambdaBoard');
+const { priceFixture, available, unavailableReason } = require('./lib/lambdaBoard');
 const { categoryFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
 const ma = require('./lib/marketAnchor');
@@ -207,7 +207,9 @@ async function run() {
     return;
   }
   if (!available()) {
-    console.log('[modelBoard] lambda model artifacts missing — skipping');
+    // Names WHICH half is missing: a retrain that never shipped and a runtime
+    // that never installed both end here and are not the same problem.
+    console.log(`[modelBoard] cannot price — ${unavailableReason()}; skipping`);
     return;
   }
   const supabase = getClient();

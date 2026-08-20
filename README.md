@@ -122,6 +122,36 @@ refusals, and a run that reports success.
 
 ---
 
+## `available()` is two questions, and a skip is not a pass
+
+`lib/lambdaBoard.available()` checked that the three λ-model artifacts were on
+disk and called that available. A runtime is the other half. `onnxruntime-node`
+is an **optionalDependency** whose postinstall DOWNLOADS a native binary, so
+behind an egress block `npm install` prints success and leaves the package
+absent — and `available()` said yes to that, so `priceFixture` threw
+`MODULE_NOT_FOUND` several frames later instead of declining. It now asks both,
+and `unavailableReason()` NAMES which half is missing: a retrain that never
+shipped and a dependency that never installed both end at the same `return` and
+are not the same problem.
+
+`engine.lambda.test.js` splits on the same seam. The bundle test reads a JSON
+feature contract and needs no runtime, so it still runs where the runtime is
+absent; only the two inference tests skip, and a skip prints `⊘` with its
+reason and is counted in the summary line. **On the runner the runtime does
+install, so a skip there is a regression** — `.github/workflows/test.yml` sets
+`REQUIRE_LAMBDA_RUNTIME=1`, which turns one back into a failure. The point is
+that the suite can be green in a sandbox without that greenness being a lie.
+
+**Two test files were never in the `npm test` chain at all.**
+`engine.capturesnapshot.test.js` and `engine.eloforecasts.test.js` passed on
+disk and guarded nothing, because the chain is thirty filenames joined by `&&`
+and nobody re-reads it. `engine.suite.test.js` asserts that every
+`engine.*.test.js` on disk is named in the script and that every name in the
+script exists — including itself, since a coverage check outside the chain
+covers nothing.
+
+---
+
 ## In-play signals
 
 The pre-match engine and the in-play engine are **separate pipelines that share

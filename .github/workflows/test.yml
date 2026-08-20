@@ -19,3 +19,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+        env:
+          # onnxruntime-node is an optional dependency whose postinstall
+          # downloads a native binary. Where that download is blocked the
+          # lambda-board tests skip themselves; on the runner it installs, so a
+          # skip here means it stopped installing and must fail loudly.
+          REQUIRE_LAMBDA_RUNTIME: '1'

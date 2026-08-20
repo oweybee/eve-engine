@@ -5,11 +5,40 @@
 'use strict';
 
 const assert = require('assert');
-const { clubKey, available, loadBundle, buildVector, priceFixture, segOf } =
+const { clubKey, missingArtifacts, runtimePresent, unavailableReason,
+        loadBundle, buildVector, priceFixture, segOf } =
   require('./lib/lambdaBoard');
 const { mapLeague, summariseOdds } = require('./computeModelBoard');
 
 let passed = 0;
+let skipped = 0;
+
+// A skip is REPORTED, not swallowed. The onnxruntime tests were failing
+// outright in every sandbox that cannot download the native binary, which
+// meant the engine suite was green nowhere an agent could see it — the exact
+// condition that let the signal_category tests sit red for twelve days.
+// CI installs the runtime, so a skip THERE is a regression, not an
+// environment. REQUIRE_LAMBDA_RUNTIME (set in .github/workflows/test.yml)
+// turns one back into a failure, so this cannot become a way to hide a break.
+const REQUIRE_RUNTIME = process.env.REQUIRE_LAMBDA_RUNTIME === '1';
+
+function skip(name, reason) {
+  if (REQUIRE_RUNTIME) {
+    console.error(`  \u2717 ${name}: REQUIRE_LAMBDA_RUNTIME=1 but ${reason}`);
+    process.exitCode = 1;
+    return;
+  }
+  skipped++;
+  console.log(`  \u2298 ${name} — SKIPPED: ${reason}`);
+}
+
+function report() {
+  const parts = [`${passed} passed`];
+  if (skipped) parts.push(`${skipped} skipped (${unavailableReason()})`);
+  if (process.exitCode) parts.push('WITH FAILURES');
+  console.log(`\nlambda board tests: ${parts.join(', ')}`);
+}
+
 function test(name, fn) {
   return Promise.resolve()
     .then(fn)
@@ -57,8 +86,15 @@ function test(name, fn) {
     assert.strictEqual(segOf(0.10), 'longshot');
   });
 
-  if (!available()) {
-    console.log('  (model artifacts absent — skipping bundle/ONNX tests)');
+  // Two separate questions. The bundle is a JSON feature contract and needs no
+  // runtime; only priceFixture does. Skipping both on a missing runtime would
+  // throw away coverage this machine can actually give.
+  const missing = missingArtifacts();
+  if (missing.length) {
+    skip('bundle: feature contract complete + known club resolves', unavailableReason());
+    skip('priceFixture end-to-end: sane probabilities + opportunities shape', unavailableReason());
+    skip('model anchors to market: longshot flip prices home low', unavailableReason());
+    report();
     return;
   }
 
@@ -74,6 +110,13 @@ function test(name, fn) {
     assert.ok(matched.home && matched.away, 'Arsenal/Chelsea must match bundle');
     assert.ok(vec.every(v => Number.isFinite(v)), 'vector must be finite');
   });
+
+  if (!runtimePresent()) {
+    skip('priceFixture end-to-end: sane probabilities + opportunities shape', unavailableReason());
+    skip('model anchors to market: longshot flip prices home low', unavailableReason());
+    report();
+    return;
+  }
 
   await test('priceFixture end-to-end: sane probabilities + opportunities shape', async () => {
     const res = await priceFixture({
@@ -100,6 +143,5 @@ function test(name, fn) {
     });
     assert.ok(res.sheet.pHome < 0.35, `market anchor must dominate (pHome=${res.sheet.pHome})`);
   });
-})().then(() => {
-  console.log(`\nlambda board tests: ${passed} passed${process.exitCode ? ' (with failures)' : ''}`);
-});
+  report();
+})();
