@@ -4,7 +4,7 @@
 /**
  * scripts/backtestConfidence.js — can component C of the MES be validated?
  *
- * SHORT ANSWER, AS AT 6 AUG 2026: NO. NOT ON THE DATA THAT EXISTS.
+ * SHORT ANSWER, RE-MEASURED 20 AUG 2026: STILL NO — AND THE REASON HAS MOVED.
  *
  * Component C weights books_quoting, hours_to_kickoff and line stability at 15
  * of the 100 MES points, and it has never been shown to discriminate anything,
@@ -23,23 +23,48 @@
  *     three inputs exist in it. Not a sample-size problem: the columns are
  *     absent.
  *
- *   odds_snapshots — has all three inputs (bookmaker, captured_at, and open
- *     against current). It covers 370 matches, of which 273 are settled with a
- *     score, and running the market-anchored gate over them yields FORTY gated
- *     selections in total.
+ *   odds_snapshots — has all three inputs. Run 32372757965, against production:
  *
- * Forty selections cannot separate three bands. PRIME/STRONG/TRACKED would hold
- * roughly a dozen each, and a dozen bets at these prices has a yield standard
- * error near 30 percentage points — wide enough to contain every hypothesis
- * anyone might have. Any table this script printed would be a number-shaped
- * object, not a measurement, and the one thing this architecture exists to stop
- * is a column named after what it was meant to hold.
+ *         settled matches with h2h snapshots      278
+ *         gated selections                          4
+ *         needed for band separation              400
  *
- * So the script measures what it can, states the sample it had, and refuses to
- * draw the conclusion. It will become useful on its own as odds_snapshots
- * accumulates; the gating rate is about 5% of selections, so a usable sample of
- * ~400 gated selections needs roughly 2,700 more settled matches with full
- * snapshot coverage.
+ * FOUR. Not forty. The header carried 370/273/40 from 6 Aug and nobody could
+ * re-run it to find out — see the note on the workflow below.
+ *
+ * THE BINDING CONSTRAINT IS NOT THE SETTLED COUNT, and this is the finding.
+ * The anchor this script requires is a `pinnacle` quote at
+ * `snapshot_type = 'current'` on ALL THREE outcomes; without it `shinDevig`
+ * returns null and the fixture is skipped whole. That exists for **30 of the
+ * 278**. From those 30 the gate passes 4, which is ~4.4% of the 90 candidate
+ * selections — the ~5% gating rate the old note quoted, applied to a pool two
+ * orders of magnitude smaller than the match count suggests.
+ *
+ * AND 230 OF THE 278 CARRY `closing` ROWS ONLY. Measured by era:
+ *
+ *     kickoff before 10 Aug   230 matches   29,097 h2h rows   ALL `closing`
+ *     kickoff from   10 Aug    32 matches    2,682 h2h rows   `current`
+ *                              23 matches    2,484 h2h rows   `open`
+ *
+ * So 29,097 rows of real h2h price history are invisible to this script
+ * because of a LABEL, not because the prices are missing. Whether to anchor a
+ * settled-match backtest on `closing` instead is a research decision and not a
+ * refactor: CLAUDE.md records that `snapshot_type = 'closing'` labels anything
+ * from 60 minutes BEFORE kickoff to 180 minutes AFTER, median 42 minutes INTO
+ * the match, which is why `closing_lines` (migration 061) exists. Do not just
+ * widen the filter.
+ *
+ * WHY 40 BECAME 4 IS NOT RECONSTRUCTIBLE and is deliberately not guessed at
+ * here. Pinnacle `current` coverage is NEW rather than lost — zero before
+ * 10 Aug, 29 of 32 in the week of 17 Aug — so the 6 Aug run cannot have taken
+ * the path this one takes, and what it did take is not recorded anywhere. Both
+ * numbers are what the script printed on the day; they are not a time series.
+ *
+ * The reading above was taken the same day three silent PostgREST truncations
+ * were fixed, ONE OF THEM IN THIS FILE: the `matches` query had no `.range()`,
+ * and that table holds 92,511 completed rows against a 1,000-row cap, so it
+ * received an arbitrary 1.1% and the snapshots were filtered against it. Any
+ * run of this script before 20 Aug 2026 sampled whatever survived that.
  *
  * WHAT TO DO IN THE MEANTIME. Treat C as unvalidated, which is what
  * `CONFIDENCE_IS_UNVALIDATED` says in lib/marketAnchor.js. Do not cite it as a
@@ -47,6 +72,12 @@
  * to tune them against.
  *
  * Usage:  node scripts/backtestConfidence.js
+ *
+ * OR, and this is the point: the "MaxEdge Confidence Sample Check" workflow,
+ * manual dispatch, read-only. This header went stale for a fortnight because
+ * the script needs the service key and could therefore only ever run on
+ * somebody's laptop — so the header was the sole record of what it last said,
+ * and no way existed to check it. Re-run it rather than quoting this.
  */
 
 const ma = require('../lib/marketAnchor');
