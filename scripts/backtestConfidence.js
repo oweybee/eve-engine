@@ -51,6 +51,7 @@
 
 const ma = require('../lib/marketAnchor');
 const { shinDevig } = require('../lib/devig');
+const { pageAll, inChunks } = require('../lib/pagedRead');
 
 /** Below this many gated, settled selections, band separation is not measurable. */
 const MIN_SAMPLE_FOR_BAND_SEPARATION = 400;
@@ -64,42 +65,43 @@ const num = x => {
 const SELECTIONS = ['home', 'draw', 'away'];
 const BETTABLE = new Set(ma.BETTABLE_BOOKS);
 
-async function fetchSnapshots(supabase) {
-  const rows = [];
-  const PAGE = 1000;
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
-      .from('odds_snapshots')
-      .select('id, match_id, bookmaker, selection, odds, snapshot_type, captured_at')
-      .eq('market_type', 'h2h')
-      // PAGED ON `id`, NOT `captured_at`. A page boundary landing inside a tie
-      // can skip one row and repeat another, and the ties here are large: 45
-      // rows share a single timestamp to the microsecond, and a whole cycle now
-      // shares one instant since captured_at became the cycle's own stamp. The
-      // walk needs a unique column; nothing downstream depends on the order.
-      .order('id', { ascending: true })
-      .range(from, from + PAGE - 1);
-    if (error) throw new Error(`odds_snapshots: ${error.message}`);
-    if (!data?.length) break;
-    rows.push(...data);
-    if (data.length < PAGE) break;
-  }
-  return rows;
-}
+// PAGED ON `id`, NOT `captured_at`. A page boundary landing inside a tie can
+// skip one row and repeat another, and the ties here are large: 45 rows share a
+// single timestamp to the microsecond, and a whole cycle shares one instant now
+// that captured_at is the cycle's own stamp. Nothing downstream needs the order.
+const fetchSnapshots = (supabase) => pageAll(() => supabase
+  .from('odds_snapshots')
+  .select('id, match_id, bookmaker, selection, odds, snapshot_type, captured_at')
+  .eq('market_type', 'h2h'), 'id', 'odds_snapshots');
 
 async function main() {
   const { getClient } = require('../lib/supabaseClient');
   const supabase = getClient();
 
-  const { data: matches, error: mErr } = await supabase
+  // SNAPSHOTS FIRST, THEN THE MATCHES THEY NAME — and that order is the fix.
+  //
+  // This used to select every completed match and then filter the snapshots
+  // down to them. `matches` holds 92,511 completed rows against PostgREST's
+  // silent 1,000-row cap, so it received an ARBITRARY 1.1% of the table, and
+  // the ~347 fixtures that actually carry an h2h snapshot would almost all
+  // have been filtered away against it. The script would have printed a
+  // sample of near zero and called it the state of the corpus.
+  //
+  // Fetching the other way round is both correct and far cheaper: the
+  // snapshot table names its own fixtures, so only those are looked up, in
+  // IN_CHUNK-sized batches that are themselves paged.
+  const allSnaps = await fetchSnapshots(supabase);
+  const snapMatchIds = [...new Set(allSnaps.map(s => s.match_id).filter(Boolean))];
+
+  const matches = await inChunks(snapMatchIds, 'id', 'matches', (chunk) => supabase
     .from('matches')
     .select('id, kickoff_at, status, goals_home, goals_away')
+    .in('id', chunk)
     .eq('status', 'completed')
-    .not('goals_home', 'is', null);
-  if (mErr) throw new Error(`matches: ${mErr.message}`);
+    .not('goals_home', 'is', null));
 
   const byId = new Map(matches.map(m => [m.id, m]));
-  const snaps = (await fetchSnapshots(supabase)).filter(s => byId.has(s.match_id));
+  const snaps = allSnaps.filter(s => byId.has(s.match_id));
 
   // Latest price per (match, book, selection, snapshot_type).
   const latest = new Map();

@@ -1,0 +1,62 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — component C sample check
+#
+# scripts/backtestConfidence.js answers one question: is there enough data yet
+# to show that component C of the MES discriminates anything? On 6 Aug 2026 the
+# answer was no, and the script's header has carried that reading as a plain
+# statement of fact ever since.
+#
+# IT WENT STALE BECAUSE NOTHING COULD RUN IT. The script needs the service key,
+# so it could only ever run on someone's laptop, and the header was the only
+# record of what it last said. That is the same shape as the disagreement
+# calibration, whose SQL function had been broken since migration 075 with
+# nobody able to notice.
+#
+# READ-ONLY. This writes nothing — it reads odds_snapshots and matches and
+# prints a table. Safe to run at any time; the only cost is the reads.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Confidence Sample Check
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: backtest-confidence
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    name: Measure the gated sample
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run
+        shell: bash
+        run: |
+          # pipefail is load-bearing: without it `tee` supplies the exit code
+          # and a failed run reports success.
+          set -o pipefail
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/backtestConfidence.js 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
