@@ -184,3 +184,58 @@ test('THE ELO COHORT IS THE MATURE ONE, and DIXON_COLES is not filtered', () => 
   assert.strictEqual(ELO.length, 3 * 3, 'only the mature fixtures are evaluated');
   assert.strictEqual(DIXON_COLES.length, 5 * 3, 'every fixture counts for the goals model');
 });
+
+test('THE TAIL IS MERGED WHERE THE SAMPLE RUNS OUT', () => {
+  const { edgesWithMinSample, aggregate, bandsOf } = require('./lib/disagreementFit');
+  // 1pp and 2pp are well sampled; 3pp is thin. Everything from 3pp up merges.
+  const sel = [];
+  const push = (gapPp, count) => {
+    for (let i = 0; i < count; i++) {
+      sel.push({ modelP: 0.5 + gapPp / 100, marketP: 0.5, y: i % 2 });
+    }
+  };
+  push(0.5, 50); push(1.5, 40); push(2.5, 3); push(3.5, 2); push(9.5, 1);
+
+  const edges = edgesWithMinSample(sel, 1, 10);
+  const bands = aggregate(sel, edges);
+  assert.deepStrictEqual(bands.map(b => b.gap_bucket), ['<1pp', '1pp', '2pp+']);
+  // The tail is RE-AGGREGATED, not summed from summaries.
+  assert.strictEqual(bands[2].n, 6);
+  // And the last WELL-SAMPLED point survives rather than being swallowed.
+  assert.strictEqual(bands[1].n, 40);
+});
+
+test('the tail is re-aggregated, so its rate is not an average of averages', () => {
+  const { edgesWithMinSample, aggregate } = require('./lib/disagreementFit');
+  // Two thin points with wildly different rates and different sizes. Averaging
+  // the two band percentages gives 50%; the true pooled rate is 25%.
+  const sel = [];
+  for (let i = 0; i < 3; i++) sel.push({ modelP: 0.55, marketP: 0.5, y: 1 });  // model closer
+  for (let i = 0; i < 1; i++) sel.push({ modelP: 0.56, marketP: 0.5, y: 0 });  // market closer
+  const edges = edgesWithMinSample(sel, 1, 10);
+  const bands = aggregate(sel, edges);
+  const tail = bands[bands.length - 1];
+  assert.strictEqual(tail.n, 4);
+  assert.strictEqual(tail.market_right_pct, 25);
+});
+
+test('a corpus too thin at EVERY point collapses to one band, not to NaNpp+', () => {
+  const { edgesWithMinSample, aggregate } = require('./lib/disagreementFit');
+  const sel = [{ modelP: 0.55, marketP: 0.5, y: 1 }];
+  const edges = edgesWithMinSample(sel, 1, 10);
+  const bands = aggregate(sel, edges);
+  assert.strictEqual(bands.length, 1);
+  // The merge starts at the lowest OCCUPIED thin band (5pp here), so the
+  // empty points below it keep their edges and the tail is '5pp+'.
+  assert.strictEqual(bands[0].gap_bucket, '5pp+');
+  assert.ok(!String(bands[0].gap_bucket).includes('NaN'));
+});
+
+test('a well-sampled corpus keeps every point — the floor only ever merges', () => {
+  const { edgesWithMinSample, bandsOf } = require('./lib/disagreementFit');
+  const sel = [];
+  for (let pp = 0; pp < 5; pp++) {
+    for (let i = 0; i < 100; i++) sel.push({ modelP: 0.5 + (pp + 0.5) / 100, marketP: 0.5, y: i % 2 });
+  }
+  assert.deepStrictEqual(edgesWithMinSample(sel, 1, 10), bandsOf(1));
+});

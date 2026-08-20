@@ -29,6 +29,18 @@ const WIDTH = WIDTH_ARG ? Number(WIDTH_ARG.split('=')[1]) : null;
 const PAGE = 1000;
 
 /**
+ * The smallest per-point sample that may stand on its own.
+ *
+ * Below this a point estimate is noise: at single points ELO reads 51.0% at
+ * 11pp, 57.7% at 14pp and 53.1% at 22pp, so the wider disagreement would be
+ * quoted as the safer one, and 37pp lands on an exact 50/50 over 16 rows.
+ * Everything above the first point that falls short is merged into one
+ * open-ended band, re-aggregated from the selections rather than averaged out
+ * of the band summaries — percentages do not average.
+ */
+const MIN_SAMPLE = Number(process.env.MIN_SAMPLE || '300');
+
+/**
  * Every research row, PAGED.
  *
  * PostgREST caps a response at 1000 rows and says nothing about it — the same
@@ -86,7 +98,8 @@ async function fetchCorpus(supabase) {
 async function refit() {
   const { getClient } = require('../lib/supabaseClient');
   const { loadEloParams } = require('../lib/eloProbs');
-  const { bandsOf, aggregate, selectionsFrom } = require('../lib/disagreementFit');
+  const { bandsOf, aggregate, selectionsFrom, edgesWithMinSample } =
+    require('../lib/disagreementFit');
   const supabase = getClient();
 
   // loadEloParams takes an OPTIONS OBJECT, not positional model/version.
@@ -95,15 +108,21 @@ async function refit() {
   console.log(`\n[refit] ${corpus.length} research rows, elo params ` +
     `d0=${eloParams.drawAtParity} s=${eloParams.drawSpread} homeAdv=${eloParams.homeAdv}`);
 
-  const edges = bandsOf(VERIFY ? null : WIDTH);
   const sel = selectionsFrom(corpus, eloParams);
 
   const MIN_GAP = { DIXON_COLES: 0.06, ELO: 0.10 };
   const result = {};
   for (const model of ['DIXON_COLES', 'ELO']) {
+    // PER MODEL, because the two corpora differ in size and the point where a
+    // per-point band stops being a measurement is a property of the sample.
+    const edges = VERIFY
+      ? bandsOf(null)
+      : edgesWithMinSample(sel[model], WIDTH, MIN_SAMPLE);
     const bands = aggregate(sel[model], edges);
     result[model] = bands;
-    console.log(`\n  ${model} — ${sel[model].length} selections, ${bands.length} band(s)`);
+    const tail = bands[bands.length - 1];
+    console.log(`\n  ${model} — ${sel[model].length} selections, ${bands.length} band(s)` +
+      (VERIFY ? '' : `, per point to ${tail.gap_bucket} (min sample ${MIN_SAMPLE})`));
     for (const b of bands) {
       console.log(`    ${String(b.gap_bucket).padEnd(9)} n=${String(b.n).padStart(6)}  ` +
         `market ${String(b.market_right_pct).padStart(5)}%  model ${String(b.model_right_pct).padStart(5)}%  ` +
