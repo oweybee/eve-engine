@@ -1,0 +1,89 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — disagreement calibration re-fit
+#
+# `disagreement_calibration` is the table behind every "when we've disagreed by
+# this much, the market was right 53% of the time" the product says. Until now
+# neither half of it could be recomputed:
+#
+#   * DIXON_COLES came from refresh_disagreement_calibration() (migration 054),
+#     which has been BROKEN since 075 made the table per-model — it still
+#     inserts without `model` and conflicts on (gap_bucket) alone, a key that no
+#     longer exists.
+#   * ELO's five rows are LITERALS in migration 075. The DO block that produced
+#     them ran once and its working tables were dropped (docs/ELO_CALIBRATION.md
+#     §8). Nothing in the repo reproduces them.
+#
+# MANUAL ONLY, AND DRY BY DEFAULT. A re-fit changes published copy on every
+# match card and signal row, so it is not something a schedule should do behind
+# anyone's back. Run --verify first: it recomputes at the ORIGINAL 3/6/10/15pp
+# cuts and diffs against the live table, which is the only evidence that the new
+# code reproduces the numbers the product has been quoting.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Disagreement Re-fit
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'verify (reproduce the published cuts and diff) or refit'
+        type: choice
+        options: [verify, refit]
+        default: verify
+      width:
+        description: 'Band width in probability points, for refit (1 = per point)'
+        type: string
+        default: '1'
+      write:
+        description: 'Actually replace the table. Leave off for a dry run.'
+        type: boolean
+        default: false
+
+concurrency:
+  group: disagreement-refit
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  refit:
+    name: Re-fit the scorecard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Unit tests
+        # The fit decides what the product is allowed to claim about its own
+        # record. Running its tests before it writes means a banding rule that
+        # stopped working cannot reach the table.
+        run: node --test engine.disagreementfit.test.js
+
+      - name: Run
+        shell: bash
+        run: |
+          # pipefail is load-bearing: without it `tee` supplies the exit code
+          # and a failed re-fit reports success.
+          set -o pipefail
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/refreshDisagreement.js \
+            ${{ inputs.mode == 'verify' && '--verify' || format('--width={0}', inputs.width) }} \
+            ${{ inputs.mode == 'refit' && inputs.write && '--write' || '' }} \
+            2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

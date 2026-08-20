@@ -21,8 +21,119 @@
  */
 
 const QUIET = process.argv.includes('--quiet');
+const VERIFY = process.argv.includes('--verify');
+const WRITE = process.argv.includes('--write');
+const WIDTH_ARG = process.argv.find(a => a.startsWith('--width='));
+const WIDTH = WIDTH_ARG ? Number(WIDTH_ARG.split('=')[1]) : null;
+
+const PAGE = 1000;
+
+/**
+ * Every research row, PAGED.
+ *
+ * PostgREST caps a response at 1000 rows and says nothing about it — the same
+ * silent truncation that has captureSnapshot processing 1000 of 1509
+ * computed_values rows. A fit built on a truncated corpus is not a smaller fit,
+ * it is a wrong one, and it would look entirely plausible.
+ */
+async function fetchCorpus(supabase) {
+  const out = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('research_dc_preds')
+      .select('id, match_date, ftr, odds, p_home, p_draw, p_away, '
+            + 'ratings:research_match_ratings!inner ( home_tid, away_tid )')
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`research corpus read: ${error.message}`);
+    if (!data?.length) break;
+    for (const r of data) {
+      out.push({ ...r, home_tid: r.ratings?.home_tid ?? null, away_tid: r.ratings?.away_tid ?? null });
+    }
+    if (data.length < PAGE) break;
+  }
+  return out;
+}
+
+/**
+ * Recompute both models from the corpus and, unless --write is passed, only
+ * print. The fit is the same code at any band width; --verify runs it at the
+ * PUBLISHED cuts and diffs against the live table, which is the only check that
+ * says this reproduces the numbers the product has been quoting.
+ */
+async function refit() {
+  const { getClient } = require('../lib/supabaseClient');
+  const { loadEloParams } = require('../lib/eloProbs');
+  const { bandsOf, aggregate, selectionsFrom } = require('../lib/disagreementFit');
+  const supabase = getClient();
+
+  const eloParams = await loadEloParams(supabase, 'ELO_1X2', 'v1');
+  const corpus = await fetchCorpus(supabase);
+  console.log(`\n[refit] ${corpus.length} research rows, elo params ` +
+    `d0=${eloParams.drawAtParity} s=${eloParams.drawSpread} homeAdv=${eloParams.homeAdv}`);
+
+  const edges = bandsOf(VERIFY ? null : WIDTH);
+  const sel = selectionsFrom(corpus, eloParams);
+
+  const MIN_GAP = { DIXON_COLES: 0.06, ELO: 0.10 };
+  const result = {};
+  for (const model of ['DIXON_COLES', 'ELO']) {
+    const bands = aggregate(sel[model], edges);
+    result[model] = bands;
+    console.log(`\n  ${model} — ${sel[model].length} selections, ${bands.length} band(s)`);
+    for (const b of bands) {
+      console.log(`    ${String(b.gap_bucket).padEnd(9)} n=${String(b.n).padStart(6)}  ` +
+        `market ${String(b.market_right_pct).padStart(5)}%  model ${String(b.model_right_pct).padStart(5)}%  ` +
+        `brier ${b.brier_model} vs ${b.brier_market}`);
+    }
+  }
+
+  if (VERIFY) {
+    const { data: live, error } = await supabase
+      .from('disagreement_calibration')
+      .select('model, gap_bucket, n, market_right_pct, model_right_pct');
+    if (error) throw new Error(`live read: ${error.message}`);
+    console.log('\n  [verify] recomputed vs published');
+    let mismatches = 0;
+    for (const model of ['DIXON_COLES', 'ELO']) {
+      for (const b of result[model]) {
+        const pub = live.find(l => l.model === model && l.gap_bucket === b.gap_bucket);
+        const same = pub && Number(pub.n) === b.n
+          && Number(pub.market_right_pct) === b.market_right_pct;
+        if (!same) mismatches++;
+        console.log(`    ${same ? 'ok  ' : 'DIFF'} ${model} ${b.gap_bucket}: ` +
+          `n ${b.n} vs ${pub?.n ?? '—'}, market ${b.market_right_pct}% vs ${pub?.market_right_pct ?? '—'}%`);
+      }
+    }
+    console.log(`\n  ${mismatches} mismatch(es).`);
+    return;
+  }
+
+  if (!WRITE) {
+    console.log('\n  Dry run — pass --write to replace the table.');
+    return;
+  }
+
+  const rows = [];
+  for (const model of ['DIXON_COLES', 'ELO']) {
+    for (const b of result[model]) {
+      rows.push({ ...b, model, min_publishable_gap: MIN_GAP[model], computed_at: new Date().toISOString() });
+    }
+  }
+  // REPLACE, not merge: a re-cut changes which bucket labels exist, and leaving
+  // the old ones behind would let `bucketFor` match a stale band that overlaps
+  // a new one.
+  const { error: delErr } = await supabase
+    .from('disagreement_calibration').delete().in('model', ['DIXON_COLES', 'ELO']);
+  if (delErr) throw new Error(`clear: ${delErr.message}`);
+  const { error: insErr } = await supabase.from('disagreement_calibration').insert(rows);
+  if (insErr) throw new Error(`insert: ${insErr.message}`);
+  console.log(`\n  Wrote ${rows.length} row(s).`);
+}
 
 async function main() {
+  if (VERIFY || WRITE || WIDTH != null) return refit();
+
   const { getClient } = require('../lib/supabaseClient');
   const supabase = getClient();
 
