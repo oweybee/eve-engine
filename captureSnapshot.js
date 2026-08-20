@@ -47,6 +47,40 @@ const SIGNAL_EDGE        = parseFloat(process.env.SIGNAL_EDGE || '0.02'); // 2 p
  */
 const IN_CHUNK = 200;
 
+/** PostgREST's own default cap. Pages are requested exactly this size so a
+ *  short page is an unambiguous end-of-data signal. */
+const PAGE_SIZE = 1000;
+
+/**
+ * PostgREST caps a response at 1000 rows and says nothing about it.
+ *
+ * THIS IS NOT A PERFORMANCE KNOB. `computed_values` held 1,509 rows against
+ * that cap, so 509 were silently dropped on EVERY run — with no `order by`,
+ * an arbitrary 509 — and only 96 of the 1,509 were upcoming fixtures. The
+ * visible symptom was elsewhere entirely: `odds_snapshots` carried a `current`
+ * h2h row for 11 of 65 board fixtures, so /api/match-card and /api/match-reads
+ * had no anchor price to compare a forecast against on most of the board.
+ *
+ * ORDERED, because paging without one is not paging. Postgres may return rows
+ * in any order between statements, so an unordered `.range()` walk can skip a
+ * row and repeat another — the same failure the computeElo prune had.
+ *
+ * @param {string} orderBy a stable, unique-enough column to page on
+ */
+async function pageAll(query, orderBy) {
+  const out = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await query()
+      .order(orderBy, { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(`paged read (${orderBy}): ${error.message}`);
+    if (!data?.length) break;
+    out.push(...data);
+    if (data.length < PAGE_SIZE) break;
+  }
+  return out;
+}
+
 /** Run `fn` over `ids` in IN_CHUNK-sized batches and concatenate the rows. */
 async function inChunks(ids, fn) {
   const out = [];
@@ -212,7 +246,7 @@ async function run() {
   const supabase = getClient();
 
   // Primary data source — all active computed_values rows with match metadata
-  const { data: rows, error: cvErr } = await supabase
+  const rows = await pageAll(() => supabase
     .from('computed_values')
     .select(`
       match_id, best_outcome, confidence_score, max_edge_score,
@@ -225,8 +259,7 @@ async function run() {
       corners_over_odds, corners_under_odds,
       bookings_over_odds, bookings_under_odds,
       match:matches ( kickoff_at, league:leagues ( name ) )
-    `);
-  if (cvErr) throw new Error(`computed_values fetch: ${cvErr.message}`);
+    `), 'match_id');
 
   if (!rows?.length) {
     console.log('[snapshot] no computed_values rows — nothing to snapshot');
@@ -416,4 +449,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[snapshot] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, edgeBucket, inChunks, IN_CHUNK };
+module.exports = { run, edgeBucket, inChunks, IN_CHUNK, pageAll, PAGE_SIZE };

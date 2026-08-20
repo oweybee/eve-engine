@@ -122,6 +122,36 @@ refusals, and a run that reports success.
 
 ---
 
+## A PostgREST RESPONSE IS CAPPED AT 1000 ROWS — and that is silent too
+
+The sibling of the URL-length rule above, and it bit the same file.
+
+`captureSnapshot` drove itself from `select * from computed_values` with no
+filter, no `order by` and no `.range()`. The table holds **1,509 rows**, so 509
+were dropped on EVERY run — an arbitrary 509, because without an order the
+server may return rows in any order between statements.
+
+**The symptom was nowhere near the cause.** Only 96 of those 1,509 rows are
+upcoming fixtures; the rest are past ones. So what a reader saw was
+`odds_snapshots` carrying a `current` h2h row for **11 of 65 board fixtures**,
+and the frontend's model block reporting "no comparable market price" on most
+of the board — while `elo_forecasts` sat at 100% coverage and the snapshot job
+reported success every fifteen minutes.
+
+It also produced an asymmetry that looks impossible until you know the cause:
+in three hours the job wrote `current` snapshots for **155 fixtures on btts and
+totals but 4 on h2h**. Secondary markets come from the computed_values row's own
+best-price columns, so a stale fixture still writes them; h2h needs a matching
+recent row in `odds`, which a stale fixture does not have.
+
+`pageAll(query, orderBy)` walks the whole table, and **it orders** — paging
+without an order is not paging, it is sampling with replacement. A short page
+ends the walk; an error throws rather than truncating the corpus quietly.
+
+Two silent caps, two outages, one lesson: **a PostgREST read that returns
+"fewer rows than you expected" has not necessarily failed, and has not
+necessarily succeeded either.** Bound the request explicitly, both ways.
+
 ## `available()` is two questions, and a skip is not a pass
 
 `lib/lambdaBoard.available()` checked that the three λ-model artifacts were on

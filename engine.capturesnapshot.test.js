@@ -75,3 +75,70 @@ test('an error propagates rather than being swallowed', async () => {
     () => inChunks(ids(300), async () => { throw new Error('prefetch boom'); }),
     /prefetch boom/);
 });
+
+/* ── The driving query is PAGED ────────────────────────────────────────────
+   PostgREST caps a response at 1000 rows and says nothing about it.
+   computed_values held 1,509, so 509 were silently dropped on every run —
+   and with no `order by`, an arbitrary 509. Only 96 of those rows were
+   upcoming fixtures, which is why the visible symptom was elsewhere: an
+   anchor price existed for 11 of 65 board fixtures.                        */
+
+test('pageAll walks past the 1000-row cap', async () => {
+  const { pageAll, PAGE_SIZE } = require('./captureSnapshot');
+  const total = 1509;
+  const all = Array.from({ length: total }, (_, i) => ({ match_id: `m-${String(i).padStart(5, '0')}` }));
+  const seen = [];
+
+  const query = () => ({
+    order: () => ({
+      range: async (from, to) => {
+        seen.push([from, to]);
+        return { data: all.slice(from, to + 1), error: null };
+      },
+    }),
+  });
+
+  const out = await pageAll(query, 'match_id');
+  assert.strictEqual(out.length, total, 'every row is returned, not the first page');
+  assert.deepStrictEqual(out.map(r => r.match_id), all.map(r => r.match_id));
+  assert.strictEqual(seen[0][0], 0);
+  assert.strictEqual(seen[0][1], PAGE_SIZE - 1);
+});
+
+test('IT ORDERS — paging without one can skip a row and repeat another', async () => {
+  const { pageAll } = require('./captureSnapshot');
+  let orderedBy = null;
+  const query = () => ({
+    order: (col, opts) => {
+      orderedBy = { col, opts };
+      return { range: async () => ({ data: [], error: null }) };
+    },
+  });
+  await pageAll(query, 'match_id');
+  assert.strictEqual(orderedBy.col, 'match_id');
+  assert.deepStrictEqual(orderedBy.opts, { ascending: true });
+});
+
+test('a short page ends the walk rather than looping forever', async () => {
+  const { pageAll } = require('./captureSnapshot');
+  let calls = 0;
+  const query = () => ({
+    order: () => ({
+      range: async () => {
+        calls++;
+        return { data: calls === 1 ? [{ match_id: 'a' }] : [], error: null };
+      },
+    }),
+  });
+  const out = await pageAll(query, 'match_id');
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(calls, 1, 'a page shorter than PAGE_SIZE is the end');
+});
+
+test('AN ERROR THROWS rather than truncating the corpus silently', async () => {
+  const { pageAll } = require('./captureSnapshot');
+  const query = () => ({
+    order: () => ({ range: async () => ({ data: null, error: { message: 'boom' } }) }),
+  });
+  await assert.rejects(() => pageAll(query, 'match_id'), /paged read \(match_id\): boom/);
+});
