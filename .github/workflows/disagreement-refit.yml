@@ -26,9 +26,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'verify (reproduce the published cuts and diff) or refit'
+        description: 'verify (reproduce the published cuts and diff), refit, or sigma'
         type: choice
-        options: [verify, refit]
+        options: [verify, refit, sigma]
         default: verify
       width:
         description: 'Band width in probability points, for refit (1 = per point)'
@@ -82,8 +82,13 @@ jobs:
           # and a failed re-fit reports success.
           set -o pipefail
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          # `sigma` MEASURES AND NEVER WRITES, whatever `write` is set to. A
+          # model_calibration row is what makes an architecture scoreable across
+          # the whole product, and that is a migration and an owner decision —
+          # never a side effect of a scorecard re-fit.
           node scripts/refreshDisagreement.js \
-            ${{ inputs.mode == 'verify' && '--verify' || format('--width={0}', inputs.width) }} \
+            ${{ inputs.mode == 'verify' && '--verify' || (inputs.mode == 'sigma' && '--sigma' || format('--width={0}', inputs.width)) }} \
+            ${{ inputs.mode == 'sigma' && '--sigma' || '' }} \
             ${{ inputs.mode == 'refit' && inputs.write && '--write' || '' }} \
             2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"

@@ -17,12 +17,14 @@
  * them and ship them back would be a worse design than one SQL function. This
  * script is the operator's handle on it — it invokes, verifies and prints.
  *
- * Usage:  node scripts/refreshDisagreement.js [--quiet]
+ * Usage:  node scripts/refreshDisagreement.js [--quiet] [--verify] [--width=N]
+ *         node scripts/refreshDisagreement.js --sigma     measured sigma_p only
  */
 
 const QUIET = process.argv.includes('--quiet');
 const VERIFY = process.argv.includes('--verify');
 const WRITE = process.argv.includes('--write');
+const SIGMA = process.argv.includes('--sigma');
 const WIDTH_ARG = process.argv.find(a => a.startsWith('--width='));
 const WIDTH = WIDTH_ARG ? Number(WIDTH_ARG.split('=')[1]) : null;
 
@@ -98,7 +100,7 @@ async function fetchCorpus(supabase) {
 async function refit() {
   const { getClient } = require('../lib/supabaseClient');
   const { loadEloParams } = require('../lib/eloProbs');
-  const { bandsOf, aggregate, selectionsFrom, edgesWithMinSample } =
+  const { bandsOf, aggregate, selectionsFrom, edgesWithMinSample, calibrationSigma } =
     require('../lib/disagreementFit');
   const supabase = getClient();
 
@@ -117,6 +119,42 @@ async function refit() {
 // at reaches a match card.
 const MIN_GAP = { DIXON_COLES: 0.06, ELO: 0.10, MARKET_ANCHORED: 1 };
 const MODELS = ['DIXON_COLES', 'ELO', 'MARKET_ANCHORED'];
+  // ── MEASURED PROBABILITY ERROR, on the same selections ────────────────────
+  //
+  // WHY THIS RUNS HERE. `sigma_p` in `model_calibration` is what the conviction
+  // ladder divides a disagreement by, and migration 048's `calibration_report()`
+  // measures it from `value_signals` — rows a model BET on. ELO has never
+  // written one: it writes `elo_forecasts`, which is forward-looking and held 49
+  // settled fixtures on 21 Aug 2026. Measuring the product's most-rendered
+  // forecast off fifty games would be the LAMBDA_MC shape with a number attached.
+  //
+  // This corpus is the one the scorecard is already built on, so the sigma is
+  // measured over the same rows, by the same estimator, as everything else the
+  // model claims about itself.
+  //
+  // IT PRINTS AND DOES NOT WRITE, deliberately. Inserting a `model_calibration`
+  // row is what makes an architecture scoreable across the whole product; that
+  // is a migration and an owner decision, not a side effect of a re-fit.
+  if (SIGMA) {
+    console.log('\n[sigma] measured probability error — migration 048\'s estimator');
+    console.log('        model            n      bins   sigma_p    2σ (the PRIME bar)');
+    for (const model of MODELS) {
+      const r = calibrationSigma(sel[model]);
+      if (r.sigmaHat == null) {
+        console.log(`        ${model.padEnd(16)} no bin cleared the minimum`);
+        continue;
+      }
+      const prime = (2.019 * r.sigmaHat * 100).toFixed(2);
+      console.log(`        ${model.padEnd(16)} ${String(r.nUsed).padStart(6)}  ${String(r.nBins).padStart(4)}   ` +
+        `${r.sigmaHat.toFixed(4)}     ${prime}pp`);
+      for (const b of r.curve) {
+        console.log(`          bin ${String(b.bucket).padStart(2)}  n=${String(b.n).padStart(6)}  ` +
+          `forecast ${(b.pBar * 100).toFixed(1)}%  realised ${(b.obs * 100).toFixed(1)}%  ` +
+          `miss ${((b.obs - b.pBar) * 100 >= 0 ? '+' : '')}${((b.obs - b.pBar) * 100).toFixed(1)}pp`);
+      }
+    }
+  }
+
   const result = {};
   for (const model of MODELS) {
     // PER MODEL, because the two corpora differ in size and the point where a

@@ -278,3 +278,82 @@ test('MARKET_ANCHORED is SKIPPED when the consensus is missing, never faked', ()
   assert.strictEqual(out.DIXON_COLES.length, 3);
   assert.strictEqual(out.ELO.length, 3);
 });
+
+// ── calibrationSigma — VERIFIED AGAINST THE SQL, not argued to match it ──────
+//
+// The estimator is migration 048's `calibration_report()` expression. The two
+// cases below are that expression's OWN OUTPUT, run against production
+// `value_signals` on 21 Aug 2026 and reconstructed exactly:
+//
+//     API_PREDICTIVE   n=281  bins=3  sigma 0.0000
+//     LAMBDA_MC        n=166  bins=4  sigma 0.0751
+//
+// API_PREDICTIVE exercises the whole path — it holds five distinct
+// probabilities, so the (p, won, count) triples rebuild all 281 rows without
+// loss and the binning runs for real. LAMBDA_MC is the arithmetic: it is the
+// ONE architecture whose sigma is neither zero nor floored, so it is the only
+// case where getting the binomial-variance subtraction wrong would show up.
+
+/** Expand (p, won, count) triples into individual selections. */
+function expand(triples) {
+  const out = [];
+  for (const [p, y, n] of triples) for (let i = 0; i < n; i++) out.push({ modelP: p, y });
+  return out;
+}
+
+test('calibrationSigma reproduces API_PREDICTIVE — 281 rows, 3 bins, 0.0000', () => {
+  const { calibrationSigma } = require('./lib/disagreementFit');
+  const rows = expand([
+    [0.10, 0, 18], [0.10, 1, 1],
+    [0.30, 0, 27], [0.30, 1, 6],
+    [0.33, 0, 27], [0.33, 1, 22],
+    [0.35, 0, 10], [0.35, 1, 5],
+    [0.45, 0, 91], [0.45, 1, 74],
+  ]);
+  assert.strictEqual(rows.length, 281);
+  const r = calibrationSigma(rows);
+  assert.strictEqual(r.nUsed, 281);
+  assert.strictEqual(r.nBins, 3);
+  // A ZERO IS A RESULT, not a failure. Its "model probability" is a five-value
+  // lookup keyed to price bands, and a lookup that tracks the price cannot
+  // miscalibrate. That is why model_calibration carries a FLOOR for this
+  // family and says so in sigma_source.
+  assert.strictEqual(Number(r.sigmaHat.toFixed(4)), 0);
+});
+
+test('calibrationSigma reproduces LAMBDA_MC — 166 rows, 4 bins, 0.0751', () => {
+  const { calibrationSigma } = require('./lib/disagreementFit');
+  // The bin summary the SQL produced, rebuilt: n rows at p_bar with
+  // round(obs * n) winners, which is exact here — 7, 21, 9 and 0.
+  const bins = [
+    [36, 0.181825, 0.194444], [94, 0.252659, 0.223404],
+    [30, 0.319480, 0.300000], [6, 0.523317, 0.000000],
+  ];
+  const rows = [];
+  for (const [n, pBar, obs] of bins) {
+    const wins = Math.round(obs * n);
+    for (let i = 0; i < n; i++) rows.push({ modelP: pBar, y: i < wins ? 1 : 0 });
+  }
+  const r = calibrationSigma(rows);
+  assert.strictEqual(r.nUsed, 166);
+  assert.strictEqual(r.nBins, 4);
+  assert.strictEqual(Number(r.sigmaHat.toFixed(4)), 0.0751);
+});
+
+test('calibrationSigma subtracts sampling noise rather than reporting raw miss', () => {
+  const { calibrationSigma } = require('./lib/disagreementFit');
+  // A perfectly calibrated model still misses at a finite sample. 400 rows at
+  // p = 0.5 with exactly 200 winners is the noiseless case and must read zero;
+  // the uncorrected miss would not, and every model would then measure a sigma
+  // made of its own sample size.
+  const rows = Array.from({ length: 400 }, (_, i) => ({ modelP: 0.5, y: i < 200 ? 1 : 0 }));
+  assert.strictEqual(calibrationSigma(rows).sigmaHat, 0);
+});
+
+test('calibrationSigma drops thin bins and refuses outright when none survive', () => {
+  const { calibrationSigma } = require('./lib/disagreementFit');
+  const r = calibrationSigma([{ modelP: 0.2, y: 1 }, { modelP: 0.9, y: 0 }]);
+  assert.strictEqual(r.sigmaHat, null);
+  assert.strictEqual(r.nUsed, 0);
+  assert.strictEqual(r.nBins, 0);
+});
