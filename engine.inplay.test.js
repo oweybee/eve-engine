@@ -116,8 +116,9 @@ test('prematch unbacked edge (odds 2.5 / edge 3%) → info-only header, not sugg
 // conviction ladder scores it 65+ — so the word cannot say one thing in the
 // channel and another on a row. A suggested selection we could not score is
 // not broadcast at all.
-// odds 2.2 at a 9% edge scores 76 — which is STRONG since the six-rung re-cut,
-// not PRIME. PRIME is 88+ (2 sigma) now. The row is BACKED either way, and
+// odds 2.2 at a 9% edge scores 76. That was STRONG under the six-rung ladder and
+// is PRIME under the five-rung one (21 Aug 2026, migration 089) — the SAME 65
+// line wearing a different word both times. The row is BACKED either way, and
 // "backed" is the thing this file is actually about, so the fixture is named for
 // that rather than for whichever word sits at the top of the ladder today.
 // `market_prob` is the Shin-de-vigged panel probability the engine stores as of
@@ -126,7 +127,7 @@ test('prematch unbacked edge (odds 2.5 / edge 3%) → info-only header, not sugg
 // 1/odds. 0.4400 against a raw 1/2.20 = 0.4545.
 const backedSignal = {
   ...prematchSignal, detected_odds: 2.2, detected_edge: 0.09,
-  model_architecture: 'DIXON_COLES', mxs: 76, mxs_band: 'STRONG',
+  model_architecture: 'DIXON_COLES', mxs: 76, mxs_band: 'PRIME',
   market_prob: 0.44, gap_basis: 'devigged',
 };
 const longshotSignal = { ...prematchSignal, detected_odds: 5.0, detected_edge: 0.07 };
@@ -137,13 +138,19 @@ test('prime box + a backed score → BACKED header, broadcastable', () => {
   assert.strictEqual(isBroadcastable(backedSignal), true);
   const m = buildMessage(backedSignal);
   // NOT "PRIME SIGNAL", and the gate has not moved — both ladders are still
-  // required. The word was wrong twice: this post is gated on `isBacked`, which
-  // admits STRONG, so a row the site badges STRONG (this fixture scores 76) went
-  // out headed PRIME. And PRIME is capped at publication site-wide, because
-  // nothing scores between 85 and 91 and every 85+ row in the history came from
-  // the legacy `implied` basis. See eve-frontend MAX_PUBLISHED_BAND.
+  // required. The header states what the post is gated ON rather than naming a
+  // rung, and that is deliberate: the rung word has moved twice (STRONG took the
+  // 65 line on 6 Aug, PRIME took it back on 21 Aug) while the gate — `isBacked`
+  // — never moved at all. A header carrying the word goes stale on a re-label;
+  // a header carrying the predicate cannot.
   assert.ok(m.includes('BACKED SIGNAL'), 'header');
-  assert.ok(!m.includes('PRIME'), 'must not claim the top rung');
+  // The BAN IS ON THE HEADER, not on the word. `PRIME SIGNAL` was the
+  // eligibility ladder's bucket key wearing a rung's clothes, and it went out
+  // over rows the site badged WATCH. The NOTE may name the rung the row
+  // actually earned — asserted against `bandOf` rather than a literal, so the
+  // next re-label moves this test with the ladder instead of breaking it.
+  assert.ok(!m.includes('PRIME SIGNAL'), 'the header states the gate, never a rung');
+  assert.ok(m.includes(`(${bandOf(backedSignal)})`), 'names the rung it earned');
   assert.ok(m.includes('backed'), 'backed note');
   assert.ok(m.includes('76/100'), 'states the score it is claiming');
 });
@@ -167,8 +174,8 @@ test('THE BOX AND THE RUNG DO NOT COINCIDE, and that is the point', () => {
   // 6 do not. Under the old policy all 10 were broadcast as "PRIME SIGNAL"
   // while the site badged six of them WATCH. Requiring both is what stops the
   // word meaning two things, and a quieter channel is the cost of that.
-  // Scored against the de-vigged 0.4400 rather than 1/2.20, this is 83 — STRONG,
-  // and BACKED. Under the old convention the same row scored 62 and was withheld.
+  // Scored against the de-vigged 0.4400 rather than 1/2.20, this is 83 — BACKED.
+  // Under the old convention the same row scored 62 and was withheld.
   // That is the change working: the margin was hiding a real disagreement, and 7
   // of the live board's selections move across the line the same way. The pair
   // still does not coincide — the point of the test — it just no longer needs a
@@ -176,7 +183,11 @@ test('THE BOX AND THE RUNG DO NOT COINCIDE, and that is the point', () => {
   const inBox = { ...backedSignal, detected_edge: 0.06 };
   delete inBox.mxs; delete inBox.mxs_band;
   assert.strictEqual(classifyTier(inBox).suggested, true, 'the box suggests it');
-  assert.strictEqual(bandOf(inBox), 'STRONG', 'the de-vigged score backs it');
+  // THROUGH `isBacked`, NOT AGAINST A LITERAL. The test two above says exactly
+  // this — "pinning 'PRIME' here is what broke when the ladder was re-cut" — and
+  // this line was still pinning 'STRONG', so the 21 Aug re-label broke it. The
+  // claim is that the de-vigged score BACKS the row; the word is incidental.
+  assert.strictEqual(isBacked(scoreSignal(inBox).mxs), true, 'the de-vigged score backs it');
   assert.strictEqual(isBroadcastable(inBox), true);
 
   // The divergence itself, which needs a LONGER price than it used to. At 2.20

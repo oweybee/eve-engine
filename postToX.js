@@ -184,6 +184,11 @@ function bandOf(signal) {
  * have quietly raised the broadcast threshold from 1σ to 2σ — ten rows in the
  * entire database clear 88 — and the channel would have gone almost silent with
  * nothing in the diff that looked like a threshold change.
+ *
+ * ON 21 Aug 2026 IT WENT BACK TO FIVE and PRIME re-took the 65 line (migration
+ * 089), which is the same lesson from the other side: a name comparison written
+ * today would be correct today and wrong the next time a word moves. The line
+ * has been 65 throughout both re-cuts. Read the line.
  */
 function isBroadcastable(signal) {
   const mxs = signal.mxs ?? rescore(signal).mxs;
