@@ -30,7 +30,7 @@ function test(n, f) {
 // those are 2σ and 0.5σ, which is where the new cutoffs were derived from. The
 // table was computing the boundaries before anyone named them.
 const GOLDEN = [
-  { gap: 0.0300, sigma: 0.0300, mxs: 65, band: 'STRONG' }, // z = 1 → the boundary
+  { gap: 0.0300, sigma: 0.0300, mxs: 65, band: 'PRIME' }, // z = 1 → the boundary
   { gap: 0.0150, sigma: 0.0300, mxs: 41, band: 'WATCH' },
   { gap: 0.0100, sigma: 0.0300, mxs: 30, band: 'SLIGHT' },
   { gap: 0.0600, sigma: 0.0300, mxs: 88, band: 'PRIME' },
@@ -38,8 +38,8 @@ const GOLDEN = [
   { gap: 0.0300, sigma: 0.0693, mxs: 37, band: 'SLIGHT' },
   { gap: 0.0000, sigma: 0.0300, mxs: 0,  band: 'NIL' },
   { gap: -0.020, sigma: 0.0300, mxs: 0,  band: 'NIL' },
-  { gap: 0.0530, sigma: 0.0530, mxs: 65, band: 'STRONG' },
-  { gap: 0.0693, sigma: 0.0693, mxs: 65, band: 'STRONG' },
+  { gap: 0.0530, sigma: 0.0530, mxs: 65, band: 'PRIME' },
+  { gap: 0.0693, sigma: 0.0693, mxs: 65, band: 'PRIME' },
 ];
 
 test('matches maxedge_score() on every golden pair', () => {

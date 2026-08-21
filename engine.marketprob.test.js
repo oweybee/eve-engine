@@ -162,3 +162,42 @@ test('the over and the under cannot both be flagged', () => {
 
 console.log(`\n${failed === 0 ? '✓' : '✗'} market prob scale: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
+
+// ── THE FOUR REASONS A SECONDARY BOARD IS EMPTY, COUNTED APART ───────────────
+//
+// On 21 Aug 2026 the goals sheet had written 158 signals in a fortnight with 8
+// scored, and that was read as migration 060's guard destroying the model's
+// output. It was not. Three different things were happening and they present
+// identically from outside:
+//
+//   * an incoherent two-way vector, correctly stripped by the guard;
+//   * team_statistics stale for a week, so the model could not price at all;
+//   * the model pricing fine and having NO EDGE — measured over 190 fixtures
+//     on 21 Aug, the best leg averaged -2.75% and exactly one row was positive.
+//
+// `buildSecondarySignals` takes a census out-parameter so the run can say which.
+// Without it "[secondary] no new signals" is the only evidence, and it is the
+// same line for all four.
+
+test('the census separates unpriced from priced-but-no-edge', () => {
+  const census = {};
+  // No odds at all → nothing to price. `bestTwoWay` returns null and the
+  // fixture is counted as unpriced rather than as an absence of value.
+  sm.buildSecondarySignals(
+    { id: 'm1', odds: [], home_team: {}, away_team: {} }, null, null, null, null, census);
+  assert.strictEqual(census.totals.unpriced, 1);
+  assert.strictEqual(census.totals.priced, 0);
+  assert.strictEqual(census.totals.value, 0);
+  // `best` stays null: no leg was priced, so there is no best leg. Reporting 0
+  // here would say "we priced it and found nothing", which is a different claim.
+  assert.strictEqual(census.totals.best, null);
+});
+
+test('a census is optional, so every existing caller is unaffected', () => {
+  // The out-parameter defaults to null and the function must behave identically
+  // without it — this is the guard against a diagnostic changing what is written.
+  const match = { id: 'm2', odds: [], home_team: {}, away_team: {} };
+  const withCensus = sm.buildSecondarySignals(match, null, null, null, null, {});
+  const without    = sm.buildSecondarySignals(match, null, null, null, null);
+  assert.deepStrictEqual(without, withCensus);
+});

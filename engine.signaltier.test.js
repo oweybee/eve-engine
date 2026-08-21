@@ -23,25 +23,27 @@ function test(n, f) {
 
 /* ── The conviction ladder ─────────────────────────────────────────────── */
 
-test('names the four rungs, strongest first, and nothing else', () => {
-  assert.deepStrictEqual([...LABELS], ['PRIME', 'STRONG', 'WATCH', 'SLIGHT', 'TRACE', 'NIL']);
+test('names the five rungs, strongest first, and nothing else', () => {
+  assert.deepStrictEqual([...LABELS], ['PRIME', 'WATCH', 'SLIGHT', 'TRACE', 'NIL']);
 });
 
 test('carries none of the eligibility ladder’s words', () => {
   // Value and Longshot are buckets of the OTHER ladder. A rung named Value was
   // how a count and a verdict came to look like the same claim on screen.
-  // STRONG came off this list on 6 Aug 2026. It is a rung again, and legitimately
-  // so: it exists only at or above the 1σ backing line, where we have not
+  // STRONG came off this list on 6 Aug 2026 and went back on it on 21 Aug, when
+  // the 2σ rung was retired and PRIME came down to the 1σ line — leaving STRONG
+  // nowhere to stand that was not below the backing line, which is the
   // declined to back the reading. The prohibition was never about the word.
   for (const dead of ['VALUE', 'LONGSHOT', 'STANDARD', 'MODERATE']) {
     assert.ok(!LABELS.includes(dead), `${dead} is not a rung`);
   }
 });
 
-test('bands at 10 / 23 / 41 / 65 / 88, every one a round sigma', () => {
+test('bands at 10 / 23 / 41 / 65, every one a round sigma', () => {
+  assert.strictEqual(bandFor(99), 'PRIME');
   assert.strictEqual(bandFor(88), 'PRIME');
-  assert.strictEqual(bandFor(87), 'STRONG');
-  assert.strictEqual(bandFor(65), 'STRONG');
+  assert.strictEqual(bandFor(87), 'PRIME');
+  assert.strictEqual(bandFor(65), 'PRIME');
   assert.strictEqual(bandFor(64), 'WATCH');
   assert.strictEqual(bandFor(41), 'WATCH');
   assert.strictEqual(bandFor(40), 'SLIGHT');
@@ -50,10 +52,15 @@ test('bands at 10 / 23 / 41 / 65 / 88, every one a round sigma', () => {
   assert.strictEqual(bandFor(10), 'TRACE');
   assert.strictEqual(bandFor(9), 'NIL');
   assert.strictEqual(bandFor(0), 'NIL');
-  // 65 is still the selection boundary BY CONSTRUCTION — it just belongs to
-  // STRONG now, and isBacked() is what reads it.
-  assert.strictEqual(BAND_MIN.STRONG, 65);
-  assert.strictEqual(BAND_MIN.PRIME, 88);
+  // 65 is still the selection boundary BY CONSTRUCTION, and since 21 Aug 2026
+  // it belongs to PRIME again — the 2σ rung above it named a band no row has
+  // ever occupied. isBacked() reads the cutoff, which is why the relabel moved
+  // no row: same 65, different word.
+  assert.strictEqual(BAND_MIN.PRIME, 65);
+  assert.strictEqual(BAND_MIN.STRONG, undefined);
+  for (let mxs = 0; mxs <= 100; mxs++) {
+    assert.strictEqual(isBacked(mxs), mxs >= 65, `mxs ${mxs}`);
+  }
 });
 
 test('backed means at or above the 1 sigma line, not the top rung', () => {
