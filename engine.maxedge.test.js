@@ -10,7 +10,8 @@
  */
 'use strict';
 const assert = require('assert');
-const { scoreSignal, maxedgeScore, sigmaFor, bandFor } = require('./lib/maxedge');
+const { scoreSignal, maxedgeScore, sigmaFor, bandFor,
+        edgeEfficiency, EDGE_EFFICIENCY } = require('./lib/maxedge');
 const { isBacked } = require('./lib/signalTier');
 
 let passed = 0;
@@ -169,16 +170,34 @@ test('writes the band beside the score, from the score', () => {
   // 0.4830 against a raw 1/2.00 = 0.5000. A market probability that does not
   // belong to the odds beside it is not a weaker test, it is a different bet.
   const at2 = { detected_odds: 2.0, market_prob: 0.483 };
-  const s = scoreSignal(row({ ...at2, detected_edge: 0.20 }));
+  // EDGE 0.06 — THE PLATEAU. This case carried 0.20 until 21 Aug 2026, when the
+  // edge was not an input to the score; f(edge) now files a 20% edge in the
+  // TRAP ZONE at 0.25, so the row it was written to demonstrate (a big gap that
+  // IS backed) has to be priced where the score survives. The de-vigged
+  // probability and the price are untouched.
+  const s = scoreSignal(row({ ...at2, detected_edge: 0.06 }));
   assert.strictEqual(s.mxs_band, bandFor(s.mxs));
   assert.strictEqual(isBacked(s.mxs), true);
   assert.ok(s.mxs >= 65);
+  assert.strictEqual(s.mxs, s.mxs_raw, 'the plateau keeps the whole score');
+  assert.strictEqual(s.mes_efficiency, 1);
+
   const weak = scoreSignal(row({ ...at2, detected_edge: 0.02 }));
   assert.strictEqual(weak.mxs_band, bandFor(weak.mxs));
   assert.strictEqual(isBacked(weak.mxs), false);
-  // Under the old convention this same row scored 32. De-vigging lifts it to
-  // WATCH — still not backed, but no longer understated by the margin.
-  assert.ok(weak.mxs >= 41 && weak.mxs < 65, `weak scored ${weak.mxs}`);
+
+  // AND THE BAND IS CUT FROM THE FINAL SCORE, which is the whole change: the
+  // 20% row keeps its raw disagreement and loses three quarters of its shown
+  // score, so the rung the engine STORES agrees with the number it stores
+  // beside it. A stored band disagreeing with a stored score is the conflict
+  // this removes.
+  const trap = scoreSignal(row({ ...at2, detected_edge: 0.20 }));
+  assert.strictEqual(trap.mes_efficiency, 0.25);
+  assert.strictEqual(trap.mxs, Math.round(trap.mxs_raw * 0.25));
+  assert.strictEqual(trap.mxs_band, bandFor(trap.mxs));
+  assert.strictEqual(isBacked(trap.mxs), false);
+  assert.ok(trap.mxs_raw >= 65, 'the raw disagreement is still a big one');
+  assert.strictEqual(trap.mes_basis, 'edge_adjusted');
 });
 
 test('an unmeasured architecture yields nulls, and does NOT lose the row', () => {
@@ -201,9 +220,14 @@ test('a price that cannot be a price scores nothing at all', () => {
   }
 });
 
-test('the columns it emits are 048’s, plus 039’s two, plus 058’s gap_basis', () => {
+test('the columns it emits are 048’s, plus 039’s two, 058’s gap_basis and 090’s three', () => {
+  // THE COLUMN LIST IS A CONTRACT WITH THE DATABASE and this assertion is what
+  // makes it one: migration 090 has to land BEFORE the engine deploys, or every
+  // insert fails on three unknown columns. A test that only checked the score
+  // would go green on a schema that cannot accept the row.
   assert.deepStrictEqual(Object.keys(scoreSignal(row())).sort(),
-    ['gap_basis', 'market_prob', 'model_prob', 'model_sigma', 'mxs', 'mxs_band', 'prob_gap']);
+    ['gap_basis', 'market_prob', 'mes_basis', 'mes_efficiency', 'model_prob',
+     'model_sigma', 'mxs', 'mxs_band', 'mxs_raw', 'prob_gap']);
 });
 
 /* ── The write paths actually emit it ──────────────────────────────────── */
@@ -228,6 +252,54 @@ function captureClient() {
 }
 
 const SCORED = ['model_prob', 'market_prob', 'prob_gap', 'model_sigma', 'mxs', 'mxs_band', 'gap_basis'];
+
+/* ── f(edge), and it must MIRROR the browser and the database ───────────── */
+//
+// Three implementations of one curve: here, eve-frontend/lib/maxedge.ts, and
+// public.edge_efficiency() from migration 090. A score the engine stores and a
+// score the browser derives for one row have to be the same number, and the
+// `MODEL_SIGMA` hand-copy is what happens when they are not — it failed twice
+// in production and neither copy threw. The same three cases are asserted in
+// the migration and in lib/maxedge.test.ts, so a drift in any one shows up.
+
+test('f(edge) reproduces the three cases the brief states', () => {
+  assert.strictEqual(edgeEfficiency(0.075), 1);
+  assert.ok(Math.abs(edgeEfficiency(0.101) - 0.6375) < 1e-9, `got ${edgeEfficiency(0.101)}`);
+  assert.strictEqual(Math.round(80 * edgeEfficiency(0.101)), 51);
+  assert.strictEqual(edgeEfficiency(0.158), 0.25);
+  assert.strictEqual(Math.round(80 * edgeEfficiency(0.158)), 20);
+});
+
+test('f(edge) never lets an edge over 10% reach the PRIME line', () => {
+  // 65 / 0.65 = 100 and maxedgeScore caps the raw score at 99, so this is a
+  // theorem rather than an observation about today's rows. Walked over every
+  // (raw, edge) pair the scorer can produce.
+  for (let bp = 1001; bp <= 3000; bp++) {
+    const e = bp / 10000;
+    for (let raw = 0; raw <= 99; raw++) {
+      const final = Math.round(raw * edgeEfficiency(e));
+      assert.ok(final < 65, `raw ${raw} at edge ${e} scored ${final}`);
+    }
+  }
+});
+
+test('f(edge) is a decay, never a boost, and never zero', () => {
+  for (let bp = -500; bp <= 5000; bp++) {
+    const f = edgeEfficiency(bp / 10000);
+    assert.ok(f > 0 && f <= 1, `f(${bp / 10000}) = ${f}`);
+  }
+  // An unknown edge asserts nothing rather than inventing a penalty.
+  assert.strictEqual(edgeEfficiency(null), 1);
+  assert.strictEqual(edgeEfficiency(undefined), 1);
+});
+
+test('the knee sits exactly where the guarantee needs it', () => {
+  // Soften this to make a PRIME appear above a 10% edge and the theorem above
+  // goes with it — so the constant is pinned rather than inferred.
+  assert.strictEqual(EDGE_EFFICIENCY.knee, 0.65);
+  assert.strictEqual(EDGE_EFFICIENCY.kneeAt, 0.10);
+  assert.ok(Math.round(99 * EDGE_EFFICIENCY.knee) < 65);
+});
 
 (async () => {
   const c1 = captureClient();
