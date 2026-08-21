@@ -218,7 +218,12 @@ const MODELS = ['DIXON_COLES', 'ELO', 'MARKET_ANCHORED'];
 }
 
 async function main() {
-  if (VERIFY || WRITE || WIDTH != null) return refit();
+  // `--sigma` IS A REFIT PATH. It reads the replayed selections, so it has to
+  // go through refit() — falling through to the legacy RPC below runs
+  // refresh_disagreement_calibration(), which has been broken since migration
+  // 075 and fails with "no unique or exclusion constraint matching the ON
+  // CONFLICT specification". Which it duly did, the first time this flag ran.
+  if (VERIFY || WRITE || SIGMA || WIDTH != null) return refit();
 
   const { getClient } = require('../lib/supabaseClient');
   const supabase = getClient();

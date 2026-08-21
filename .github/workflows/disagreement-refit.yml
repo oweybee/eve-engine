@@ -88,7 +88,6 @@ jobs:
           # never a side effect of a scorecard re-fit.
           node scripts/refreshDisagreement.js \
             ${{ inputs.mode == 'verify' && '--verify' || (inputs.mode == 'sigma' && '--sigma' || format('--width={0}', inputs.width)) }} \
-            ${{ inputs.mode == 'sigma' && '--sigma' || '' }} \
             ${{ inputs.mode == 'refit' && inputs.write && '--write' || '' }} \
             2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
