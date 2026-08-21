@@ -38,11 +38,37 @@ concurrency:
 permissions:
   contents: read
 
+# ── TWO JOBS, NOT TWO STEPS, AND THAT IS THE FIX ──────────────────────────────
+#
+# These ran as step 5 and step 6 of ONE job under a shared `timeout-minutes: 15`,
+# so the anchor spent the budget and the independent line got whatever was left.
+# On the 21 Aug 2026 backfill that was nine minutes against six: step 5 finished,
+# step 6 started at 18:47 and was killed by the job timeout with the table still
+# a month stale — while the run reported the failure as a timeout rather than as
+# a benchmark that never got written.
+#
+# BEING KILLED IS NOT STOPPING. eve-engine has already paid for that once, in
+# `fetchTeamStats`, where a SIGKILL discarded the aggregate the run had just
+# computed and printed no summary — "a step that runs, burns two minutes and is
+# killed looks exactly like one that works."
+#
+# The two tables are INDEPENDENT: different destinations, both read-only against
+# `odds` and `matches`, no ordering between them. Nothing was ever gained by
+# serialising them, and serialising them is what starved the second. As separate
+# jobs they run in parallel, each holds its own timeout, and neither can consume
+# the other's budget however long a backfill takes.
+#
+# 45 minutes rather than 15, because that ceiling was cut for the every-15-minute
+# incremental run — which does ten fixtures and finishes in seconds — and a
+# `--backfill` walks every past fixture still missing a line. The anchor's own
+# backfill took 9 minutes against 745 fixtures and the corpus only grows.
+# ──────────────────────────────────────────────────────────────────────────────
+
 jobs:
-  capture:
+  anchor:
     name: Freeze closing lines
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.backfill && 45 || 15 }}
 
     env:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
@@ -71,11 +97,34 @@ jobs:
             node captureClosingLines.js | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
-      # The Pinnacle-EXCLUDED benchmark. It runs beside the anchor, never
-      # instead of it: a model that selects against Pinnacle cannot be scored
-      # against Pinnacle, and a model that does not still deserves the sharper
-      # benchmark. Both are captured from the same pre-kickoff window so the
-      # two figures are comparable fixture by fixture.
+  # The Pinnacle-EXCLUDED benchmark. It runs BESIDE the anchor, never instead of
+  # it and — since 21 Aug 2026 — never after it: a model that selects against
+  # Pinnacle cannot be scored against Pinnacle, and a model that does not still
+  # deserves the sharper benchmark. Both are captured from the same pre-kickoff
+  # window, so the two figures stay comparable fixture by fixture whichever job
+  # finishes first. Migration 074 made `paper_trade_gate()` REQUIRE this table.
+  independent:
+    name: Freeze independent closing lines
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.backfill && 45 || 15 }}
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
       - name: Capture independent closing lines
         shell: bash
         run: |
