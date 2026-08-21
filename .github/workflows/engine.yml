@@ -358,26 +358,101 @@ jobs:
           # teams stalest-first so consecutive budget-stopped runs cover the set.
           node fetchTeamStats.js
 
-      - name: Alert on pipeline failure
-        if: failure()
+      # ── THE ALERT COULD NOT FIRE FOR THE FAILURE IT WAS WRITTEN FOR ────────
+      #
+      # This was `if: failure()`. A job killed by `timeout-minutes` ends as
+      # **cancelled**, not failed, and GitHub does not run `failure()` steps on
+      # a cancelled job — so the single most damaging thing that happens to this
+      # pipeline sent NO alert at all. The header of this file describes that
+      # kill three separate times ("eight of the last eight runs were
+      # cancelled", "a killed run writes nothing and looks identical to a quiet
+      # slate", six runs dying between 610s and 633s mid fetchMatchDetails) and
+      # the alerting was blind to every one of them.
+      #
+      # AND A FULLY DEGRADED PIPELINE REPORTED SUCCESS. Seven steps carry
+      # `continue-on-error: true`, which is right — a rate-limited ingest must
+      # not skip baseline capture — but it means the JOB succeeds while the work
+      # did not happen. `failure()` is false, so even the old alert stayed
+      # silent. `teamstats` was not in the report list at all: the step whose
+      # silent death left `team_statistics` unwritten from 6 to 20 Aug could
+      # fail on every run for a fortnight and never be named.
+      #
+      # So: `always()`, and three outcomes rather than one.
+      #   cancelled  — killed at the 12-minute job timeout (or manually)
+      #   failure    — a hard step failed and stopped the job
+      #   degraded   — the job "succeeded" with continue-on-error steps down
+      # Silence now means all of them are clear, which is what it was always
+      # taken to mean.
+      - name: Report pipeline health
+        if: always()
         shell: bash
         env:
           WEBHOOK_URL: ${{ secrets.ENGINE_ALERT_WEBHOOK }}
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-          FAILED_STEPS=""
-          [ "${{ steps.plan.outcome }}"        = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- plan (planDay.js)"
-          [ "${{ steps.ingest_loop.outcome }}" = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- ingest-loop (ingestOdds + computeValues + captureSnapshot)"
-          [ "${{ steps.post.outcome }}"         = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- post-signals (postToX.js)"
-          [ "${{ steps.results.outcome }}"      = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- settle-results (fetchResults.js)"
-          [ "${{ steps.details.outcome }}"      = "failure" ] && FAILED_STEPS="${FAILED_STEPS}\n- fetch-details (fetchMatchDetails.js)"
-          [ -z "$FAILED_STEPS" ] && FAILED_STEPS="\n- setup (checkout/node/npm)"
+          # EVERY step id, not the five the old list happened to carry. A step
+          # that is skipped or never reached reports an empty outcome and is
+          # ignored; only an explicit 'failure' is named.
+          BAD=""
+          add () { [ "$2" = "failure" ] && BAD="${BAD}\n- $1"; return 0; }
+          add "plan (planDay.js)"                                   "${{ steps.plan.outcome }}"
+          add "ingest-loop (ingestOdds + computeValues + snapshot)"  "${{ steps.ingest_loop.outcome }}"
+          add "odds-api breadth (ingestOddsApi.js)"                  "${{ steps.odds_api.outcome }}"
+          add "integrity (verifyIntegrity.js)"                       "${{ steps.integrity.outcome }}"
+          add "post-signals (postToX.js)"                            "${{ steps.post.outcome }}"
+          add "settle-results (fetchResults.js)"                     "${{ steps.results.outcome }}"
+          add "elo ladder (computeElo.js)"                           "${{ steps.elo.outcome }}"
+          add "in-play baselines (captureBaseline.js)"               "${{ steps.baseline.outcome }}"
+          add "suggested accas (recordAccas.js)"                     "${{ steps.accas.outcome }}"
+          add "fetch-details (fetchMatchDetails.js)"                 "${{ steps.details.outcome }}"
+          add "team-stats (fetchTeamStats.js)"                       "${{ steps.teamstats.outcome }}"
+
+          STATE="ok"
+          if   [ "${{ cancelled() }}" = "true" ]; then STATE="cancelled"
+          elif [ "${{ failure() }}"   = "true" ]; then STATE="failed"
+          elif [ -n "$BAD" ];                     then STATE="degraded"
+          fi
+
+          case "$STATE" in
+            cancelled)
+              # THE ONE THE OLD CONDITION COULD NOT SEE. Name the timeout
+              # explicitly: 'cancelled' in the run list reads as queue pressure
+              # and sends the reader to the concurrency knob, which is not it.
+              HEAD="[KILLED] EVE Engine was cancelled — almost always the 12-minute job timeout. Nothing after the killed step ran, and a killed run writes nothing."
+              ;;
+            failed)   HEAD="[FAIL] EVE Engine pipeline failure" ;;
+            degraded) HEAD="[DEGRADED] EVE Engine finished, but steps below did not. The job reports success; the work did not happen." ;;
+            *)        HEAD="" ;;
+          esac
+
+          if [ "$STATE" = "ok" ]; then
+            echo "Pipeline healthy — every step reported success."
+            exit 0
+          fi
+
+          [ -z "$BAD" ] && BAD="\n- (no step reported a failure — see the run log for where it stopped)"
+
+          # An annotation as well as a webhook: the webhook is a secret that may
+          # not be set, and a run nobody is paged about should still be legible
+          # in the run list.
+          echo "::error title=EVE Engine ${STATE}::${HEAD}"
+          printf 'Pipeline %s — steps:%b\n' "$STATE" "$BAD"
 
           if [ -n "$WEBHOOK_URL" ]; then
-            PAYLOAD=$(printf '{"content":"[FAIL] EVE Engine pipeline failure\nBranch: %s\nRun: %s\nFailed steps:%s"}' \
-              "${{ github.ref_name }}" "$RUN_URL" "$FAILED_STEPS")
+            # `\\n`, NOT `\n`, AND THE OLD ONE WAS A BUG. In a printf FORMAT
+            # string `\n` is a real newline, and a literal newline inside a JSON
+            # string is invalid JSON — so every payload this step has ever sent
+            # was rejected by the webhook, and `|| true` swallowed the 400. The
+            # alert has been firing into nothing. `\\n` emits the two-character
+            # escape JSON actually wants. Verified by parsing the output.
+            PAYLOAD=$(printf '{"content":"%s\\nBranch: %s\\nRun: %s\\nSteps:%s"}' \
+              "$HEAD" "${{ github.ref_name }}" "$RUN_URL" "$BAD")
             curl -s -X POST "$WEBHOOK_URL" -H 'Content-Type: application/json' -d "$PAYLOAD" || true
           fi
-          echo "Pipeline failed — steps:$FAILED_STEPS"
+
+          # DELIBERATELY DOES NOT FAIL THE JOB. This step reports; it must not
+          # turn a degraded run into a red one, because a red run on a
+          # continue-on-error step is exactly what `continue-on-error` was set
+          # to prevent. The alert is the signal, not the exit code.
+          exit 0

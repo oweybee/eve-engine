@@ -160,8 +160,6 @@ test('the over and the under cannot both be flagged', () => {
   assert(!both, 'both legs cannot beat their own price');
 });
 
-console.log(`\n${failed === 0 ? '✓' : '✗'} market prob scale: ${passed} passed, ${failed} failed`);
-process.exit(failed === 0 ? 0 : 1);
 
 // ── THE FOUR REASONS A SECONDARY BOARD IS EMPTY, COUNTED APART ───────────────
 //
@@ -185,12 +183,12 @@ test('the census separates unpriced from priced-but-no-edge', () => {
   // fixture is counted as unpriced rather than as an absence of value.
   sm.buildSecondarySignals(
     { id: 'm1', odds: [], home_team: {}, away_team: {} }, null, null, null, null, census);
-  assert.strictEqual(census.totals.unpriced, 1);
-  assert.strictEqual(census.totals.priced, 0);
-  assert.strictEqual(census.totals.value, 0);
+  assert(census.totals.unpriced === 1, `unpriced ${census.totals.unpriced}`);
+  assert(census.totals.priced === 0, `priced ${census.totals.priced}`);
+  assert(census.totals.value === 0, `value ${census.totals.value}`);
   // `best` stays null: no leg was priced, so there is no best leg. Reporting 0
   // here would say "we priced it and found nothing", which is a different claim.
-  assert.strictEqual(census.totals.best, null);
+  assert(census.totals.best === null, `best ${census.totals.best}`);
 });
 
 test('a census is optional, so every existing caller is unaffected', () => {
@@ -199,5 +197,36 @@ test('a census is optional, so every existing caller is unaffected', () => {
   const match = { id: 'm2', odds: [], home_team: {}, away_team: {} };
   const withCensus = sm.buildSecondarySignals(match, null, null, null, null, {});
   const without    = sm.buildSecondarySignals(match, null, null, null, null);
-  assert.deepStrictEqual(without, withCensus);
+  assert(JSON.stringify(without) === JSON.stringify(withCensus),
+    'the census must not change what is written');
 });
+
+// ── AND THE CALL SITE HAS TO PASS IT ────────────────────────────────────────
+//
+// The census above was written, tested and NEVER CALLED. `computeValues.js`
+// passed five arguments, so `census` defaulted to null on every production run
+// and the diagnostic that separates the four causes of an empty secondary board
+// was dead code from the day it landed — while CLAUDE.md recorded it as
+// shipped. Two tests proving a parameter works prove nothing about whether
+// anything supplies it, which is the whole "shipped silently dead" shape this
+// engine keeps paying for.
+//
+// A SOURCE ASSERTION, deliberately: the alternative is standing up the whole
+// compute path against a database this suite has no access to. Grepping the
+// call site is crude and it is the check that would have caught this.
+test('computeValues passes the census, so the diagnostic is not dead code', () => {
+  const fs = require('fs');
+  const src = fs.readFileSync(require('path').join(__dirname, 'computeValues.js'), 'utf8');
+  const call = src.match(/sm\.buildSecondarySignals\(([^)]*)\)/);
+  assert(call, 'computeValues.js must call buildSecondarySignals');
+  const args = call[1].split(',').map(a => a.trim());
+  assert(args.length === 6,
+    `buildSecondarySignals called with ${args.length} args — the 6th is the census, `
+    + 'and without it the per-market line prints nothing at all');
+  assert(args[5] === 'census', `6th arg is \`${args[5]}\``);
+  // And the result has to reach the log, or the census is a variable nobody reads.
+  assert(/\[secondary\] \$\{market\}/.test(src), 'the census must be printed per market');
+});
+
+console.log(`\n${failed === 0 ? '✓' : '✗'} market prob scale: ${passed} passed, ${failed} failed`);
+process.exit(failed === 0 ? 0 : 1);

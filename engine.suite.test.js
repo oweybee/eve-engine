@@ -46,4 +46,27 @@ test('this file is in the chain — otherwise it guards nothing', () => {
     'engine.suite.test.js must itself be named in package.json scripts.test');
 });
 
+/**
+ * AND A TEST AFTER `process.exit` IS THE SAME BUG ONE LEVEL IN.
+ *
+ * Most files here end `console.log(summary); process.exit(failed ? 1 : 0);`.
+ * Three census cases were appended to engine.marketprob.test.js BELOW that exit
+ * and therefore never ran — for long enough that two of them used an assert API
+ * the file does not have and nobody found out. The suite was green, the chain
+ * was complete, and the cases guarded nothing. That is exactly the failure the
+ * file above exists to catch, one scope smaller.
+ */
+test('no test is declared after the file exits', () => {
+  const offenders = [];
+  for (const f of onDisk) {
+    const src = fs.readFileSync(path.join(root, f), 'utf8').split('\n');
+    const exitAt = src.reduce((last, line, i) => /process\.exit\(/.test(line) ? i : last, -1);
+    if (exitAt < 0) continue;
+    const after = src.slice(exitAt + 1).filter(l => /^\s*(test|describe)\(/.test(l)).length;
+    if (after) offenders.push(`${f} (${after} after line ${exitAt + 1})`);
+  }
+  assert.deepStrictEqual(offenders, [],
+    `declared below process.exit(), so they never run: ${offenders.join(', ')}`);
+});
+
 console.log(`\nsuite coverage: ${passed} passed${process.exitCode ? ' (with failures)' : ''}`);

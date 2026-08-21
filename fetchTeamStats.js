@@ -23,6 +23,7 @@
 
 const https         = require('https');
 const { getClient } = require('./lib/supabaseClient');
+const { beginWatchdog } = require('./lib/watchdog');
 const { pageAll } = require('./lib/pagedRead');
 
 const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY;
@@ -276,6 +277,23 @@ async function fetchTeamWindow(teamId) {
 async function main() {
   if (!API_FOOTBALL_KEY) { console.log('[teamstats] API_FOOTBALL_KEY not set — skipping'); return; }
   const supabase = getClient();
+  const summary = { teams: 0, skippedFresh: 0, refsUpdated: 0, errors: 0, budgetStopped: false };
+  const refereeAgg = new Map();
+
+  // THE BACKSTOP UNDER `BUDGET_SECONDS`, not a replacement for it. The budget is
+  // what MUST stop this script — it is set below the step timeout precisely so
+  // the summary and the referee aggregate are written before anything kills us.
+  // This says so out loud on the runs where that ordering fails, because for
+  // two weeks in August this script was killed on every single invocation and
+  // the step reported success. See lib/watchdog for what a SIGKILL still costs.
+  const dog = beginWatchdog('fetchTeamStats', {
+    onTerminate: ({ stage }) => {
+      console.error(`[teamstats] partial: ${summary.teams} team(s), `
+        + `${summary.refsUpdated} referee row(s) written before the kill at "${stage}". `
+        + `refereeAgg held ${refereeAgg.size} referee(s) and is LOST — it is written `
+        + 'after the team loop, so a kill inside that loop discards all of it.');
+    },
+  });
 
   // Half the budget for resolving fixtures, half for the teams they name — so a
   // slow resolve phase can no longer consume the entire run and leave the team
@@ -283,16 +301,16 @@ async function main() {
   // nothing at all.
   const started  = Date.now();
   const deadline = started + BUDGET_SECONDS * 1000;
+  dog.stage('resolving upcoming fixtures');
   const teams = await resolveUpcomingTeams(supabase, started + BUDGET_SECONDS * 500);
-  if (!teams.size) { console.log('[teamstats] no upcoming team ids resolved'); return; }
+  if (!teams.size) { dog.finish(); console.log('[teamstats] no upcoming team ids resolved'); return; }
 
-  const summary = { teams: 0, skippedFresh: 0, refsUpdated: 0, errors: 0, budgetStopped: false };
-  const refereeAgg = new Map();
 
   // STALEST FIRST, so consecutive budget-stopped runs cover the whole set
   // instead of redoing the same head. A team never fetched sorts first.
   const fresh = DRY_RUN ? new Map() : await freshnessMap(supabase);
   const order = stalestFirst(teams, fresh);
+  dog.stage(`team loop (${order.length} team(s))`);
 
   for (const [teamId, teamName] of order) {
     if (Date.now() > deadline) {
@@ -350,6 +368,7 @@ async function main() {
     summary.refsUpdated++;
   }
 
+  dog.finish();
   console.log(`[teamstats] done in ${Math.round((Date.now() - started) / 1000)}s:`, summary);
   return summary;
 }

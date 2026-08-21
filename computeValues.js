@@ -19,6 +19,7 @@
 // (computeConsensus/computeMatch) impossible to unit-test without a live DB.
 // The pure exports below have no DB dependency.
 const sm            = require('./lib/secondaryMarkets');
+const { beginWatchdog } = require('./lib/watchdog');
 const { categoryFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
 const { shinDevig } = require('./lib/devig');
@@ -870,6 +871,14 @@ async function main() {
   // computed_values row (so the feed, detail tabs and suggested-bets see them),
   // and collect +EV signal candidates. Non-fatal: never lose the 1X2 work.
   let secondaryCandidates = [];
+  // THE CENSUS WAS BUILT, TESTED AND NEVER CALLED. `buildSecondarySignals` has
+  // taken this out-parameter since 21 Aug 2026 and every call site passed five
+  // arguments, so the diagnostic that separates the four causes of an empty
+  // secondary board has been dead code since the day it was written — the exact
+  // "shipped silently dead" shape `/api/inplay`'s `source` block exists to
+  // refuse. It is wired now and printed below whatever the outcome.
+  const census = {};
+  let noStats = 0;
   try {
     const live = results.filter(r => r && !r.skipped);
     await initTeamKeyResolver(supabase);
@@ -878,10 +887,22 @@ async function main() {
       const hs = statsByName.get(resolveTeamKey(r.match.home_team?.name));
       const as = statsByName.get(resolveTeamKey(r.match.away_team?.name));
       const rs = r.match.referee ? refByName.get(r.match.referee) : null;
+      if (!hs || !as) noStats += 1;
       Object.assign(r.row, sm.secondaryComputedValues(r.match, r.consensus, hs, as, rs));
-      for (const c of sm.buildSecondarySignals(r.match, r.consensus, hs, as, rs)) {
+      for (const c of sm.buildSecondarySignals(r.match, r.consensus, hs, as, rs, census)) {
         secondaryCandidates.push({ ...c, kickoff_at: r.match.kickoff_at ?? null });
       }
+    }
+    // FOUR CAUSES, NAMED. An empty secondary board can mean no team stats (the
+    // fetch was killed at its step timeout — see lib/watchdog), nothing priced,
+    // priced with no positive edge, or a positive edge below the box. Those are
+    // indistinguishable from outside and they need completely different fixes;
+    // in August the first one was true for two weeks and read as the third.
+    console.log(`[secondary] ${live.length} fixture(s), ${noStats} without team stats`);
+    for (const [market, c] of Object.entries(census)) {
+      const best = c.best == null ? 'n/a' : `${(c.best * 100).toFixed(1)}%`;
+      console.log(`[secondary] ${market}: ${c.priced} priced, ${c.unpriced} unpriced, `
+        + `${c.positive} with a positive edge, ${c.value} clearing the bar (best ${best})`);
     }
   } catch (err) {
     console.error('[secondary] pricing failed (1X2 unaffected):', err.message);
@@ -968,10 +989,20 @@ async function main() {
 }
 
 if (require.main === module) {
-  main().catch(err => {
-    console.error('[engine] fatal:', err.message);
-    process.exit(1);
-  });
+  // A KILLED COMPUTE STEP USED TO PRINT NOTHING. `computeValues` runs inside the
+  // engine's bounded loop, which is checked BETWEEN iterations — so it cannot be
+  // stopped mid-compute by its own budget, and the job timeout is what actually
+  // ends it when the loop overshoots. That kill discarded the run with no line
+  // in the log, and an empty `computed_values` cycle looks exactly like a slate
+  // with nothing on it. See lib/watchdog for what SIGKILL still costs.
+  const dog = beginWatchdog('computeValues');
+  main()
+    .then(() => dog.finish())
+    .catch(err => {
+      dog.finish();
+      console.error('[engine] fatal:', err.message);
+      process.exit(1);
+    });
 }
 
 // Exported so computeInplayValues.js can reuse the consensus core and the
