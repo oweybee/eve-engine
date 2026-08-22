@@ -178,10 +178,21 @@ async function main() {
 
   // FREE catalogue call → resolve sport keys (a renamed key warns, never silently drops)
   const cat = await httpGetJson(`/v4/sports/?apiKey=${KEY}`);
-  const { map, unmatched } = mapSportKeys(cat.json, { includeCups: INCLUDE_CUPS });
-  if (unmatched.length) console.log(`[oddsApi] no sport key for: ${unmatched.join(', ')}`);
+  const { map, unmatched, unavailable, renamed, collisions } =
+    mapSportKeys(cat.json, { includeCups: INCLUDE_CUPS });
+  // Four different silences, named. `0 league(s) resolved` was the whole of
+  // what this said while the matcher was broken, and it read like a quiet
+  // catalogue rather than a table that could never match anything.
+  if (unmatched.length) console.log(`[oddsApi] EXPECTED a sport key and did not find one: ${unmatched.join(', ')}`);
+  if (unavailable.length) console.log(`[oddsApi] not offered by the feed at all: ${unavailable.join(', ')}`);
+  for (const r of renamed) console.log(`[oddsApi] RENAMED — ${r}`);
+  for (const c of collisions) console.log(`[oddsApi] COLLISION — ${c}`);
   const leagues = Object.entries(map);
   console.log(`[oddsApi] ${leagues.length} league(s) resolved`);
+  if (!leagues.length) {
+    console.log('[oddsApi] nothing resolved — the table and the catalogue disagree; ' +
+                'run scripts/oddsApiCatalogue.js before touching lib/oddsApi.js');
+  }
 
   const idx = await loadFixtureIndex(supabase);
   const nowMs = Date.now();
