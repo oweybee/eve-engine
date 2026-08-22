@@ -75,7 +75,35 @@ on:
     # Cadence is not really set here anyway: ingestOdds.js self-gates against
     # engine_plan.next_run_at, so it pulls when it is due regardless of how
     # often the workflow starts. The loop exists to poll across the window.
-    - cron: '*/15 * * * *'
+    # EVERY 20 MINUTES. It was every 15, and three separate measurements say
+    # that was too tight:
+    #
+    #   1. THE JOB DOES NOT FIT. Typical 9m08s, worst measured 12m13s — the
+    #      07:22 run on 22 Aug was CANCELLED at the 12-minute timeout with
+    #      fetchMatchDetails unfinished. Three minutes of slack against a job
+    #      whose own worst case exceeds it is not slack.
+    #   2. GITHUB WAS NOT DELIVERING IT ANYWAY. Measured over the six hours
+    #      before the outage the runs landed at 21:01, 20:33, 19:57, 19:31,
+    #      18:56, 18:03 — a real cadence of ~30 minutes, because a high
+    #      frequency cron is the first thing dropped under load. A schedule
+    #      that is throttled to half its stated rate is a schedule nobody can
+    #      reason about.
+    #   3. IT DOUBLED THE ODDS API SPEND. Every tick invokes ingestOddsApi, so
+    #      the run count IS a credit multiplier. See lib/oddsApiBudget's daily
+    #      ledger for why the real fix is a ceiling and not a cadence — but 96
+    #      ticks a day was the number that made a per-run cap catastrophic.
+    #
+    # So all three agree again, with margin: bounded loop 7min < timeout 15min
+    # < interval 20min. Board freshness IMPROVES on the ~30 minutes that was
+    # actually being delivered.
+    #
+    # AND EDITING THIS BLOCK IS WHAT RE-REGISTERS THE SCHEDULE. engine.yml did
+    # not fire for ten hours because an expression error made the file
+    # unparseable, and it still had not fired 35 minutes after the fix while
+    # every other workflow in the repo ran on time. A change to `on.schedule`
+    # on the default branch is the documented way to make GitHub pick a
+    # schedule back up.
+    - cron: '*/20 * * * *'
 
   workflow_dispatch:
     inputs:
@@ -121,8 +149,7 @@ jobs:
     # so 12 min leaves real slack for a slow tail without ever approaching the
     # 15-minute cron. fetchTeamStats self-caches per team (20h), so only the
     # first full population is slow.
-    timeout-minutes: 12
-
+    timeout-minutes: 15
     env:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

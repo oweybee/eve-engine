@@ -4,7 +4,7 @@
  */
 'use strict';
 const assert = require('assert');
-const { costOf, daysInMonth, seasonProgress, planDailySpend,
+const { costOf, daysInMonth, seasonProgress, planDailySpend, dailyLedger, withinDailyBudget,
         leagueDayWeight, allocateByValue } = require('./lib/oddsApiBudget');
 
 let passed = 0;
@@ -111,6 +111,70 @@ test('allocateByValue respects the floor and the total', () => {
   assert.ok(Object.values(a).reduce((s, v) => s + v, 0) <= 60, 'within total');
   assert.ok(a.epl > a.china_superleague, 'proven league outranks the avoid list');
   assert.deepStrictEqual(allocateByValue([], 50), {});
+});
+
+
+// ── The daily ledger ───────────────────────────────────────────────────────
+// The guard that stops a DAY's allocation being spent once per RUN. Measured
+// 22 Aug 2026: 36 leagues at 2 credits a request over 96 ticks a day is 6,912
+// credits against an intended 2,880 — 207,360 a month on a 100,000 allowance.
+test('a new UTC day re-baselines on the API counter', () => {
+  const l = dailyLedger({ storedDay: '2026-08-21', storedUsedAtDayStart: 400, usedNow: 900, today: '2026-08-22' });
+  assert.strictEqual(l.day, '2026-08-22');
+  assert.strictEqual(l.usedAtDayStart, 900);
+  assert.strictEqual(l.spentToday, 0);
+});
+
+test('within a day, spend is the counter difference', () => {
+  const l = dailyLedger({ storedDay: '2026-08-22', storedUsedAtDayStart: 900, usedNow: 1044, today: '2026-08-22' });
+  assert.strictEqual(l.spentToday, 144);
+  assert.strictEqual(l.usedAtDayStart, 900, 'the baseline does not move mid-day');
+});
+
+test('a DROP in the counter is a billing reset, not a refund', () => {
+  // The pool renews on the subscription date, mid-month. usedNow < baseline
+  // would compute a NEGATIVE spend, which reads as unlimited headroom.
+  const l = dailyLedger({ storedDay: '2026-08-22', storedUsedAtDayStart: 98000, usedNow: 0, today: '2026-08-22' });
+  assert.strictEqual(l.usedAtDayStart, 0, 're-baselined');
+  assert.strictEqual(l.spentToday, 0);
+  assert.ok(l.spentToday >= 0, 'spend is never negative');
+});
+
+test('no counter yields unknown, never zero', () => {
+  // 0 spent reads as a full day of headroom; unknown must stay unknown.
+  const l = dailyLedger({ storedDay: '2026-08-22', storedUsedAtDayStart: 900, usedNow: null, today: '2026-08-22' });
+  assert.strictEqual(l.spentToday, null);
+  assert.strictEqual(l.usedAtDayStart, 900, 'the baseline survives a missing header');
+});
+
+test('the ceiling stops spend at the boundary, not past it', () => {
+  assert.strictEqual(withinDailyBudget({ spentToday: 2876, cost: 2, ceiling: 2880 }), true);
+  assert.strictEqual(withinDailyBudget({ spentToday: 2878, cost: 2, ceiling: 2880 }), true);
+  assert.strictEqual(withinDailyBudget({ spentToday: 2879, cost: 2, ceiling: 2880 }), false);
+  assert.strictEqual(withinDailyBudget({ spentToday: 9999, cost: 2, ceiling: 2880 }), false);
+});
+
+test('an unknown ledger FAILS OPEN — canSpend\'s reserve is underneath it', () => {
+  // Refusing every request because a header was missing would take the board
+  // down to protect a budget. The hard reserve still guards the pool.
+  assert.strictEqual(withinDailyBudget({ spentToday: null, cost: 2, ceiling: 2880 }), true);
+  assert.strictEqual(withinDailyBudget({ spentToday: 100, cost: 2, ceiling: null }), true);
+  assert.strictEqual(withinDailyBudget({ spentToday: 100, cost: 2, ceiling: 0 }), true);
+});
+
+test('a day of ticks now costs the DAY budget, not the day budget per tick', () => {
+  // Replay 72 ticks (20-minute cadence) against one ceiling and assert the
+  // total lands on the allocation rather than 72x it.
+  const ceiling = 2880, cost = 2, leagues = 36;
+  let spent = 0;
+  for (let tick = 0; tick < 72; tick++) {
+    for (let i = 0; i < leagues; i++) {
+      if (!withinDailyBudget({ spentToday: spent, cost, ceiling })) break;
+      spent += cost;
+    }
+  }
+  assert.strictEqual(spent, ceiling, `a day of ticks spent ${spent}, ceiling ${ceiling}`);
+  assert.ok(spent * 31 < 100000, 'a full month stays inside the allowance');
 });
 
 console.log(`\nodds budget tests: ${passed} passed${process.exitCode ? ' (with failures)' : ''}`);

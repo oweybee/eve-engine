@@ -34,7 +34,7 @@ const { clubKey } = require('./lib/lambdaBoard');
 const {
   httpGetJson, quotaFromHeaders, requestCost, canSpend, mapSportKeys, parseEvent,
 } = require('./lib/oddsApi');
-const { planDailySpend } = require('./lib/oddsApiBudget');
+const { planDailySpend, dailyLedger, withinDailyBudget } = require('./lib/oddsApiBudget');
 
 const KEY = process.env.ODDS_API_KEY;
 const DRY = process.argv.includes('--dry-run');
@@ -170,11 +170,13 @@ async function main() {
     console.log('[oddsApi] monthly pool exhausted — stopping');
     return;
   }
-  // Cap this run: pre-match gets the protected breadth floor, in-play the surplus.
-  const runCap = INPLAY
-    ? Math.max(1, plan.inplayPolls)
-    : Math.max(1, plan.prematchPolls);
-  console.log(`[oddsApi] run cap: ${runCap} league request(s)`);
+  // THE DAY'S CEILING, NOT THIS RUN'S. `plan.prematchCost` is polls x cost x
+  // league-days — a DAY's allocation. This used to read `plan.prematchPolls`
+  // as a per-run league cap, so every tick was free to spend the whole day's
+  // budget again: 6,912 credits/day at a 15-minute cadence against an intended
+  // 2,880, or 207,360 a month against a 100,000 allowance. See dailyLedger().
+  const dailyCeiling = INPLAY ? plan.inplayCredits : plan.prematchCost;
+  console.log(`[oddsApi] day ceiling: ${dailyCeiling} credit(s)`);
 
   // FREE catalogue call → resolve sport keys (a renamed key warns, never silently drops)
   const cat = await httpGetJson(`/v4/sports/?apiKey=${KEY}`);
@@ -198,12 +200,28 @@ async function main() {
   const nowMs = Date.now();
   const horizonMs = nowMs + HORIZON_HOURS * 3_600_000;
 
-  let remaining = quotaFromHeaders(cat.headers).remaining ?? quota.remaining ?? null;
+  const catQuota = quotaFromHeaders(cat.headers);
+  let remaining = catQuota.remaining ?? quota.remaining ?? null;
+
+  // The daily ledger is anchored on the API's own counter, read from the FREE
+  // catalogue call above, so it is correct across restarts and concurrent runs.
+  let usedNow = catQuota.used ?? quota.used ?? null;
+  const today = new Date().toISOString().slice(0, 10);
+  const ledger = dailyLedger({
+    storedDay: quota.day, storedUsedAtDayStart: quota.usedAtDayStart, usedNow, today,
+  });
+  let spentToday = ledger.spentToday;
+  console.log(`[oddsApi] spent today: ${spentToday ?? 'unknown'} of ${dailyCeiling} credit(s)`);
+
   const rows = [];
-  let matched = 0, unmatchedEv = 0, polled = 0, skippedGuard = 0;
+  let matched = 0, unmatchedEv = 0, polled = 0, skippedGuard = 0, stoppedOnDaily = false;
 
   for (const [corpusKey, sportKey] of leagues) {
-    if (polled >= runCap) { skippedGuard++; continue; }
+    // One poll per league per run at most — the day's spread is the ceiling's job.
+    if (!withinDailyBudget({ spentToday, cost, ceiling: dailyCeiling })) {
+      stoppedOnDaily = true;
+      break;
+    }
     if (!canSpend({ remaining, cost, reserve: RESERVE })) { skippedGuard++; continue; }
     let res;
     try {
@@ -218,6 +236,15 @@ async function main() {
     polled++;
     const q = quotaFromHeaders(res.headers);
     if (q.remaining != null) remaining = q.remaining;
+    // Prefer the counter; fall back to our own arithmetic so a response with no
+    // headers still advances the ledger rather than reading as a free request.
+    if (q.used != null) usedNow = q.used;
+    else if (usedNow != null) usedNow += cost;
+    if (spentToday != null) {
+      spentToday = ledger.usedAtDayStart != null && usedNow != null
+        ? Math.max(0, usedNow - ledger.usedAtDayStart)
+        : spentToday + cost;
+    }
 
     for (const ev of res.json ?? []) {
       const ko = new Date(ev.commence_time).getTime();
@@ -229,12 +256,19 @@ async function main() {
     }
   }
 
+  if (stoppedOnDaily) {
+    console.log(`[oddsApi] DAY BUDGET REACHED: ${spentToday}/${dailyCeiling} credits spent ` +
+                `today — ${leagues.length - polled} league(s) not polled this run. ` +
+                'This is the pacer working, not a fault.');
+  }
   console.log(`[oddsApi] polled=${polled} skipped_guard=${skippedGuard} ` +
               `events_matched=${matched} unmatched=${unmatchedEv} rows=${rows.length} ` +
+              `spent_today=${spentToday ?? 'unknown'}/${dailyCeiling} ` +
               `remaining=${remaining ?? 'unknown'}`);
 
   await saveQuota(supabase, {
-    remaining, used: quotaFromHeaders(cat.headers).used ?? quota.used ?? null,
+    remaining, used: usedNow,
+    day: ledger.day, usedAtDayStart: ledger.usedAtDayStart, spent_today: spentToday,
     checked_at: new Date().toISOString(),
   });
 
