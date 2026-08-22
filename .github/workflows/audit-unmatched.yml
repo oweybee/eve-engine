@@ -1,0 +1,55 @@
+# Read-only diagnostic: split "N unmatched Odds API events" into its four causes.
+#
+# Manual only — there is nothing to schedule, and the answer moves with the
+# fixture horizon, so it is run deliberately after a matchday rather than on a
+# clock. Both endpoints it reads are FREE (`/v4/sports` and
+# `/v4/sports/{key}/events`), and the summary prints the observed spend against
+# the daily ceiling so that claim is checked on every run rather than asserted.
+#
+# It exists because the-odds-api.com AND *.supabase.co are both egress-blocked
+# from the development environment, so this script cannot be run there at all —
+# the same reason odds-api-catalogue.yml exists. See
+# scripts/auditUnmatchedEvents.js for what each of the four causes means and
+# which two of them are work.
+name: Unmatched Odds API events (diagnostic)
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Audit only the first N leagues (blank = all)'
+        required: false
+        default: ''
+      json:
+        description: 'Emit the machine-readable summary as well'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Audit unmatched events
+        env:
+          ODDS_API_KEY:              ${{ secrets.ODDS_API_KEY }}
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AUDIT_LIMIT:               ${{ inputs.limit }}
+          AUDIT_JSON:                ${{ inputs.json }}
+        # The runner's shell is `bash -eo pipefail`, so a bare
+        # `[ cond ] && args+=(...)` EXITS THE STEP when the condition is false —
+        # a blank `limit` would end the run before node was ever reached.
+        run: |
+          args=()
+          if [ -n "$AUDIT_LIMIT" ]; then args+=("--limit=$AUDIT_LIMIT"); fi
+          if [ "$AUDIT_JSON" = "true" ]; then args+=("--json"); fi
+          node scripts/auditUnmatchedEvents.js ${args[@]+"${args[@]}"}
