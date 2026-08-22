@@ -375,7 +375,7 @@ function isUpcoming(match) {
  * prediction/stats sweep still puts imminent fixtures first, which is what a
  * budget shorter than the work list makes matter.
  */
-const { inLineupWindow } = require('./lib/lineupCapture');
+const { inLineupWindow, DEFAULTS: LINEUP } = require('./lib/lineupCapture');
 
 function isRecentlyCompleted(match) {
   if (match.status !== 'completed' || !match.kickoff_at) return false;
@@ -438,7 +438,7 @@ async function main() {
 
   const windowCount = matches.filter(inLineupWindow).length;
   console.log(
-    `[details] ${matches.length} in range (${windowCount} inside the ${LINEUP_WINDOW_MINUTES}m lineup window), ` +
+    `[details] ${matches.length} in range (${windowCount} inside the ${LINEUP.windowMinutes}m lineup window), ` +
     `budget ${BUDGET_SECONDS}s`
   );
 
