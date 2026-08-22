@@ -41,6 +41,7 @@
 'use strict';
 
 const { getClient } = require('../lib/supabaseClient');
+const { LEAGUES } = require('../lib/trackedLeagues');
 const { clubKey } = require('../lib/lambdaBoard');
 const { httpGetJson, mapSportKeys, quotaFromHeaders } = require('../lib/oddsApi');
 
@@ -282,13 +283,45 @@ async function loadFixtureIndex(supabase) {
   };
 }
 
-/** Which of our league rows a resolved sport key belongs to, by (name, country). */
-async function loadLeagueRows(supabase) {
-  const { data } = await supabase.from('leagues').select('id, name, country');
-  const byName = new Map();
-  for (const l of data ?? []) byName.set(`${l.name}|${l.country}`, l.id);
-  return byName;
+/**
+ * corpusKey -> our `leagues.id`, which is the join the audit was missing.
+ *
+ * ── THE THIRD BUG, AND THE ONE THAT MADE THE OTHER TWO INVISIBLE ────────────
+ * This returned a map keyed `"Premier League|England"` while the caller looked
+ * it up with `epl` — the corpusKey `mapSportKeys` emits. So `leagueId` was
+ * ALWAYS undefined, `leagueHasUpcoming` was ALWAYS false, and `classifyEvent`
+ * reaches the OUT_OF_SEASON branch BEFORE it reaches BEYOND_HORIZON or
+ * NAME_MISMATCH. Every unmatched event in the world therefore came back
+ * OUT_OF_SEASON, and the other three buckets could not be produced at all:
+ * the 23:35 run read NAME_MISMATCH 0, TIME_GAP 0, BEYOND_HORIZON 0,
+ * OUT_OF_SEASON 259 — which is not a four-way split, it is "unmatched"
+ * relabelled and printed under a table that implies it was classified.
+ *
+ * `lib/trackedLeagues` already holds the join, as `[apiId, name, country,
+ * corpusKey]`. It is the engine's own list, so the audit now files a
+ * competition against the same identity the ingest does rather than against a
+ * string it composed itself.
+ *
+ * A corpusKey we cannot resolve is reported, never silently filed as out of
+ * season — that is the whole failure above, one layer up.
+ */
+async function loadLeagueIds(supabase) {
+  const { data, error } = await supabase.from('leagues').select('id, name, country');
+  if (error) throw new Error(`audit[leagues]: ${error.message}`);
+  const byNameCountry = new Map();
+  for (const l of data ?? []) byNameCountry.set(`${l.name}|${l.country}`, l.id);
+
+  const byCorpusKey = new Map();
+  const unresolved = [];
+  for (const [, name, country, corpusKey] of LEAGUES) {
+    if (!corpusKey) continue;
+    const id = byNameCountry.get(`${name}|${country}`);
+    if (id == null) { unresolved.push(`${corpusKey} (${name}|${country})`); continue; }
+    byCorpusKey.set(corpusKey, id);
+  }
+  return { byCorpusKey, unresolved };
 }
+
 
 async function main() {
   if (!KEY) { console.log('[audit] ODDS_API_KEY not set — nothing to ask'); process.exit(1); }
@@ -301,7 +334,7 @@ async function main() {
 
   const { idx, homeKeys, leaguesWithUpcoming, fixtures, upcoming, truncated } =
     await loadFixtureIndex(supabase);
-  const leagueIdByKey = await loadLeagueRows(supabase);
+  const { byCorpusKey: leagueIdByKey, unresolved } = await loadLeagueIds(supabase);
 
   // THE INGEST ASKS A DIFFERENT QUESTION OF THE CATALOGUE. It calls /v4/sports
   // WITHOUT `all=true`, which returns in-season competitions only; this script
@@ -321,6 +354,10 @@ async function main() {
     console.log(`[audit] ${Object.keys(liveMap).length} of those are IN SEASON per the ingest's own ` +
                 `catalogue call; not offered right now: ${notInSeason.join(', ')}`);
   }
+  if (unresolved.length) {
+    console.log(`[audit] no leagues row for: ${unresolved.join(', ')} — their events are ` +
+                'classified on names and the clock, never as out of season.');
+  }
   if (truncated) {
     console.log('[audit] ::error::the fixture read hit MAX_PAGES — the index is INCOMPLETE and ' +
                 'every count below understates MATCHED. Do not quote this run.');
@@ -338,8 +375,10 @@ async function main() {
       console.warn(`  [warn] ${leagueKey} (${sportKey}): ${err.message}`);
       continue;
     }
+    // A corpusKey with no `leagues` row is NOT out of season — we cannot say
+    // anything about its schedule, so it must not be filed as though we had.
     const leagueId = leagueIdByKey.get(leagueKey);
-    const leagueHasUpcoming = leagueId ? leaguesWithUpcoming.has(leagueId) : false;
+    const leagueHasUpcoming = leagueId == null ? true : leaguesWithUpcoming.has(leagueId);
     for (const ev of events) {
       rows.push({ leagueKey, sportKey, ...classifyEvent(ev, idx, { now, leagueHasUpcoming, homeKeys }) });
     }

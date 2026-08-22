@@ -204,3 +204,55 @@ test('an error is thrown with the label, not swallowed into an empty index', asy
   const q = () => ({ range: async () => ({ data: null, error: { message: 'boom' } }) });
   await assert.rejects(() => pageAll(q, 'matches'), /audit\[matches\]: boom/);
 });
+
+// ---------------------------------------------------------------------------
+// The corpusKey join — the bug that made the four-way split a one-way one
+//
+// `loadLeagueRows` returned a map keyed "Premier League|England" while the
+// caller looked it up with `epl`. So `leagueId` was always undefined,
+// `leagueHasUpcoming` was always false, and OUT_OF_SEASON — which classify
+// tests FIRST — swallowed every unmatched event before BEYOND_HORIZON or
+// NAME_MISMATCH could be reached. The 23:35 run read 0 / 0 / 0 / 259, which is
+// not a classification: it is "unmatched" wearing a table.
+//
+// These pin the ORDER dependency that made a lookup miss catastrophic rather
+// than merely wrong, and the fail-open rule that replaced it.
+// ---------------------------------------------------------------------------
+const { LEAGUES } = require('./lib/trackedLeagues');
+
+test('every corpusKey mapSportKeys can emit is joinable to a league identity', () => {
+  const byCorpus = new Map();
+  for (const [, name, country, corpusKey] of LEAGUES) {
+    if (corpusKey) byCorpus.set(corpusKey, `${name}|${country}`);
+  }
+  // The keys the audit loops over are corpusKeys, not `name|country` strings.
+  for (const k of ['epl', 'e1', 'e2', 'e3', 'mls', 'laliga', 'bundesliga']) {
+    assert.ok(byCorpus.has(k), `${k} must resolve to a (name, country) identity`);
+    assert.ok(byCorpus.get(k).includes('|'), 'the identity is (name, country)');
+    assert.notStrictEqual(k, byCorpus.get(k), 'a corpusKey is NOT a name|country key');
+  }
+});
+
+test('OUT_OF_SEASON is tested BEFORE the other two, so a false one hides them', () => {
+  const idx = new Map();
+  const ev = { home_team: 'Nowhere FC', away_team: 'Elsewhere FC',
+               commence_time: new Date(Date.now() + 400 * 3600_000).toISOString() };
+  // Beyond the horizon AND unknown by name — but out-of-season wins the race.
+  const hidden = classifyEvent(ev, idx, { now: Date.now(), leagueHasUpcoming: false });
+  assert.strictEqual(hidden.outcome, 'OUT_OF_SEASON');
+  // With the league correctly known to be in season, the real cause surfaces.
+  const shown = classifyEvent(ev, idx, { now: Date.now(), leagueHasUpcoming: true });
+  assert.strictEqual(shown.outcome, 'BEYOND_HORIZON');
+});
+
+test('an unjoinable league FAILS OPEN — never filed as out of season', () => {
+  // The call site passes leagueHasUpcoming: true when it holds no league id,
+  // because "we cannot say" and "we know there are no fixtures" are different
+  // claims and only one of them is ours to make.
+  const src = fs.readFileSync('./scripts/auditUnmatchedEvents.js', 'utf8');
+  assert.match(
+    src,
+    /leagueId == null \? true : leaguesWithUpcoming\.has\(leagueId\)/,
+    'an unresolved league must not be asserted out of season',
+  );
+});
