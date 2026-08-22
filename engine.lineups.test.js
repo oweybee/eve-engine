@@ -163,22 +163,47 @@ test('a fixture outside the window is never in the work list', async () => {
 // The cadence IS the guarantee, so the workflow is part of the contract
 // ---------------------------------------------------------------------------
 
-test('THE JOB HAS ITS OWN TIGHT CRON', () => {
+test('THE JOB HAS ITS OWN SCHEDULE', () => {
   // A 15-minute pipeline cannot chase a 20-minute publication. If this ever
   // becomes a step of engine.yml again, the guarantee goes with it.
-  assert.match(WF, /cron:\s*'\*\/5 \* \* \* \*'/, 'not on a 5-minute cadence');
+  assert.match(WF, /cron:\s*'\*\/5 \* \* \* \*'/, 'lost its own schedule');
   assert.match(WF, /node fetchLineups\.js/);
 });
 
-test('work < timeout < interval, the ordering this repo learned the hard way', () => {
-  const stepTimeoutS = 4 * 60;                       // timeout-minutes: 4
-  const intervalS    = 5 * 60;
-  const { BUDGET_SECONDS } = require('./fetchLineups');
-  assert.match(WF, /timeout-minutes:\s*4\b/);
-  assert.ok(BUDGET_SECONDS < stepTimeoutS,
-    `budget ${BUDGET_SECONDS}s must stay under the step's ${stepTimeoutS}s timeout`);
-  assert.ok(stepTimeoutS <= intervalS,
-    'a step that can outlive its own interval queues behind itself');
+test('--once exists, so a pass is drivable without a 25-minute loop', () => {
+  assert.match(JOB, /--once/);
+});
+
+test('THE JOB POLLS ITSELF, because the cron is not the cadence', () => {
+  // Measured on this repo: engine.yml declares every 15 minutes and GitHub
+  // delivered a MEDIAN GAP OF 34 MINUTES over 25 runs, minimum 17. A lineup
+  // published 20 minutes out and sampled every half hour is a coin flip, so
+  // the real cadence has to come from inside the process.
+  const { LOOP_MINUTES, PASS_INTERVAL_SECONDS } = require('./fetchLineups');
+  assert.ok(PASS_INTERVAL_SECONDS <= 600,
+    `a pass every ${PASS_INTERVAL_SECONDS}s cannot chase a 20-minute publication`);
+  assert.ok(LOOP_MINUTES * 60 >= PASS_INTERVAL_SECONDS * 2,
+    'a loop shorter than two passes is not a loop');
+});
+
+test('the script still stops itself before the step kills it', () => {
+  const stepTimeoutS = 30 * 60;                      // timeout-minutes: 30
+  const { BUDGET_SECONDS, LOOP_MINUTES } = require('./fetchLineups');
+  assert.match(WF, /timeout-minutes:\s*30\b/);
+  assert.ok(LOOP_MINUTES * 60 < stepTimeoutS,
+    `loop ${LOOP_MINUTES}m must end before the step's ${stepTimeoutS / 60}m timeout`);
+  assert.ok(stepTimeoutS - LOOP_MINUTES * 60 >= 120,
+    'too little headroom between the loop and the kill for a final pass to finish');
+  assert.ok(BUDGET_SECONDS < LOOP_MINUTES * 60,
+    'one pass must not be able to consume the whole loop');
+});
+
+test('the job deliberately outlives its schedule, and concurrency covers that', () => {
+  // The old ordering (step < interval) is intentionally broken here. What
+  // stops a pile-up is GitHub's one-pending-run-per-group rule, so
+  // cancel-in-progress MUST stay false — cancelling would kill a live watch.
+  assert.match(WF, /cancel-in-progress:\s*false/);
+  assert.match(WF, /concurrency:/);
 });
 
 test('the 429 backoff is SHORT here, unlike the pipeline job', () => {

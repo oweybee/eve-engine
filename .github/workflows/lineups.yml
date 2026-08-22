@@ -35,15 +35,17 @@ name: MaxEdge Capture Lineups
 
 on:
   schedule:
-    # EVERY 5 MINUTES — GitHub's minimum, and the cadence IS the feature: it
-    # bounds how stale a captured XI can be. The job is seconds long, so the
-    # ordering this repo learned the hard way (work < timeout < interval) holds
-    # with a wide margin rather than the three minutes engine.yml runs on.
+    # THE CRON IS NOT THE CADENCE — the job polls itself. Measured on this
+    # repo: engine.yml declares every 15 minutes and GitHub delivered a MEDIAN
+    # GAP OF 34 MINUTES over its last 25 scheduled runs, minimum 17, never once
+    # 15. A five-minute schedule is a request, not a promise, and a lineup
+    # published 20 minutes before kickoff but sampled every half hour is the
+    # coin flip this job exists to end.
     #
-    # A high-frequency cron is the first thing GitHub drops under load — the
-    # engine's own '*/15' was measured landing every ~30 minutes. That degrades
-    # this job rather than breaking it: a dropped tick costs a few minutes of
-    # lead, and nothing is lost, because a fixture is re-asked until captured.
+    # So one tick keeps a process alive for 25 minutes, taking a pass every 5.
+    # This schedule's only duty is to make sure a process is running at all,
+    # and asking often means a dropped tick costs minutes rather than a match.
+    # Actions minutes are free on a public repo.
     - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
@@ -52,8 +54,11 @@ on:
         type: boolean
         default: false
 
-# Never queue these up: if a tick is still running, the next one has nothing to
-# add — it would ask the same fixtures for the same not-yet-published XI.
+# ONE LOOP AT A TIME, AND THE NEXT ONE WAITS. `cancel-in-progress: false` with
+# GitHub's one-pending-run-per-group rule turns a burst of ticks into a single
+# queued successor — so coverage is continuous and never doubled. Cancelling
+# in progress would be exactly wrong here: it would kill a live 25-minute
+# watch to start another one at the same fixtures.
 concurrency:
   group: lineups-${{ github.ref_name }}
   cancel-in-progress: false
@@ -65,11 +70,14 @@ jobs:
   lineups:
     name: Capture confirmed lineups
     runs-on: ubuntu-latest
-    # 4 minutes against the script's own 150s budget, and against a 5-minute
-    # interval. THE ORDER OF THOSE THREE NUMBERS IS THE POINT: the script must
-    # stop itself before the step kills it, and the step must end before the
-    # next tick starts.
-    timeout-minutes: 4
+    # 30 minutes against the script's own 25-minute loop. THE ORDER IS STILL
+    # THE POINT — the script must stop itself before the step kills it — but
+    # the third number is gone on purpose: the job now deliberately outlives
+    # its 5-minute schedule, and the concurrency group below is what keeps that
+    # from piling up. GitHub holds at most one pending run per group, so a tick
+    # arriving mid-loop simply starts the moment this one ends, which is the
+    # continuous coverage the whole design wants.
+    timeout-minutes: 30
 
     env:
       API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}

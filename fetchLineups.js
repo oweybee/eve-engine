@@ -10,12 +10,27 @@
  * The precedent is `captureIndependentLines.js`, which was starved as step 6 of
  * a shared 15-minute job and became correct the moment it got its own runner.
  *
- * Budget: on a busy Saturday ~60 fixtures pass through the 90-minute window in
- * a day, each asked once per tick until the feed publishes (~14 ticks at worst,
- * far fewer in practice because a captured fixture is never re-asked). That is
- * low thousands of calls against a 75,000/day allowance.
+ * ── THE CADENCE COMES FROM THE LOOP, NOT FROM THE CRON ──────────────────────
  *
- *   node fetchLineups.js            capture due fixtures
+ * GITHUB DOES NOT HONOUR A HIGH-FREQUENCY SCHEDULE, and this repo has the
+ * measurement. `engine.yml` declares an every-15-minutes cron; over its last 25 runs
+ * GitHub delivered a MEDIAN GAP OF 34 MINUTES, minimum 17, never once 15.
+ * An every-5-minutes cron is therefore a request, not a promise — and a
+ * lineup published 20 minutes before kickoff, sampled every ~30 minutes, is
+ * a coin flip again — the exact failure this job exists to end.
+ *
+ * So the job POLLS ITSELF. One GitHub tick keeps a process alive for
+ * LOOP_MINUTES, running a pass every PASS_INTERVAL_SECONDS. The cron's only
+ * remaining duty is to make sure a process is running at all; how often we
+ * actually look is ours to decide. Actions minutes are free on a public repo,
+ * which is what makes this affordable rather than clever.
+ *
+ * Budget: a fixture is asked once per PASS until the feed publishes — ~18
+ * times across a 90-minute window at worst, and a captured fixture is never
+ * asked again. Low thousands of calls a day against a 75,000 allowance.
+ *
+ *   node fetchLineups.js            poll for LOOP_MINUTES, a pass every 5 min
+ *   node fetchLineups.js --once     a single pass, then exit
  *   node fetchLineups.js --report   print the lead-time distribution and exit
  *
  * `--report` is the answer to "do we have lineups an hour before kickoff?".
@@ -34,6 +49,13 @@ const { captureLineups, summarise, DEFAULTS } = require('./lib/lineupCapture');
 const API_FOOTBALL_KEY  = process.env.API_FOOTBALL_KEY;
 const API_FOOTBALL_HOST = 'v3.football.api-sports.io';
 const REPORT            = process.argv.includes('--report');
+const ONCE              = process.argv.includes('--once');
+
+/** How long one GitHub tick keeps this process alive. Under the step timeout. */
+const LOOP_MINUTES = parseFloat(process.env.LINEUP_LOOP_MINUTES || '25');
+
+/** How often to look, inside that. THIS is the real cadence. */
+const PASS_INTERVAL_SECONDS = parseFloat(process.env.LINEUP_PASS_INTERVAL_SECONDS || '300');
 
 /**
  * Wall-clock budget. MUST stay under the workflow step's `timeout-minutes`:
@@ -155,23 +177,44 @@ async function main() {
 
   if (!API_FOOTBALL_KEY) { console.log('[lineups] API_FOOTBALL_KEY not set — skipping'); return; }
 
-  const started = Date.now();
-  deadlineAt = started + BUDGET_SECONDS * 1000;
+  const started  = Date.now();
+  const loopUntil = ONCE ? 0 : started + LOOP_MINUTES * 60_000;
 
   let census = null;
+  let pass = 0;
+  let totalFixtures = 0;
   const dog = beginWatchdog('fetchLineups.js', {
     onTerminate: () => console.error(
       census ? summarise(census) : '[lineups] killed before any capture'),
   });
-  dog.stage('capture');
 
-  census = await captureLineups(supabase, fetchLineupsFor, {
-    deadlineAt,
-    onCapture: (m, lead) => console.log(`  captured ${m.external_id} — ${lead}m before kickoff`),
-  });
+  for (;;) {
+    pass++;
+    dog.stage(`pass ${pass}`);
+    // Each pass gets its own budget, never one shared across the loop: a slow
+    // pass must not eat the passes after it.
+    deadlineAt = Math.min(Date.now() + BUDGET_SECONDS * 1000, loopUntil || Infinity);
 
-  console.log(summarise(census));
-  console.log(`[lineups] window ${DEFAULTS.windowMinutes}m, ${((Date.now() - started) / 1000).toFixed(1)}s`);
+    census = await captureLineups(supabase, fetchLineupsFor, {
+      deadlineAt,
+      onCapture: (m, lead) => console.log(`  captured ${m.external_id} — ${lead}m before kickoff`),
+    });
+    totalFixtures += census.fixtures;
+
+    // A pass that found nothing to do is the ordinary case and must not fill
+    // the log — say something only when there was work or news.
+    if (census.fixtures || census.errors || census.notPublished) console.log(summarise(census));
+
+    if (ONCE) break;
+    const nextAt = started + pass * PASS_INTERVAL_SECONDS * 1000;
+    if (nextAt >= loopUntil) break;
+    await sleep(Math.max(0, nextAt - Date.now()));
+  }
+
+  console.log(
+    `[lineups] ${pass} pass(es) over ${((Date.now() - started) / 1000 / 60).toFixed(1)}m, ` +
+    `${totalFixtures} fixture(s) captured · window ${DEFAULTS.windowMinutes}m ` +
+    `· pass interval ${PASS_INTERVAL_SECONDS}s`);
   dog.finish();
 }
 
@@ -179,4 +222,4 @@ if (require.main === module) {
   main().catch(err => { console.error('[lineups] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { fetchLineupsFor, BUDGET_SECONDS };
+module.exports = { fetchLineupsFor, BUDGET_SECONDS, LOOP_MINUTES, PASS_INTERVAL_SECONDS };
