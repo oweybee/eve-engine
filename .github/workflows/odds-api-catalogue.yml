@@ -1,0 +1,27 @@
+# Read-only diagnostic: print The Odds API sports catalogue and our quota.
+#
+# Manual only — there is nothing to schedule. /v4/sports is the FREE endpoint,
+# so this consumes no credits; it exists because the-odds-api.com is
+# egress-blocked from the development environment and the real response shape
+# can only be observed from a runner. See scripts/oddsApiCatalogue.js.
+name: Odds API Catalogue (diagnostic)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  catalogue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Print catalogue and quota
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: node scripts/oddsApiCatalogue.js
