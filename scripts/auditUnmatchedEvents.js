@@ -178,32 +178,108 @@ function summarise(rows) {
 // I/O
 // ---------------------------------------------------------------------------
 
-/** Index every scheduled fixture by club-key pair, exactly as the ingest does. */
+/**
+ * Index the fixtures an event COULD match, exactly as the ingest does.
+ *
+ * ── WHY THIS IS TWO READS AND WHY BOTH ARE PAGED (22 Aug 2026) ──────────────
+ * The first cut was ONE read with `.limit(1000)` and no order and no paging.
+ * PostgREST caps a response at 1000 rows whatever `.limit()` says, production
+ * holds 8,885 upcoming fixtures, and only 133 of them are inside the 72h
+ * horizon — so the audit indexed an arbitrary 11% slice and the 1.5% that can
+ * actually match was mostly not in it. It reported `OUT_OF_SEASON 252` with
+ * `epl` at 14 on a night the Premier League played, and FOUR leagues
+ * contradicted themselves in one run (mexico_ligamx 9 MATCHED and 5
+ * OUT_OF_SEASON), which is what truncation looks like from outside. The run
+ * log said `1000 scheduled fixture(s) indexed` — exactly the cap — and nothing
+ * treated that as a number worth reading.
+ *
+ * They are two questions and they need two windows:
+ *
+ *   MATCHING     only fixtures inside the horizon can match an event we polled,
+ *                so the index is bounded to it (plus the match window as slack,
+ *                so a fixture just outside still classifies as TIME_GAP rather
+ *                than vanishing into a name miss).
+ *   IN SEASON    "do we hold ANY upcoming fixture in this competition" is the
+ *                question OUT_OF_SEASON asks, and bounding THAT to 72h would
+ *                file every league whose next fixture is on Tuesday as out of
+ *                season — the same error in the other direction.
+ *
+ * Both page and both dedupe by id rather than trusting page length: `.range()`
+ * travels as a Range HEADER, so any layer that answers the URL and ignores
+ * headers returns the same page for ever, and counting rows alone loops to the
+ * cap. Same rule eve-frontend's `fetchSeasonPrices` records.
+ */
+const PAGE = 1000;
+const MAX_PAGES = 40;
+
+async function pageAll(query, label) {
+  const seen = new Set();
+  const out = [];
+  for (let p = 0; p < MAX_PAGES; p++) {
+    const { data, error } = await query().range(p * PAGE, p * PAGE + PAGE - 1);
+    if (error) throw new Error(`audit[${label}]: ${error.message}`);
+    const rows = data ?? [];
+    let fresh = 0;
+    for (const r of rows) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id); out.push(r); fresh++;
+    }
+    if (rows.length < PAGE || fresh === 0) return { rows: out, truncated: false };
+  }
+  return { rows: out, truncated: true };
+}
+
 async function loadFixtureIndex(supabase) {
-  const { data, error } = await supabase
-    .from('matches')
-    .select(`id, kickoff_at, league_id,
-             home_team:teams!matches_home_team_id_fkey ( name ),
-             away_team:teams!matches_away_team_id_fkey ( name )`)
-    .eq('status', 'scheduled')
-    .gte('kickoff_at', new Date().toISOString())
-    .limit(1000);
-  if (error) throw new Error(`audit[matches]: ${error.message}`);
+  const now = Date.now();
+  const from = new Date(now).toISOString();
+  // The window is slack on BOTH sides: an event inside the horizon may sit
+  // against a fixture whose stored kickoff drifted, and that is a TIME_GAP.
+  const to = new Date(now + HORIZON_HOURS * 3_600_000 + MATCH_WINDOW_MIN * 60_000).toISOString();
+
+  const sel = `id, kickoff_at, league_id,
+               home_team:teams!matches_home_team_id_fkey ( name ),
+               away_team:teams!matches_away_team_id_fkey ( name )`;
+
+  const inWindow = await pageAll(
+    () => supabase.from('matches').select(sel)
+      .eq('status', 'scheduled').gte('kickoff_at', from).lte('kickoff_at', to)
+      .order('kickoff_at', { ascending: true }),
+    'matches',
+  );
+
+  // Ids only — this is 8,885 rows of one column and it answers one boolean
+  // per competition. Reading the joined shape here would be nine pages of
+  // team names nobody looks at.
+  const anyUpcoming = await pageAll(
+    () => supabase.from('matches').select('id, league_id')
+      .eq('status', 'scheduled').gte('kickoff_at', from)
+      .order('id', { ascending: true }),
+    'matches[season]',
+  );
 
   const idx = new Map();
   const homeKeys = new Set();
-  const leaguesWithUpcoming = new Set();
-  for (const m of data ?? []) {
+  for (const m of inWindow.rows) {
     const h = clubKey(m.home_team?.name);
     const a = clubKey(m.away_team?.name);
-    if (m.league_id) leaguesWithUpcoming.add(m.league_id);
     if (!h || !a) continue;
     homeKeys.add(h); homeKeys.add(a);
     const list = idx.get(`${h}|${a}`) ?? [];
     list.push({ id: m.id, ko: new Date(m.kickoff_at).getTime() });
     idx.set(`${h}|${a}`, list);
   }
-  return { idx, homeKeys, leaguesWithUpcoming, fixtures: (data ?? []).length };
+
+  const leaguesWithUpcoming = new Set();
+  for (const m of anyUpcoming.rows) if (m.league_id) leaguesWithUpcoming.add(m.league_id);
+
+  return {
+    idx, homeKeys, leaguesWithUpcoming,
+    fixtures: inWindow.rows.length,
+    upcoming: anyUpcoming.rows.length,
+    // Never silent. A truncated index turns a real fixture into OUT_OF_SEASON,
+    // which is the failure this whole rewrite is about.
+    truncated: inWindow.truncated || anyUpcoming.truncated,
+  };
 }
 
 /** Which of our league rows a resolved sport key belongs to, by (name, country). */
@@ -223,12 +299,32 @@ async function main() {
   const before = quotaFromHeaders(cat.headers);
   const { map } = mapSportKeys(cat.json, { includeCups: true });
 
-  const { idx, homeKeys, leaguesWithUpcoming, fixtures } = await loadFixtureIndex(supabase);
+  const { idx, homeKeys, leaguesWithUpcoming, fixtures, upcoming, truncated } =
+    await loadFixtureIndex(supabase);
   const leagueIdByKey = await loadLeagueRows(supabase);
 
+  // THE INGEST ASKS A DIFFERENT QUESTION OF THE CATALOGUE. It calls /v4/sports
+  // WITHOUT `all=true`, which returns in-season competitions only; this script
+  // and scripts/oddsApiCatalogue.js pass it, which returns every competition
+  // the vendor lists. That is why one says 36 leagues resolve and the ingest
+  // says 34. Reported rather than reconciled: a competition the ingest cannot
+  // even see is not an unmatched event, and calling it one sends the next
+  // reader to lib/oddsApi.js for nothing.
+  const live = await httpGetJson(`/v4/sports/?apiKey=${KEY}`);
+  const liveMap = mapSportKeys(live.json, { includeCups: true }).map;
+  const notInSeason = Object.keys(map).filter(k => !liveMap[k]);
+
   const entries = Object.entries(map).slice(0, LIMIT);
-  console.log(`[audit] ${entries.length} resolved league(s) · ${fixtures} scheduled fixture(s) indexed ` +
-              `· horizon ${HORIZON_HOURS}h · window ${MATCH_WINDOW_MIN}m`);
+  console.log(`[audit] ${entries.length} resolved league(s) · ${fixtures} fixture(s) inside the ` +
+              `${HORIZON_HOURS}h horizon (of ${upcoming} upcoming) · window ${MATCH_WINDOW_MIN}m`);
+  if (notInSeason.length) {
+    console.log(`[audit] ${Object.keys(liveMap).length} of those are IN SEASON per the ingest's own ` +
+                `catalogue call; not offered right now: ${notInSeason.join(', ')}`);
+  }
+  if (truncated) {
+    console.log('[audit] ::error::the fixture read hit MAX_PAGES — the index is INCOMPLETE and ' +
+                'every count below understates MATCHED. Do not quote this run.');
+  }
 
   const now = Date.now();
   const rows = [];
@@ -294,6 +390,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  classifyEvent, summarise, similarity, nearestKey, levenshtein,
-  OUTCOMES, HORIZON_HOURS, MATCH_WINDOW_MIN, DAILY_CEILING,
+  classifyEvent, summarise, similarity, nearestKey, levenshtein, pageAll,
+  OUTCOMES, HORIZON_HOURS, MATCH_WINDOW_MIN, DAILY_CEILING, PAGE, MAX_PAGES,
 };

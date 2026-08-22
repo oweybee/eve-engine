@@ -124,3 +124,83 @@ test('every outcome the classifier can return is in OUTCOMES', () => {
     assert.ok(OUTCOMES.includes(m[1]), `${m[1]} is returned but missing from OUTCOMES, so it would not be tabulated`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// pageAll — the read that made every other number in this file wrong
+//
+// The first cut of `loadFixtureIndex` was one `.limit(1000)` with no order and
+// no paging. PostgREST caps a response at 1000 rows whatever `.limit()` says,
+// production holds 8,885 upcoming fixtures, and the 133 inside the horizon —
+// the only ones that CAN match — were mostly not in the arbitrary slice it got.
+// The 23:31 run therefore reported OUT_OF_SEASON 252 with `epl` at 14 on a
+// night the Premier League played, and four leagues came back MATCHED and
+// OUT_OF_SEASON at once, which is impossible and is what truncation looks like
+// from outside.
+//
+// So these pin the two properties that failure needed: it must keep reading
+// past the cap, and it must decide "done" by IDs it has already seen rather
+// than by page length — because a layer that answers the URL and ignores the
+// Range header serves page 0 for ever, and a length check loops to MAX_PAGES
+// while multiplying the corpus.
+// ---------------------------------------------------------------------------
+const { pageAll, PAGE, MAX_PAGES } = require('./scripts/auditUnmatchedEvents');
+
+/** A fake PostgREST that honours Range, like the real one. */
+const honest = (total) => {
+  let calls = 0;
+  const q = () => ({
+    range: async (from, to) => {
+      calls++;
+      const rows = [];
+      for (let i = from; i <= Math.min(to, total - 1); i++) rows.push({ id: `r${i}` });
+      return { data: rows, error: null };
+    },
+  });
+  return { q, calls: () => calls };
+};
+
+test('pageAll reads PAST the 1000-row cap', async () => {
+  const { q } = honest(2345);
+  const { rows, truncated } = await pageAll(q, 'x');
+  assert.strictEqual(rows.length, 2345);
+  assert.strictEqual(truncated, false);
+});
+
+test('a short page ends it — no wasted request after the tail', async () => {
+  const h = honest(1500);
+  await pageAll(h.q, 'x');
+  assert.strictEqual(h.calls(), 2);
+});
+
+test('an exact multiple of the page size still terminates', async () => {
+  const h = honest(PAGE * 2);
+  const { rows, truncated } = await pageAll(h.q, 'x');
+  assert.strictEqual(rows.length, PAGE * 2);
+  assert.strictEqual(truncated, false);
+});
+
+test('a layer that IGNORES Range cannot multiply the corpus', async () => {
+  // Serves page 0 for ever — a cache, a proxy, or a fixture route keyed on URL.
+  let calls = 0;
+  const q = () => ({
+    range: async () => {
+      calls++;
+      return { data: Array.from({ length: PAGE }, (_, i) => ({ id: `r${i}` })), error: null };
+    },
+  });
+  const { rows, truncated } = await pageAll(q, 'x');
+  assert.strictEqual(rows.length, PAGE, 'deduped by id, not counted by page length');
+  assert.strictEqual(truncated, false);
+  assert.strictEqual(calls, 2, 'stops on the first page that adds nothing fresh');
+});
+
+test('truncation at MAX_PAGES is REPORTED, never silent', async () => {
+  const { q } = honest(PAGE * (MAX_PAGES + 5));
+  const { truncated } = await pageAll(q, 'x');
+  assert.strictEqual(truncated, true);
+});
+
+test('an error is thrown with the label, not swallowed into an empty index', async () => {
+  const q = () => ({ range: async () => ({ data: null, error: { message: 'boom' } }) });
+  await assert.rejects(() => pageAll(q, 'matches'), /audit\[matches\]: boom/);
+});
