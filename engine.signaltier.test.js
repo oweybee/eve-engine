@@ -157,4 +157,38 @@ test('neither ladder is reachable from the other', () => {
   assert.strictEqual(bandFor(classifyTier({ odds: 2.0, edge: 0.06 }).tier), null);
 });
 
+
+/* ── The 3% floor, and that it is ONE constant ─────────────────────────── */
+
+test('suggests at exactly 3.0% and declines a hair under it', () => {
+  // Lowered 4% -> 3% by owner ruling, 22 Aug 2026. The band this admits —
+  // 3-4% at odds 1.40-3.00 — returns +6.26% over 38 settled bets, z 0.35:
+  // positive and indistinguishable from zero, which was the cost stated when
+  // the ruling was made. The band above it is +15.71% over 143, z 1.64.
+  assert.strictEqual(THRESHOLDS.PRIME_EDGE_MIN, 0.03);
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.0300 }).suggested, true);
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.0299 }).suggested, false);
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.0350 }).suggested, true);
+  // The cap did not move with the floor.
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.0999 }).suggested, true);
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.1001 }).suggested, false);
+  // And the PRICE leg is unchanged in both directions.
+  assert.strictEqual(classifyTier({ odds: 1.39, edge: 0.05 }).suggested, false);
+  assert.strictEqual(classifyTier({ odds: 3.00, edge: 0.05 }).suggested, false);
+});
+
+test('the floor the ENGINE applies is the one f(edge) reads', () => {
+  // `lib/maxedge.js` reads THRESHOLDS.PRIME_EDGE_MIN for its plateau — that
+  // direction, because maxedge already requires signalTier and the reverse is
+  // a cycle. Typed separately they drifted within twenty-four hours, so this
+  // asserts the wiring rather than the number.
+  const { EDGE_EFFICIENCY, edgeEfficiency } = require('./lib/maxedge');
+  assert.strictEqual(EDGE_EFFICIENCY.plateauFrom, THRESHOLDS.PRIME_EDGE_MIN);
+  // At the floor the score is undecayed and the box suggests: the two agree
+  // at the same point, which is the whole reason they share a constant.
+  assert.strictEqual(edgeEfficiency(THRESHOLDS.PRIME_EDGE_MIN), 1);
+  assert.strictEqual(
+    classifyTier({ odds: 2.00, edge: THRESHOLDS.PRIME_EDGE_MIN }).suggested, true);
+});
+
 console.log(`\n  ${passed} passed`);
