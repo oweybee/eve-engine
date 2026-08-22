@@ -380,5 +380,19 @@ test('the knee sits exactly where the guarantee needs it', () => {
     assert.strictEqual(c2.rows[0].model_prob, 0.5487);
   });
 
-  console.log(`\n  ${passed} passed`);
+  
+test('the plateau starts at 3% — mirrors eve-frontend/lib/maxedge.ts', () => {
+  // Loosened 4% -> 3% on 22 Aug. This file is the ENGINE half of a mirrored
+  // constant, and a mirror nobody tests is the MODEL_SIGMA hand-copy again —
+  // it failed twice in production without either copy throwing.
+  assert(Math.abs(edgeEfficiency(0.015) - 0.75) < 1e-9, 'halfway up the ramp');
+  assert(edgeEfficiency(0.03) === 1, '3% keeps the whole score');
+  assert(edgeEfficiency(0.0332) === 1, 'the 3-4% band is on the plateau now');
+  assert(Math.abs(edgeEfficiency(0.0247) - 0.9117) < 1e-3, 'the ramp still exists below 3%');
+  // The high side is untouched: the guarantee rests on these, not on the ramp.
+  assert(Math.abs(edgeEfficiency(0.10) - 0.65) < 1e-9, 'knee unmoved');
+  assert(edgeEfficiency(0.1201) === 0.25, 'trap floor unmoved');
+});
+
+console.log(`\n  ${passed} passed`);
 })();
