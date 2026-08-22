@@ -84,8 +84,14 @@ const inplaySignal = {
   match: { goals_home: 0, goals_away: 1, minute: 40,
            home_team: { name: 'Brazil' }, away_team: { name: 'Japan' }, league: { name: 'World Cup' } },
 };
+// EDGE MOVED 3% -> 2.5% (22 Aug 2026). The floor of the eligibility box came
+// down from 4% to 3% to meet `f(edge)`'s plateau, so 3% is now exactly ON the
+// line and IS suggested. This fixture's whole job is to be an unbacked row, so
+// it has to sit below whatever the floor is; the boundary itself is pinned
+// separately, right under this test, so a future move of the floor fails there
+// with the reason attached rather than quietly re-purposing this fixture.
 const prematchSignal = {
-  phase: 'prematch', outcome: 'away', detected_odds: 2.5, detected_edge: 0.03,
+  phase: 'prematch', outcome: 'away', detected_odds: 2.5, detected_edge: 0.025,
   detected_mes: 60, bookmaker: 'Bet365', kickoff_at: new Date(KO).toISOString(),
   signal_category: 'value',
   match: { home_team: { name: 'A' }, away_team: { name: 'B' }, league: { name: 'L' } },
@@ -97,7 +103,7 @@ test('in-play message has live header + score', () => {
   assert.ok(m.includes('Live: 0-1 40\''), 'live score');
   assert.ok(m.includes('#InPlay'), 'hashtag');
 });
-test('prematch unbacked edge (odds 2.5 / edge 3%) → info-only header, not suggested', () => {
+test('prematch unbacked edge (odds 2.5 / edge 2.5%) → info-only header, not suggested', () => {
   // Header renamed from "VALUE SIGNAL" on 6 Aug 2026: VALUE was a word of the
   // retired conviction ladder, and this row is not a conviction at all — it is
   // positive EV outside the band we back at.
@@ -107,6 +113,22 @@ test('prematch unbacked edge (odds 2.5 / edge 3%) → info-only header, not sugg
   assert.ok(m.includes('Kickoff:'));
   assert.ok(!m.includes('IN-PLAY'));
   assert.strictEqual(isSuggested(prematchSignal), false);
+});
+
+// THE FLOOR IS 3% AND IT IS INCLUSIVE — the boundary itself, pinned.
+//
+// It was 4% until 22 Aug 2026, and the day the plateau moved to 3% without it
+// the two ladders disagreed in [3%, 4%): the score kept its full value (f = 1
+// on the plateau) while this box declined the row, and the homepage drew
+// `◆ PRIME · 65` under a header reading NOTHING BACKED TODAY. They read ONE
+// constant now — `EDGE_EFFICIENCY.plateauFrom` is `THRESHOLDS.PRIME_EDGE_MIN`
+// — so this asserts the number the whole product turns on.
+test('the eligibility box admits 3% and refuses just under it', () => {
+  const at = (edge) => isSuggested({ ...prematchSignal, detected_edge: edge });
+  assert.strictEqual(at(0.03), true, '3% is ON the floor and suggested');
+  assert.strictEqual(at(0.0299), false, 'just under the floor is not');
+  assert.strictEqual(at(0.099), true, 'still open just under the 10% cap');
+  assert.strictEqual(at(0.10), false, 'and closed at the cap');
 });
 
 // Tier classifier + PRIME broadcast policy -----------------------------------
