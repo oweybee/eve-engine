@@ -408,10 +408,22 @@ jobs:
           add "fetch-details (fetchMatchDetails.js)"                 "${{ steps.details.outcome }}"
           add "team-stats (fetchTeamStats.js)"                       "${{ steps.teamstats.outcome }}"
 
+          # job.status, NOT cancelled()/failure(). The status-check functions
+          # are legal ONLY in an `if:` condition; inside a `run:` block they
+          # make the WHOLE FILE unparseable — and an unparseable workflow does
+          # not run its cron, with no failed run and no notification to say so.
+          # That is what this step cost: engine.yml stopped dead from 21:01 on
+          # 21 Aug to 07:30 on 22 Aug, ~10 hours, while every other workflow in
+          # the repo ran normally. The step written to make a silent pipeline
+          # death impossible was itself a silent pipeline death.
+          # `job.status` is one of success | failure | cancelled and is the
+          # right primitive here. Never re-introduce a status function outside
+          # an `if:`; `npm run lint:workflows` is the ratchet.
+          JOB_STATUS="${{ job.status }}"
           STATE="ok"
-          if   [ "${{ cancelled() }}" = "true" ]; then STATE="cancelled"
-          elif [ "${{ failure() }}"   = "true" ]; then STATE="failed"
-          elif [ -n "$BAD" ];                     then STATE="degraded"
+          if   [ "$JOB_STATUS" = "cancelled" ]; then STATE="cancelled"
+          elif [ "$JOB_STATUS" = "failure" ];   then STATE="failed"
+          elif [ -n "$BAD" ];                   then STATE="degraded"
           fi
 
           case "$STATE" in
