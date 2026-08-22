@@ -51,8 +51,18 @@ const API_FOOTBALL_HOST = 'v3.football.api-sports.io';
 const REPORT            = process.argv.includes('--report');
 const ONCE              = process.argv.includes('--once');
 
-/** How long one GitHub tick keeps this process alive. Under the step timeout. */
-const LOOP_MINUTES = parseFloat(process.env.LINEUP_LOOP_MINUTES || '25');
+/**
+ * How long one GitHub tick keeps this process alive. Under the step timeout.
+ *
+ * IT MUST EXCEED THE GAP BETWEEN TICKS, which is the whole trick. Measured on
+ * this repo the delivered gap has a median of 34 minutes, so a 25-minute loop
+ * left a systematic hole between runs — the schedule was still deciding
+ * coverage, just less often. At 50 minutes a fresh tick almost always lands
+ * while a loop is still running; GitHub holds it as the single pending run
+ * and starts it the instant this one ends, so coverage closes up instead of
+ * gapping. Raise this, not the cron, if holes reappear.
+ */
+const LOOP_MINUTES = parseFloat(process.env.LINEUP_LOOP_MINUTES || '50');
 
 /** How often to look, inside that. THIS is the real cadence. */
 const PASS_INTERVAL_SECONDS = parseFloat(process.env.LINEUP_PASS_INTERVAL_SECONDS || '300');

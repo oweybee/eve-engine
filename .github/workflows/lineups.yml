@@ -42,7 +42,9 @@ on:
     # published 20 minutes before kickoff but sampled every half hour is the
     # coin flip this job exists to end.
     #
-    # So one tick keeps a process alive for 25 minutes, taking a pass every 5.
+    # So one tick keeps a process alive for 50 minutes, taking a pass every 5 —
+    # LONGER than the median gap between ticks, so a fresh tick lands while the
+    # last loop is still running and queues, closing the seam between them.
     # This schedule's only duty is to make sure a process is running at all,
     # and asking often means a dropped tick costs minutes rather than a match.
     # Actions minutes are free on a public repo.
@@ -70,14 +72,14 @@ jobs:
   lineups:
     name: Capture confirmed lineups
     runs-on: ubuntu-latest
-    # 30 minutes against the script's own 25-minute loop. THE ORDER IS STILL
+    # 55 minutes against the script's own 50-minute loop. THE ORDER IS STILL
     # THE POINT — the script must stop itself before the step kills it — but
     # the third number is gone on purpose: the job now deliberately outlives
     # its 5-minute schedule, and the concurrency group below is what keeps that
     # from piling up. GitHub holds at most one pending run per group, so a tick
     # arriving mid-loop simply starts the moment this one ends, which is the
     # continuous coverage the whole design wants.
-    timeout-minutes: 30
+    timeout-minutes: 55
 
     env:
       API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}

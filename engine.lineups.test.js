@@ -184,12 +184,17 @@ test('THE JOB POLLS ITSELF, because the cron is not the cadence', () => {
     `a pass every ${PASS_INTERVAL_SECONDS}s cannot chase a 20-minute publication`);
   assert.ok(LOOP_MINUTES * 60 >= PASS_INTERVAL_SECONDS * 2,
     'a loop shorter than two passes is not a loop');
+  // AND IT MUST OUTLAST THE GAP BETWEEN TICKS, or the schedule is still
+  // deciding coverage. Measured median delivered gap on this repo: 34 min.
+  const MEASURED_MEDIAN_TICK_GAP_MIN = 34;
+  assert.ok(LOOP_MINUTES > MEASURED_MEDIAN_TICK_GAP_MIN,
+    `a ${LOOP_MINUTES}m loop leaves a hole against a ${MEASURED_MEDIAN_TICK_GAP_MIN}m median tick gap`);
 });
 
 test('the script still stops itself before the step kills it', () => {
-  const stepTimeoutS = 30 * 60;                      // timeout-minutes: 30
+  const stepTimeoutS = 55 * 60;                      // timeout-minutes: 55
   const { BUDGET_SECONDS, LOOP_MINUTES } = require('./fetchLineups');
-  assert.match(WF, /timeout-minutes:\s*30\b/);
+  assert.match(WF, /timeout-minutes:\s*55\b/);
   assert.ok(LOOP_MINUTES * 60 < stepTimeoutS,
     `loop ${LOOP_MINUTES}m must end before the step's ${stepTimeoutS / 60}m timeout`);
   assert.ok(stepTimeoutS - LOOP_MINUTES * 60 >= 120,
