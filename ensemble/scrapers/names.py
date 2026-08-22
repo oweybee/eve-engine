@@ -33,9 +33,46 @@ _SUFFIXES = [
 _PREFIXES = ["1.", "1", "real", "cd", "ca"]  # note: 'real'/'ca' handled carefully via ALIAS
 
 
+# Letters NFKD CANNOT decompose. `l/`, dotless `i`, `o/`, sharp-s and friends are
+# distinct LETTERS rather than a base plus a combining mark, so NFKD leaves them
+# whole and `[^a-z0-9 ]` below turns each into a SPACE — the letter does not
+# become its ASCII cousin, it DISAPPEARS:
+#
+#     Wisla Plock (diacritic form)   -> wisapock      not wislaplock
+#     Zaglebie Lubin (ditto)         -> zagebielubin  not zaglebielubin
+#
+# Measured 22 Aug 2026: our `teams` rows are ASCII and The Odds API sends the
+# diacritic form, so ONE club produced TWO keys and the fixture join could never
+# be made. This mirrors the same table in eve-engine/lib/lambdaBoard.js — the two
+# MUST stay in step, which is why the fix lands in both files together.
+#
+# NOT a loosened threshold: this is a character identity and cannot bring two
+# DIFFERENT clubs together.
+# BOTH CASES, because `normalize` calls strip_accents BEFORE `.lower()` — a
+# lowercase-only table let "Widzew Lodz" (uppercase L-stroke) through to the
+# strip and back to `widzewodz`, which the JS mirror got right by lowercasing
+# first. Caught by diffing the two implementations rather than by reading them.
+_UNDECOMPOSABLE = str.maketrans({
+    "\u0142": "l",  "\u0141": "L",   # l/L with stroke
+    "\u0131": "i",  "\u0130": "I",   # dotless i / dotted I
+    "\u00f8": "o",  "\u00d8": "O",   # o/O with stroke
+    "\u00df": "ss", "\u1e9e": "SS",  # sharp s
+    "\u0111": "d",  "\u0110": "D",
+    "\u00f0": "d",  "\u00d0": "D",
+    "\u00fe": "th", "\u00de": "Th",
+    "\u00e6": "ae", "\u00c6": "Ae",
+    "\u0153": "oe", "\u0152": "Oe",
+    "\u0127": "h",  "\u0126": "H",
+    "\u014b": "n",  "\u014a": "N",
+    "\u0167": "t",  "\u0166": "T",
+    "\u0138": "k",
+})
+
+
 def strip_accents(s: str) -> str:
-    return "".join(c for c in unicodedata.normalize("NFKD", s)
-                   if not unicodedata.combining(c))
+    folded = "".join(c for c in unicodedata.normalize("NFKD", s)
+                     if not unicodedata.combining(c))
+    return folded.translate(_UNDECOMPOSABLE)
 
 
 def normalize(name: str) -> str:

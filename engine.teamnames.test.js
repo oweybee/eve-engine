@@ -289,3 +289,55 @@ test('every ambiguous prefix in production is refused', () => {
 });
 
 console.log(`\n${passed} test(s) passed`);
+
+// ---------------------------------------------------------------------------
+// THREE COPIES OF ONE NORMALISATION, AND THEY MUST AGREE
+//
+// `lib/teamNames.normalize`, `lib/lambdaBoard.clubKey` and
+// `ensemble/scrapers/names.py:key` all answer "what is this club's key". The
+// ingest joins Odds API events with lambdaBoard's; the λ bundle is keyed by
+// Python's; this module is used elsewhere. Three copies that drift is the
+// failure this codebase keeps paying for, so the agreement is a test.
+//
+// All three shared one defect until 22 Aug 2026: letters NFKD cannot decompose
+// (`ł`, `ı`, `ø`, `ß`) were DELETED rather than folded, so our ASCII `teams`
+// row "Wisla Plock" and the feed's "Wisła Płock" produced two different keys
+// for one club. Six of the 61 NAME_MISMATCH events in that night's audit.
+// ---------------------------------------------------------------------------
+{
+  const { clubKey } = require('./lib/lambdaBoard');
+
+  const SAME = [
+    ['Wisła Płock', 'Wisla Plock'], ['Wisła Kraków', 'Wisla Krakow'],
+    ['Zagłębie Lubin', 'Zaglebie Lubin'], ['Widzew Łódź', 'Widzew Lodz'],
+    ['ŁKS Łódź', 'LKS Lodz'], ['Kasımpaşa', 'Kasimpasa'],
+    ['İstanbulspor', 'Istanbulspor'], ['Sumqayıt', 'Sumqayit'],
+    ['Preußen Münster', 'Preussen Munster'], ['Rot-Weiß Essen', 'Rot-Weiss Essen'],
+    ['Brøndby IF', 'Brondby IF'], ['Puszcza Niepołomice', 'Puszcza Niepolomice'],
+  ];
+
+  for (const [diacritic, ascii] of SAME) {
+    test(`one club, one key: "${diacritic}" == "${ascii}"`, () => {
+      assert.strictEqual(normalize(diacritic), normalize(ascii));
+      assert.strictEqual(clubKey(diacritic), clubKey(ascii));
+      // The letter must SURVIVE as its cousin rather than vanish.
+      assert.ok(!/^(wisa|zagebie|kasmpasa|widzewodz|preuen|brndby)/.test(normalize(diacritic)),
+        `${normalize(diacritic)} lost a letter`);
+    });
+  }
+
+  test('the two JS copies produce the SAME key for every case above', () => {
+    for (const [a, b] of SAME) {
+      assert.strictEqual(normalize(a), clubKey(a), `teamNames vs lambdaBoard on "${a}"`);
+      assert.strictEqual(normalize(b), clubKey(b), `teamNames vs lambdaBoard on "${b}"`);
+    }
+  });
+
+  test('the fold is a character identity, NOT a similarity floor', () => {
+    // It must never bring two DIFFERENT clubs together — the failure mode a
+    // lowered threshold has, where a live price prints under the wrong game.
+    assert.notStrictEqual(clubKey('Wisła Płock'), clubKey('Wisła Kraków'));
+    assert.notStrictEqual(clubKey('Widzew Łódź'), clubKey('ŁKS Łódź'));
+    assert.notStrictEqual(normalize('Manchester United'), normalize('Manchester City'));
+  });
+}
