@@ -1,0 +1,115 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — capture the confirmed XI, on its own clock
+#
+# THE LINEUP IS THE ONLY THING THIS ENGINE FETCHES THAT EXPIRES. Prices,
+# predictions, stats and closing lines are either still true an hour later or
+# are explicitly a historical record. A team sheet is news until the whistle
+# and a footnote afterwards, so a capture that arrives late is not late — it is
+# a different and much less useful product.
+#
+# WHAT WENT WRONG. Lineups were step 7 of the engine pipeline, behind a
+# `queryMatches` with no lower bound on `kickoff_at`. The 47 fixtures the feed
+# never settled — oldest kickoff 23 Oct 2022 — were in the work list on every
+# tick, and API-Football serves the historical XI for a game played in 2022, so
+# each was a SUCCESSFUL call writing a row nobody reads. Of 1,362 lineup rows
+# ever written, 26 were captured before kickoff (1.9%); the rest landed on
+# average 11.4 days late. On 22 Aug 2026 not one of the 25 fixtures kicking off
+# within three hours had a lineup, and all 18 rows the 10:49 run wrote were for
+# fixtures from 2022, 2023 and 2025.
+#
+# WHY A SEPARATE JOB AND NOT A TIGHTER PIPELINE. The engine runs ~9 minutes and
+# cannot go more often than ~15. Most competitions publish their XI ~20 minutes
+# before kickoff (see lib/lineupCapture.js for the measured table), so a lineup
+# caught on the next engine tick is a coin flip. This job does one query and a
+# handful of calls. The precedent is capture-closing-lines.yml, whose second
+# table became correct the moment it stopped sharing a runner.
+#
+# WHAT THIS GUARANTEES AND WHAT IT DOES NOT. It guarantees we ASK, every tick,
+# from 90 minutes before kickoff until we hold the row — so capture lands within
+# one tick of publication. It does NOT guarantee an hour of notice: that is the
+# feed's decision. Run `node fetchLineups.js --report` to see what the feed
+# actually gives, measured over the last fortnight.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Capture Lineups
+
+on:
+  schedule:
+    # EVERY 5 MINUTES — GitHub's minimum, and the cadence IS the feature: it
+    # bounds how stale a captured XI can be. The job is seconds long, so the
+    # ordering this repo learned the hard way (work < timeout < interval) holds
+    # with a wide margin rather than the three minutes engine.yml runs on.
+    #
+    # A high-frequency cron is the first thing GitHub drops under load — the
+    # engine's own '*/15' was measured landing every ~30 minutes. That degrades
+    # this job rather than breaking it: a dropped tick costs a few minutes of
+    # lead, and nothing is lost, because a fixture is re-asked until captured.
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      report:
+        description: 'Print the lead-time distribution instead of capturing'
+        type: boolean
+        default: false
+
+# Never queue these up: if a tick is still running, the next one has nothing to
+# add — it would ask the same fixtures for the same not-yet-published XI.
+concurrency:
+  group: lineups-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  lineups:
+    name: Capture confirmed lineups
+    runs-on: ubuntu-latest
+    # 4 minutes against the script's own 150s budget, and against a 5-minute
+    # interval. THE ORDER OF THOSE THREE NUMBERS IS THE POINT: the script must
+    # stop itself before the step kills it, and the step must end before the
+    # next tick starts.
+    timeout-minutes: 4
+
+    env:
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Capture lineups
+        id: capture
+        shell: bash
+        run: |
+          set -o pipefail
+          if [ "${{ inputs.report }}" = "true" ]; then
+            node fetchLineups.js --report | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            node fetchLineups.js | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # `if: failure()` does NOT run on a cancelled job, and a job killed by
+      # `timeout-minutes` ends cancelled — the finding engine.yml's health step
+      # was rewritten for. At this cadence a single bad tick is noise, so this
+      # annotates rather than alerts: the signal worth watching is --report.
+      - name: Report outcome
+        if: always()
+        shell: bash
+        run: |
+          case "${{ job.status }}" in
+            success)   echo "lineups tick ok" ;;
+            cancelled) echo "::error title=lineups killed::Cancelled — the step timeout fired before the script's own budget. Raise timeout-minutes or lower LINEUP_BUDGET_SECONDS." ;;
+            *)         echo "::error title=lineups failed::Step outcome '${{ steps.capture.outcome }}'. A single failed tick is recoverable; a run of them is not." ;;
+          esac

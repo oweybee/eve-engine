@@ -32,6 +32,7 @@
 const https             = require('https');
 const { getClient }      = require('./lib/supabaseClient');
 const { beginWatchdog }  = require('./lib/watchdog');
+const { captureLineups, summarise } = require('./lib/lineupCapture');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -73,12 +74,14 @@ const PAST_GRACE_HOURS = parseFloat(process.env.DETAILS_PAST_GRACE_HOURS || '6')
 const AHEAD_HOURS = parseFloat(process.env.DETAILS_AHEAD_HOURS || '48');
 
 /**
- * The lineup window. A confirmed XI does not exist until roughly an hour
- * before kickoff, so asking for one two days out is a guaranteed empty
- * response — and before this change the budget was being spent everywhere
- * except inside the window where the call can actually succeed.
+ * LINEUPS ARE NOT THIS SCRIPT'S JOB ANY MORE — `fetchLineups.js` owns them, on
+ * a 5-minute cron of its own, because the XI is the one thing here that
+ * EXPIRES and a 15-minute pipeline cannot chase it. See lib/lineupCapture.js.
+ *
+ * This script still calls the same module as a BACKSTOP, so a run of dropped
+ * lineup ticks is covered by whatever the engine does reach. It costs almost
+ * nothing: a confirmed lineup is never re-asked.
  */
-const LINEUP_WINDOW_MINUTES = parseFloat(process.env.DETAILS_LINEUP_WINDOW_MINUTES || '120');
 
 /**
  * Predictions barely move and NOTHING reads them (lib/matchIntel dropped the
@@ -236,13 +239,12 @@ function chunk(arr, n) {
 /**
  * What we already hold, so the budget is not spent re-asking.
  *
- * A confirmed lineup is FINAL — the XI does not change once it is announced —
- * so a fixture that has one is never asked again. A prediction is refreshed on
- * a clock because it drifts, slowly, and nothing reads it.
+ * A prediction is refreshed on a clock because it drifts, slowly, and nothing
+ * reads it. (The held-LINEUP check lives in lib/lineupCapture, which owns that
+ * work for both callers.)
  */
 async function loadHeld(supabase, ids) {
-  const predFresh  = new Set();
-  const haveLineup = new Set();
+  const predFresh = new Set();
   const since = new Date(Date.now() - PREDICTION_REFRESH_HOURS * 3_600_000).toISOString();
 
   for (const ids60 of chunk(ids, ID_CHUNK)) {
@@ -251,12 +253,8 @@ async function loadHeld(supabase, ids) {
       .in('fixture_id', ids60).gte('fetched_at', since);
     for (const r of preds ?? []) predFresh.add(String(r.fixture_id));
 
-    const { data: lines } = await supabase
-      .from('lineups').select('fixture_id')
-      .in('fixture_id', ids60).eq('confirmed', true);
-    for (const r of lines ?? []) haveLineup.add(String(r.fixture_id));
   }
-  return { predFresh, haveLineup };
+  return { predFresh };
 }
 
 // ---------------------------------------------------------------------------
@@ -373,19 +371,11 @@ function isUpcoming(match) {
 }
 
 /**
- * Is this fixture close enough to kickoff for an XI to exist?
- *
- * Gated on the CLOCK and not on status, deliberately, and it is the one place
- * in this file that must be: production has never written `status='live'`, and
- * a fixture sits at 'scheduled' until fetchResults settles it, so a
- * status-based test would never open the window at all.
+ * Ordering only — the lineup WORK is lib/lineupCapture's. Kept so the
+ * prediction/stats sweep still puts imminent fixtures first, which is what a
+ * budget shorter than the work list makes matter.
  */
-function inLineupWindow(match) {
-  if (!isUpcoming(match) || !match.kickoff_at) return false;
-  const ko = new Date(match.kickoff_at).getTime();
-  if (!Number.isFinite(ko)) return false;
-  return ko - Date.now() <= LINEUP_WINDOW_MINUTES * 60_000;
-}
+const { inLineupWindow } = require('./lib/lineupCapture');
 
 function isRecentlyCompleted(match) {
   if (match.status !== 'completed' || !match.kickoff_at) return false;
@@ -412,14 +402,11 @@ async function main() {
   // never captured an XI on time went a whole season looking healthy.
   const c = {
     predictions: 0, predSkipped: 0,
-    lineupCalls: 0, lineupRows: 0, lineupEmpty: 0,
-    lineupHeld: 0, lineupOutOfWindow: 0,
     stats: 0, errors: 0, unprocessed: 0, stoppedOnBudget: false,
   };
   const dog = beginWatchdog('fetchMatchDetails.js', {
     onTerminate: () => console.error(
-      `[details] partial: ${c.lineupRows} lineup rows from ${c.lineupCalls} calls, ` +
-      `${c.predictions} predictions, ${c.stats} stats`),
+      `[details] partial: ${c.predictions} predictions, ${c.stats} stats`),
   });
   dog.stage('query');
 
@@ -440,7 +427,7 @@ async function main() {
     return;
   }
 
-  let held = { predFresh: new Set(), haveLineup: new Set() };
+  let held = { predFresh: new Set() };
   try {
     held = await loadHeld(supabase, matches.map(m => m.external_id));
   } catch (err) {
@@ -455,13 +442,7 @@ async function main() {
     `budget ${BUDGET_SECONDS}s`
   );
 
-  // AN EMPTY LINEUPS TABLE HAS FOUR CAUSES AND THEY ARE INDISTINGUISHABLE FROM
-  // OUTSIDE: nothing near kickoff, already held, the API has not published the
-  // XI yet, or we ran out of budget before asking. Same principle as
-  // /api/inplay's `source` block — a silence that does not say which is a
-  // silence somebody will read as the feed going quiet. `c` is declared above,
-  // beside the watchdog that reports it on a kill.
-  dog.stage('fetch');
+  dog.stage('predictions + stats');
 
   for (let i = 0; i < matches.length; i++) {
     if (spent() >= BUDGET_SECONDS) {
@@ -474,33 +455,8 @@ async function main() {
     const fixtureId = match.external_id;
 
     if (isUpcoming(match)) {
-      // ---- Lineups FIRST. This is the ordering the whole fix turns on: the
-      // XI is the only thing here with a deadline, and it was queued behind a
-      // prediction call for every fixture in a 48-hour range.
-      if (!inLineupWindow(match)) {
-        c.lineupOutOfWindow++;
-      } else if (held.haveLineup.has(String(fixtureId))) {
-        c.lineupHeld++;
-      } else {
-        try {
-          const lineupTeams = await fetchLineups(fixtureId);
-          c.lineupCalls++;
-          await sleep(300);
-          if (!lineupTeams.length) {
-            c.lineupEmpty++;               // not published yet — ask again next tick
-          } else {
-            for (const teamEntry of lineupTeams) {
-              await upsertLineup(supabase, fixtureId, teamEntry);
-              c.lineupRows++;
-            }
-          }
-        } catch (err) {
-          c.errors++;
-          console.warn(`  [warn] lineups(${fixtureId}): ${err.message}`);
-        }
-      }
-
       // ---- Predictions, on a refresh clock and only with budget to spare.
+      // LINEUPS ARE NOT DONE HERE any more; see the backstop after this loop.
       if (held.predFresh.has(String(fixtureId))) {
         c.predSkipped++;
       } else if (spent() >= BUDGET_SECONDS) {
@@ -536,10 +492,6 @@ async function main() {
   }
 
   console.log(
-    `[details] lineups: ${c.lineupRows} rows from ${c.lineupCalls} calls ` +
-    `(${c.lineupEmpty} not published yet, ${c.lineupHeld} already held, ${c.lineupOutOfWindow} outside the window)`
-  );
-  console.log(
     `[details] predictions: ${c.predictions} (${c.predSkipped} still fresh), ` +
     `stats: ${c.stats}, errors: ${c.errors}, ${spent().toFixed(1)}s`
   );
@@ -547,7 +499,25 @@ async function main() {
     console.log(`[details] STOPPED ON BUDGET at ${BUDGET_SECONDS}s — ${c.unprocessed} fixture(s) not reached`);
   }
 
-  const totalCalls = c.predictions + c.lineupCalls + c.stats;
+  // ---- LINEUPS, AS A BACKSTOP ONLY. `fetchLineups.js` owns this on a
+  // 5-minute cron; running it here too costs almost nothing (a confirmed
+  // lineup is never re-asked) and means a run of dropped ticks is still
+  // covered by whatever the engine reaches.
+  let lineupCalls = 0;
+  if (!c.stoppedOnBudget && spent() < BUDGET_SECONDS) {
+    dog.stage('lineups (backstop)');
+    try {
+      const lc = await captureLineups(supabase, fetchLineups, {
+        deadlineAt: startedAt + BUDGET_SECONDS * 1000,
+      });
+      lineupCalls = lc.calls;
+      console.log(summarise(lc));
+    } catch (err) {
+      console.warn(`[details] lineup backstop failed: ${err.message}`);
+    }
+  }
+
+  const totalCalls = c.predictions + lineupCalls + c.stats;
   if (totalCalls > 0) {
     const today = new Date().toISOString().slice(0, 10);
     const { data: plan } = await supabase
@@ -571,6 +541,6 @@ if (require.main === module) {
 
 module.exports = {
   inLineupWindow, isUpcoming, isRecentlyCompleted, chunk, parsePct,
-  PAST_GRACE_HOURS, AHEAD_HOURS, LINEUP_WINDOW_MINUTES,
+  PAST_GRACE_HOURS, AHEAD_HOURS,
   PREDICTION_REFRESH_HOURS, BUDGET_SECONDS, ID_CHUNK,
 };

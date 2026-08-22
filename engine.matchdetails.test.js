@@ -31,8 +31,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const {
-  inLineupWindow, isUpcoming, isRecentlyCompleted, chunk,
-  PAST_GRACE_HOURS, AHEAD_HOURS, LINEUP_WINDOW_MINUTES,
+  isUpcoming, isRecentlyCompleted, chunk,
+  PAST_GRACE_HOURS, AHEAD_HOURS,
   PREDICTION_REFRESH_HOURS, BUDGET_SECONDS, ID_CHUNK,
 } = require('./fetchMatchDetails');
 
@@ -65,37 +65,6 @@ test('queryMatches states a LOWER bound on kickoff_at', () => {
 // The lineup window
 // ---------------------------------------------------------------------------
 
-test('the lineup window opens near kickoff and not two days out', () => {
-  assert.ok(LINEUP_WINDOW_MINUTES >= 60,
-    'an XI lands about an hour out; a window under 60m would miss it');
-  assert.ok(LINEUP_WINDOW_MINUTES <= 240,
-    'asking two days out is a guaranteed empty response and spends the budget');
-});
-
-test('inLineupWindow admits the imminent and refuses the distant', () => {
-  const sched = ko => ({ status: 'scheduled', kickoff_at: ko });
-  assert.equal(inLineupWindow(sched(at(25))), true,  '25 minutes out — the reported fixture');
-  assert.equal(inLineupWindow(sched(at(59))), true);
-  assert.equal(inLineupWindow(sched(at(60 * 47))), false, '47 hours out — no XI exists');
-});
-
-test('IT IS GATED ON THE CLOCK, NOT ON STATUS', () => {
-  // Production has never written status='live', and a fixture sits at
-  // 'scheduled' until fetchResults settles it. A status-based test would
-  // never open the window at all.
-  const kickedOff = { status: 'scheduled', kickoff_at: at(-20) };
-  assert.equal(inLineupWindow(kickedOff), true,
-    'a scheduled row 20 minutes past kickoff certainly has an XI published');
-  assert.equal(isUpcoming({ status: 'live' }), true);
-  assert.equal(inLineupWindow({ status: 'completed', kickoff_at: at(-20) }), false);
-});
-
-test('a malformed or absent kickoff refuses rather than throwing', () => {
-  assert.equal(inLineupWindow({ status: 'scheduled', kickoff_at: null }), false);
-  assert.equal(inLineupWindow({ status: 'scheduled', kickoff_at: 'not a date' }), false);
-  assert.equal(inLineupWindow({}), false);
-});
-
 // ---------------------------------------------------------------------------
 // Stopping is not being killed
 // ---------------------------------------------------------------------------
@@ -106,6 +75,18 @@ test('THE SCRIPT STOPS ITSELF BEFORE THE STEP KILLS IT', () => {
     `budget ${BUDGET_SECONDS}s must stay under the step's ${STEP_TIMEOUT_SECONDS}s timeout`);
   assert.ok(STEP_TIMEOUT_SECONDS - BUDGET_SECONDS >= 30,
     'too little headroom between the budget and the kill for the trailing writes');
+});
+
+test('lineups moved OUT of this script and are still called as a backstop', () => {
+  // fetchLineups.js owns them on a 5-minute cron — the XI is the one thing
+  // here that expires. This file keeps a backstop so a run of dropped ticks is
+  // still covered, and it must go through the SAME module, never a second copy.
+  assert.ok(/require\('\.\/lib\/lineupCapture'\)/.test(SRC), 'no shared module');
+  assert.ok(/captureLineups\(/.test(SRC), 'the backstop is gone');
+  const loop = SRC.slice(SRC.indexOf('for (let i = 0; i < matches.length; i++)'),
+                         SRC.indexOf('const totalCalls'));
+  assert.ok(!/fetchLineups\(/.test(loop.slice(0, loop.indexOf('} else if (isRecentlyCompleted'))),
+    'the per-fixture loop must not fetch lineups; the module does that after it');
 });
 
 test('the 429 backoff cannot outlive the budget it runs inside', () => {
@@ -125,15 +106,6 @@ test('main sets the deadline the retry reads', () => {
 // Ordering: the XI is the only work with a deadline
 // ---------------------------------------------------------------------------
 
-test('lineups are asked for BEFORE predictions in the loop', () => {
-  const body = SRC.slice(SRC.indexOf('for (let i = 0; i < matches.length; i++)'));
-  const lineupAt = body.indexOf('fetchLineups(');
-  const predAt   = body.indexOf('fetchPredictions(');
-  assert.ok(lineupAt > -1 && predAt > -1);
-  assert.ok(lineupAt < predAt,
-    'the XI is the only call with a deadline; it must not queue behind a prediction');
-});
-
 test('predictions are throttled, not fetched every tick', () => {
   assert.ok(PREDICTION_REFRESH_HOURS >= 1,
     're-fetching 192 predictions a tick is what consumed the lineups budget');
@@ -142,17 +114,6 @@ test('predictions are throttled, not fetched every tick', () => {
 // ---------------------------------------------------------------------------
 // An empty table must say WHICH silence it is
 // ---------------------------------------------------------------------------
-
-test('the summary separates the four causes of an empty lineups table', () => {
-  // Nothing near kickoff / already held / not published yet / ran out of
-  // budget. Same principle as /api/inplay's `source` block: a silence that
-  // does not say which is read as the feed going quiet.
-  for (const k of ['lineupEmpty', 'lineupHeld', 'lineupOutOfWindow', 'stoppedOnBudget']) {
-    assert.ok(SRC.includes(k), `census is missing ${k}`);
-  }
-  assert.ok(/not published yet/.test(SRC));
-  assert.ok(/STOPPED ON BUDGET/.test(SRC));
-});
 
 test('a failed freshness read re-asks rather than skipping', () => {
   // Degrading to "we already have everything" would be silent and permanent.
@@ -174,4 +135,40 @@ test('recently-completed still gets its stats window', () => {
   assert.equal(isRecentlyCompleted({ status: 'completed', kickoff_at: at(-60) }), true);
   assert.equal(isRecentlyCompleted({ status: 'completed', kickoff_at: at(-60 * 12) }), false);
   assert.equal(isRecentlyCompleted({ status: 'scheduled', kickoff_at: at(-60) }), false);
+});
+
+// ---------------------------------------------------------------------------
+// The league label — traced 22 Aug 2026 after "Hull City v Manchester United"
+// was queried as a Premier League fixture.
+//
+// THE LABEL WAS CORRECT. Fixtures are fetched per league via
+// `/fixtures?league=<apiId>`, so the competition is the QUERY PARAMETER and not
+// a name match; `fetchFixturesForDate` additionally self-verifies the API's own
+// league name against ours. Measured on production, 2026/27: the English
+// pyramid holds 20 clubs x 38 fixtures with NO club in two leagues (every
+// duplicate is `X + League Cup`). Hull City, Coventry and Sunderland really are
+// promoted in this dataset.
+//
+// What the trace DID find is below.
+// ---------------------------------------------------------------------------
+
+const PLAN_SRC = fs.readFileSync(require.resolve('./planDay.js'), 'utf8');
+
+test('AN UNTAGGED FIXTURE IS NEVER FILED AS THE PREMIER LEAGUE', () => {
+  // An absent tag used to fall back to the first tracked league — [39,
+  // 'Premier League', 'England'] — so a fixture that lost its tag became a
+  // Premier League match, silently, in the one competition where nobody would
+  // question it. The ratchet greps the SOURCE, so keep the banned expression
+  // out of prose here too: this test failed on its own explanatory comment.
+  assert.ok(!/_league \?\? TRACKED_LEAGUES\[0\]/.test(PLAN_SRC),
+    'the fail-open default is back');
+  assert.ok(/would otherwise have been filed as English Premier League/.test(PLAN_SRC),
+    'skipped fixtures must be reported, not dropped silently');
+});
+
+test('the league id self-verify stays', () => {
+  // A re-pointed or mistyped id would ingest the wrong competition silently.
+  assert.ok(/LEAGUE ID MISMATCH/.test(PLAN_SRC));
+  assert.ok(/league=\$\{league\.id\}/.test(PLAN_SRC),
+    'the competition must come from the query parameter, never a name match');
 });
