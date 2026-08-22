@@ -1,0 +1,125 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — capture the confirmed XI, on its own clock
+#
+# THE LINEUP IS THE ONLY THING THIS ENGINE FETCHES THAT EXPIRES. Prices,
+# predictions, stats and closing lines are either still true an hour later or
+# are explicitly a historical record. A team sheet is news until the whistle
+# and a footnote afterwards, so a capture that arrives late is not late — it is
+# a different and much less useful product.
+#
+# WHAT WENT WRONG. Lineups were step 7 of the engine pipeline, behind a
+# `queryMatches` with no lower bound on `kickoff_at`. The 47 fixtures the feed
+# never settled — oldest kickoff 23 Oct 2022 — were in the work list on every
+# tick, and API-Football serves the historical XI for a game played in 2022, so
+# each was a SUCCESSFUL call writing a row nobody reads. Of 1,362 lineup rows
+# ever written, 26 were captured before kickoff (1.9%); the rest landed on
+# average 11.4 days late. On 22 Aug 2026 not one of the 25 fixtures kicking off
+# within three hours had a lineup, and all 18 rows the 10:49 run wrote were for
+# fixtures from 2022, 2023 and 2025.
+#
+# WHY A SEPARATE JOB AND NOT A TIGHTER PIPELINE. The engine runs ~9 minutes and
+# cannot go more often than ~15. Most competitions publish their XI ~20 minutes
+# before kickoff (see lib/lineupCapture.js for the measured table), so a lineup
+# caught on the next engine tick is a coin flip. This job does one query and a
+# handful of calls. The precedent is capture-closing-lines.yml, whose second
+# table became correct the moment it stopped sharing a runner.
+#
+# WHAT THIS GUARANTEES AND WHAT IT DOES NOT. It guarantees we ASK, every tick,
+# from 90 minutes before kickoff until we hold the row — so capture lands within
+# one tick of publication. It does NOT guarantee an hour of notice: that is the
+# feed's decision. Run `node fetchLineups.js --report` to see what the feed
+# actually gives, measured over the last fortnight.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Capture Lineups
+
+on:
+  schedule:
+    # THE CRON IS NOT THE CADENCE — the job polls itself. Measured on this
+    # repo: engine.yml declares every 15 minutes and GitHub delivered a MEDIAN
+    # GAP OF 34 MINUTES over its last 25 scheduled runs, minimum 17, never once
+    # 15. A five-minute schedule is a request, not a promise, and a lineup
+    # published 20 minutes before kickoff but sampled every half hour is the
+    # coin flip this job exists to end.
+    #
+    # So one tick keeps a process alive for 50 minutes, taking a pass every 5 —
+    # LONGER than the median gap between ticks, so a fresh tick lands while the
+    # last loop is still running and queues, closing the seam between them.
+    # This schedule's only duty is to make sure a process is running at all,
+    # and asking often means a dropped tick costs minutes rather than a match.
+    # Actions minutes are free on a public repo.
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      report:
+        description: 'Print the lead-time distribution instead of capturing'
+        type: boolean
+        default: false
+
+# ONE LOOP AT A TIME, AND THE NEXT ONE WAITS. `cancel-in-progress: false` with
+# GitHub's one-pending-run-per-group rule turns a burst of ticks into a single
+# queued successor — so coverage is continuous and never doubled. Cancelling
+# in progress would be exactly wrong here: it would kill a live 25-minute
+# watch to start another one at the same fixtures.
+concurrency:
+  group: lineups-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  lineups:
+    name: Capture confirmed lineups
+    runs-on: ubuntu-latest
+    # 55 minutes against the script's own 50-minute loop. THE ORDER IS STILL
+    # THE POINT — the script must stop itself before the step kills it — but
+    # the third number is gone on purpose: the job now deliberately outlives
+    # its 5-minute schedule, and the concurrency group below is what keeps that
+    # from piling up. GitHub holds at most one pending run per group, so a tick
+    # arriving mid-loop simply starts the moment this one ends, which is the
+    # continuous coverage the whole design wants.
+    timeout-minutes: 55
+
+    env:
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Capture lineups
+        id: capture
+        shell: bash
+        run: |
+          set -o pipefail
+          if [ "${{ inputs.report }}" = "true" ]; then
+            node fetchLineups.js --report | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            node fetchLineups.js | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # `if: failure()` does NOT run on a cancelled job, and a job killed by
+      # `timeout-minutes` ends cancelled — the finding engine.yml's health step
+      # was rewritten for. At this cadence a single bad tick is noise, so this
+      # annotates rather than alerts: the signal worth watching is --report.
+      - name: Report outcome
+        if: always()
+        shell: bash
+        run: |
+          case "${{ job.status }}" in
+            success)   echo "lineups tick ok" ;;
+            cancelled) echo "::error title=lineups killed::Cancelled — the step timeout fired before the script's own budget. Raise timeout-minutes or lower LINEUP_BUDGET_SECONDS." ;;
+            *)         echo "::error title=lineups failed::Step outcome '${{ steps.capture.outcome }}'. A single failed tick is recoverable; a run of them is not." ;;
+          esac

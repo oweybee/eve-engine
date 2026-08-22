@@ -279,8 +279,16 @@ async function upsertMatches(supabase, fixtures, { extraCols } = {}) {
   //    Premier Leagues, two Serie As, three Super Leagues — migration 044).
   const leagueKey = l => `${l.name}|${l.country}`;
   const leagueIdByKey = new Map();
+  // FAILS CLOSED. An absent `_league` used to fall back to the FIRST tracked
+  // league, which is the ENGLISH PREMIER LEAGUE — so an untagged fixture
+  // was silently filed as the most prestigious competition in the product,
+  // where it would be believed. Both callers tag `_league` today, so this was
+  // unreachable; a default that is wrong in the loudest possible way is not
+  // one to leave standing behind that. Skipped and counted instead.
+  let untagged = 0;
   for (const f of fixtures) {
-    const league = f._league ?? TRACKED_LEAGUES[0];
+    const league = f._league;
+    if (!league) { untagged++; continue; }
     if (leagueIdByKey.has(leagueKey(league))) continue;
     const { data, error } = await supabase
       .from('leagues')
@@ -288,6 +296,11 @@ async function upsertMatches(supabase, fixtures, { extraCols } = {}) {
       .select('id').single();
     if (error) { console.warn(`[plan] upsertLeague(${league.name}): ${error.message}`); continue; }
     leagueIdByKey.set(leagueKey(league), data.id);
+  }
+
+  if (untagged) {
+    console.warn(`[plan] ⚠ ${untagged} fixture(s) carried no _league and were SKIPPED — ` +
+                 'they would otherwise have been filed as English Premier League.');
   }
 
   // 2. Teams — unique by name (bulk upsert rejects in-batch duplicates), chunked.
@@ -313,7 +326,8 @@ async function upsertMatches(supabase, fixtures, { extraCols } = {}) {
   const rowById = new Map();
   for (const f of fixtures) {
     const fixtureId = f.fixture.id;
-    const league    = f._league ?? TRACKED_LEAGUES[0];
+    const league    = f._league;
+    if (!league) continue;                    // see the note above: never guess a competition
     const leagueId  = leagueIdByKey.get(leagueKey(league));
     const homeId    = teamIdByName.get(f.teams?.home?.name ?? `home_${fixtureId}`);
     const awayId    = teamIdByName.get(f.teams?.away?.name ?? `away_${fixtureId}`);
