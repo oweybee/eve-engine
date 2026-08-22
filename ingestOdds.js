@@ -35,6 +35,7 @@
 
 const https            = require('https');
 const { getClient }    = require('./lib/supabaseClient');
+const { bookmakerKey } = require('./lib/bookmakers');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -238,30 +239,11 @@ async function fetchFixtureOdds(fixtureId) {
 // Bookmaker name normalisation
 // ---------------------------------------------------------------------------
 
-function slugifyBookmaker(name) {
-  const map = {
-    'Bet365':           'bet365',
-    'William Hill':     'williamhill',
-    'Ladbrokes':        'ladbrokes_uk',
-    'Coral':            'coral',
-    'Paddy Power':      'paddypower',
-    'Betfair':          'betfair_sb_uk',
-    'Betfair Exchange': 'betfair_ex_uk',
-    'Betway':           'betway',
-    'Unibet':           'unibet_uk',
-    'SkyBet':           'skybet',
-    'Sky Bet':          'skybet',
-    'Betfred':          'betfred_uk',
-    'BetVictor':        'betvictor',
-    'Boylesports':      'boylesports',
-    'BoyleSports':      'boylesports',
-    'Virgin Bet':       'virginbet',
-    '888sport':         'sport888',
-    'Smarkets':         'smarkets',
-    'Matchbook':        'matchbook',
-  };
-  return map[name] ?? name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
-}
+// The slug map moved to lib/bookmakers.js so this repo has ONE bookmaker
+// identity. It was already correct here — `odds` has always held keys — and
+// the corruption came from the compute writers, which is precisely why both
+// halves needed to sit in one file rather than one per direction.
+const slugifyBookmaker = bookmakerKey;
 
 // ---------------------------------------------------------------------------
 // H2H row extraction

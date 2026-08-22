@@ -213,6 +213,29 @@ jobs:
       # scripts/betfair-vps/README.md — writing corners/cards/O-U/BTTS straight
       # to Supabase, which this pipeline then prices on the next compute.
 
+      # Soft-book breadth sweep. Sparse by design: API-Football supplies the
+      # frequency, this supplies the books. Never fails the pipeline.
+      #
+      # IT RUNS BEFORE THE COMPUTE LOOP, AND IT USED TO RUN AFTER IT. That
+      # ordering meant the soft books were always one tick stale: computeValues
+      # priced from whatever was in `odds` when the loop started, and the Odds
+      # API rows landed afterwards, so the best price a reader saw came from
+      # the previous cycle's book set. Measured 22 Aug 2026, the first day this
+      # feed produced anything: of 183 fixtures priced at 07:57, ZERO had a
+      # best price at one of the 17 newly-arrived books — every one of them had
+      # been written to `odds` minutes earlier and none had reached a
+      # computation. The breadth was in the database and out of the product.
+      #
+      # Sequence now: API-Football ingest and The Odds API ingest both land,
+      # THEN compute prices against the full board, then snapshot. The loop
+      # still re-ingests API-Football on each of its iterations — that is the
+      # frequency half and it is unchanged; this step is the breadth half and
+      # once per tick is what it is paced for.
+      - name: Ingest odds — The Odds API (soft-book breadth)
+        id: odds_api
+        continue-on-error: true
+        run: node ingestOddsApi.js
+
       - name: Live odds loop (ingest -> compute -> snapshot)
         id: ingest_loop
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_ingest != 'true' }}
@@ -278,13 +301,6 @@ jobs:
             fi
           done
           exit $LOOP_EXIT
-
-      # Soft-book breadth sweep. Sparse by design: API-Football supplies the
-      # frequency, this supplies the books. Never fails the pipeline.
-      - name: Ingest odds — The Odds API (soft-book breadth)
-        id: odds_api
-        continue-on-error: true
-        run: node ingestOddsApi.js
 
       # API_PREDICTIVE and LAMBDA_MC ARE SWITCHED OFF — Phase 0 of the engine
       # consolidation, 18 Aug 2026. Both were the wrong side of the closing

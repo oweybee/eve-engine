@@ -20,6 +20,7 @@
 // The pure exports below have no DB dependency.
 const sm            = require('./lib/secondaryMarkets');
 const { beginWatchdog } = require('./lib/watchdog');
+const { bookmakerKey } = require('./lib/bookmakers');
 const { categoryFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
 const { shinDevig } = require('./lib/devig');
@@ -176,22 +177,10 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
     .filter(m => m.odds.length > 0);
 }
 
-function formatBookName(key) {
-  if (!key) return null;
-  const names = {
-    betfair_ex_uk: 'Betfair Exch', betfair_sb_uk: 'Betfair SB',
-    smarkets: 'Smarkets', matchbook: 'Matchbook', bet365: 'Bet365',
-    skybet: 'Sky Bet', williamhill: 'William Hill', paddypower: 'Paddy Power',
-    coral: 'Coral', ladbrokes_uk: 'Ladbrokes', betfred_uk: 'Betfred',
-    betway: 'Betway', betvictor: 'BetVictor', boylesports: 'BoyleSports',
-    unibet_uk: 'Unibet', virginbet: 'Virgin Bet', sport888: '888sport',
-    leovegas: 'LeoVegas', casumo: 'Casumo', grosvenor: 'Grosvenor',
-    livescorebet: 'LiveScore Bet', pinnacle: 'Pinnacle', unibet: 'Unibet',
-    betsson: 'Betsson', betano: 'Betano', marathonbet: 'MarathonBet',
-    '1xbet': '1xBet', sbo: 'SBO', '888sport': '888sport', '10bet': '10bet',
-  };
-  return names[key] ?? key;
-}
+// formatBookName USED TO LIVE HERE and it was the bug: a presentation
+// function called while BUILDING the row, so a display label was persisted
+// where an identifier belonged. The database stores keys; lib/bookmakers owns
+// the label and the frontend applies it at render.
 
 /**
  * MARKET-ANCHORED PRICING. Replaced the consensus on 6 Aug 2026.
@@ -306,7 +295,7 @@ function computeConsensus(oddsRows) {
 
     // Collect prices, then drop palpable outliers (see OUTLIER_MULT).
     const priced = validRows
-      .map(r => ({ v: parseFloat(r[field]), name: formatBookName(r.bookmaker) }))
+      .map(r => ({ v: parseFloat(r[field]), name: bookmakerKey(r.bookmaker) }))
       .filter(p => Number.isFinite(p.v) && p.v > 1);
     let kept = priced;
     if (priced.length >= 3) {
@@ -1018,5 +1007,5 @@ module.exports = {
   fetchStatsLookups,
   updateBetOfDay,
   withPool,
-  formatBookName,
+  bookmakerKey,
 };

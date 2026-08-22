@@ -31,6 +31,7 @@
  */
 
 const { getClient } = require('./lib/supabaseClient');
+const { bookmakerKey } = require('./lib/bookmakers');
 const { categoryFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
 const ma = require('./lib/marketAnchor');
@@ -150,20 +151,10 @@ async function fetchMatchesForApiComputation(supabase) {
 
 // ── 2. Bookmaker display names ────────────────────────────────────────────────
 
-function formatBookName(key) {
-  if (!key) return null;
-  const names = {
-    betfair_ex_uk: 'Betfair Exch', betfair_sb_uk: 'Betfair SB', smarkets: 'Smarkets',
-    matchbook: 'Matchbook', bet365: 'Bet365', skybet: 'Sky Bet',
-    williamhill: 'William Hill', paddypower: 'Paddy Power', coral: 'Coral',
-    ladbrokes_uk: 'Ladbrokes', betfred_uk: 'Betfred', betway: 'Betway',
-    betvictor: 'BetVictor', boylesports: 'BoyleSports', unibet_uk: 'Unibet',
-    virginbet: 'Virgin Bet', sport888: '888sport', leovegas: 'LeoVegas',
-    casumo: 'Casumo', grosvenor: 'Grosvenor', livescorebet: 'LiveScore Bet',
-    pinnacle: 'Pinnacle', unibet: 'Unibet', betsson: 'Betsson',
-  };
-  return names[key] ?? key;
-}
+// formatBookName removed — see lib/bookmakers.js. A label at the write layer
+// is what put both `Bet365` and `bet365` in one column. This copy was also
+// MISSING marathonbet, betano, 1xbet, sbo and 10bet, so the same book got a
+// different spelling depending on which writer ran.
 
 // ── 3. Compute edge for one match ─────────────────────────────────────────────
 
@@ -228,7 +219,7 @@ function computeApiMatchEdge(match) {
 
     const allOdds = {};
     for (const r of validRows) {
-      const name = formatBookName(r.bookmaker);
+      const name = bookmakerKey(r.bookmaker);
       if (name) allOdds[name] = parseFloat(r[field]);
     }
 
@@ -236,7 +227,7 @@ function computeApiMatchEdge(match) {
     let max_book = null;
     for (const r of validRows) {
       const v = parseFloat(r[field]);
-      if (v > max_odds) { max_odds = v; max_book = formatBookName(r.bookmaker); }
+      if (v > max_odds) { max_odds = v; max_book = bookmakerKey(r.bookmaker); }
     }
 
     const fair_odds = 1 / p_api;
