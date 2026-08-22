@@ -195,6 +195,33 @@ const SIX_BOOKS = (h, d, a) => [
   row('betano', h, d, a), row('10bet', h, d, a), row('marathonbet', h, d, a),
 ];
 
+test('an incomplete 1X2 market emits NO signal — the three-way guard', () => {
+  // A 1X2 vector short a leg is not a market. The three prices are de-vigged
+  // TOGETHER, so a missing draw does not merely leave the draw unpriced — it
+  // makes the home and away fair lines wrong too, and any edge measured
+  // against them is an artefact rather than a disagreement about price.
+  //
+  // Measured before the guard was written: 0 of 210 rows computed that half
+  // hour carried a null leg, so this is a ratchet under lib/devig's refusal
+  // and the MIN_BOOKMAKERS floor, not a repair of a live fault.
+  for (const [label, h, d, a] of [
+    ['no draw',  2.10, null, 3.70],
+    ['no away',  2.10, 3.60, null],
+    ['no home',  null, 3.60, 3.70],
+    ['zero leg', 2.10, 0,    3.70],
+    ['leg at 1', 2.10, 1,    3.70],
+  ]) {
+    const r = computeMatch({ id: 'inc', odds: [row('pinnacle', h, d, a), ...SIX_BOOKS(h, d, a)] });
+    assert.strictEqual(r.skipped, true, `${label} must be skipped`);
+    assert.strictEqual(r.row, undefined, `${label} must write no row`);
+  }
+});
+
+test('a COMPLETE three-way market still builds a row — the guard is not a wall', () => {
+  const r = computeMatch({ id: 'ok', odds: [row('pinnacle', 2.10, 3.60, 3.70), ...SIX_BOOKS(2.10, 3.60, 3.70)] });
+  assert.strictEqual(r.skipped, false, 'a complete vector must survive the guard');
+});
+
 test('builds a MARKET_ANCHORED row and flags value on a real edge', () => {
   const match = {
     id: 'm2',

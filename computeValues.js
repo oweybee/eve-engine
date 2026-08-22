@@ -377,6 +377,29 @@ function computeMatch(match) {
 
   const { home, draw, away, bookmakerCount, latestFetchedAt } = consensus;
 
+  // THREE-WAY COMPLETENESS. A 1X2 market with a missing leg is not a market:
+  // the de-vig has no vector to normalise, so `fair_*` is meaningless and the
+  // edge measured against it is an artefact rather than a price disagreement.
+  //
+  // MEASURED BEFORE IT WAS WRITTEN, and it changes nothing today: 0 of the 210
+  // rows computed in the half hour before this landed carried a null in any
+  // best or fair leg. `lib/devig` already refuses an incomplete vector
+  // ("incomplete market — N of M prices missing or invalid") and
+  // `computeConsensus` already returns null below MIN_BOOKMAKERS, so this is a
+  // RATCHET under two guards that are doing their job, not a repair. It is
+  // here because those two refuse at the de-vig and the book count — neither
+  // of them is the statement "we do not publish a 1X2 claim on a two-legged
+  // market", and that statement should exist where the row is built.
+  //
+  // It refuses the WHOLE match rather than the missing leg: the three prices
+  // are de-vigged together, so a vector short a leg makes the other two wrong
+  // as well, not merely incomplete.
+  const legs = [home?.max_odds, draw?.max_odds, away?.max_odds];
+  const missingLegs = legs.filter(o => !(Number(o) > 1)).length;
+  if (missingLegs > 0) {
+    return { skipped: true, reason: `incomplete 1x2: ${missingLegs} of 3 legs missing` };
+  }
+
   const best_home_odds = home?.max_odds ?? null;
   const best_draw_odds = draw?.max_odds ?? null;
   const best_away_odds = away?.max_odds ?? null;
