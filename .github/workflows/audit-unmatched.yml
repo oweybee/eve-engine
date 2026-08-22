@@ -38,6 +38,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+      # scripts/auditUnmatchedEvents.js reaches Supabase through
+      # lib/supabaseClient, so it needs @supabase/supabase-js on disk.
+      # odds-api-catalogue.yml, which this is modelled on, has no install step
+      # because its script talks only to The Odds API over plain https.
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
       - name: Audit unmatched events
         env:
           ODDS_API_KEY:              ${{ secrets.ODDS_API_KEY }}
