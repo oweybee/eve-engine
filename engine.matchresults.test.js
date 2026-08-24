@@ -263,6 +263,21 @@ test('nothing usable resolves to null rather than to a wrong file', () => {
     'a compressed or unrelated file is not a season file');
 });
 
+test('AN UNRESOLVABLE 300 IS NOT-PUBLISHED-YET, NOT A FAILURE', () => {
+  // Measured live 24 Aug 2026: season 2526 fetched all ten divisions and 4,266
+  // rows with zero failures, while 2627 answered 300 for E0, D1, I1 and F1 —
+  // and what E0 was offered was EC/E3/E2/E1, the OTHER English divisions.
+  // Apache matches on the shape of a name, so a directory holding E1-E3 answers
+  // a missing E0 with 300 rather than 404 purely because the neighbours look
+  // similar. Classifying that as an outage reported four FAILED divisions on a
+  // run that was working, and in July — when no division has a file — it would
+  // have tripped the all-divisions-errored guard and turned the run red.
+  const offered = ['EC.csv', 'E3.csv', 'E2.csv', 'E1.csv'];
+  assert(resolveAlternative('E0', offered) === null,
+    'sibling divisions are not alternatives for E0 — resolving one would file '
+    + "the Conference's results as the Premier League's");
+});
+
 test('the corpus is ten divisions and every one names its country', () => {
   assert(DIVISIONS.length === 10, `expected 10 divisions, got ${DIVISIONS.length}`);
   for (const d of DIVISIONS) {

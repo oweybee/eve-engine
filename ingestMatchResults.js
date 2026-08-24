@@ -373,9 +373,27 @@ async function fetchSeasonFile(code, div) {
     const options = alternativesFrom(err.body ?? err.message);
     const name = resolveAlternative(div, options);
     if (!name) {
-      err.message =
-        `HTTP 300 and no unambiguous alternative for ${div}.csv `
-        + `(offered: ${options.join(', ') || 'nothing parseable'})`;
+      // AN UNRESOLVABLE 300 IS A 404 WEARING A DIFFERENT NUMBER, and getting
+      // that wrong is what this whole branch is really about. Measured against
+      // the live host, 24 Aug 2026:
+      //
+      //   season 2526   all ten divisions   4,266 rows   0 failures
+      //   season 2627   E0 D1 I1 F1         300 Multiple Choices
+      //
+      // and what E0 was offered was `EC.csv, E3.csv, E2.csv, E1.csv` — the
+      // OTHER English divisions, not a variant of the one asked for. Apache
+      // matches on the shape of the name, so a directory holding E1–E3 answers
+      // a missing E0 with 300 rather than 404 purely because its neighbours
+      // look similar. The Premier League, the Bundesliga, Serie A and Ligue 1
+      // had simply not been posted for 2026/27 yet.
+      //
+      // So this is "no season file published yet", exactly as a 404 is, and it
+      // must not read as an outage: four divisions were being reported FAILED
+      // on a run that was working perfectly, and in July — when no division has
+      // a file — the all-divisions-errored guard below would have turned an
+      // ordinary quiet morning red.
+      err.status = 404;
+      err.message = `no season file published yet (300, offered: ${options.join(', ') || 'nothing'})`;
       throw err;
     }
 
