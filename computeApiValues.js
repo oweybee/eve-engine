@@ -35,6 +35,7 @@ const { bookmakerKey } = require('./lib/bookmakers');
 const { categoryFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
 const ma = require('./lib/marketAnchor');
+const { insertSignals } = require('./lib/insertSignals');
 
 // SWITCHED OFF — Phase 0 of the engine consolidation, 18 Aug 2026.
 //
@@ -444,18 +445,19 @@ async function insertValueSignals(supabase, rows) {
 
   if (!toInsert.length) return 0;
 
-  const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
-  if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+  const { inserted, duplicate } = await insertSignals(supabase, toInsert, 'api_engine');
+  if (!inserted) return 0;
 
   const mv = toInsert.filter(r => r.is_mover).length;
   const pr = toInsert.filter(r => r.signal_category === 'prime').length;
   const va = toInsert.filter(r => r.signal_category === 'value').length;
   const ls = toInsert.filter(r => r.signal_category === 'longshot').length;
   console.log(
-    `[api_engine] inserted ${toInsert.length}` +
+    `[api_engine] inserted ${inserted}` +
+    `${duplicate ? ` (${duplicate} already on record)` : ''}` +
     ` (Prime=${pr} Value=${va} Longshot=${ls} movers=${mv})`
   );
-  return toInsert.length;
+  return inserted;
 }
 
 // ── 6. Concurrency pool ───────────────────────────────────────────────────────

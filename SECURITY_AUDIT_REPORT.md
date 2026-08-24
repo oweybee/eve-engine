@@ -1,5 +1,33 @@
 # Security Audit Report — Database Schema, Migrations & Compute Layer
 
+> **RE-CHECKED AGAINST PRODUCTION, 24 Aug 2026 — read this before acting on
+> anything below.** Every finding was re-measured against the live database
+> rather than against the migration history, on the standing rule that a
+> migration is what someone intended and the table is what is true. Two
+> findings hold and are now FIXED; one does not reproduce at all; one stands
+> but is narrower than it reads.
+>
+> | Finding | Verdict on live production | Status |
+> |---|---|---|
+> | 1 — anchors writable | **REAL, and mis-described.** RLS is *enabled* on both anchors with **zero policies**, so INSERT/UPDATE/DELETE are already denied. What was genuinely exposed is **TRUNCATE**, which is never governed by RLS at all, plus the same grant on `league_strength`. | **FIXED** — migration 095 |
+> | 2 — `league_strength` enable missing | **REAL.** RLS is on in production but no tracked migration enables it, so a replay creates it unprotected. | **FIXED** — migration 095 |
+> | 3 — seven tables with no RLS | **DOES NOT REPRODUCE.** All seven (`mx_team_match`, `posted_signals`, `engine_plan`, `team_statistics`, `referee_stats`, `team_elo`, `inplay_baseline`, `performance_summary`) have RLS **on**, a policy, and **zero** client write grants. The claim that they are "open to full public read and write via the anon key" is false. | **NO ACTION** |
+> | 4 — RLS-enable statements not in tracked history | **STANDS**, as an audit-trail concern only. All eight core product tables are RLS-protected in production today; the exposure is to migration *replay*, not to a live caller. | Open |
+>
+> Migration 095 also caught four VIEWS the audit's own sweep missed, because it
+> filtered on tables. `settled_match_prices` is auto-updatable over the
+> 77,438-row settled corpus and carried INSERT/UPDATE/DELETE/TRUNCATE for
+> `anon`. Its closing assertion is now stated as the RULE rather than as a
+> list — outside `bets`, `bankroll_transactions`, `preferences` and
+> `user_bookmakers`, the client holds no write privilege anywhere in `public` —
+> so it cannot go stale the way the 7 Aug sweep did.
+>
+> **Finding 1's remediation was NOT taken as written.** It recommends adding a
+> public `SELECT` policy to both anchors. Declined: nothing in either repo
+> reads them from a browser, and granting fresh public read on model-gate
+> configuration to satisfy a linter is a widening, not a hardening. They stay
+> fail-closed.
+
 **Date:** 2026-08-23
 **Scope:** `migrations/*.sql` (094 files), `computeValues.js`, `lib/supabaseClient.js`
 

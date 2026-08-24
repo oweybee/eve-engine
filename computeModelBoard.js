@@ -31,6 +31,7 @@ const { priceFixture, available, unavailableReason } = require('./lib/lambdaBoar
 const { categoryFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
 const ma = require('./lib/marketAnchor');
+const { insertSignals } = require('./lib/insertSignals');
 
 const ENABLED = process.env.LAMBDA_BOARD_ENABLED === 'true';
 const EV_THRESHOLD = parseFloat(process.env.LAMBDA_EV_THRESHOLD || '0.03');
@@ -323,9 +324,11 @@ async function run() {
 
   console.log(`[modelBoard] inserting ${toInsert.length} (deduped ${candidates.length - toInsert.length})`);
   if (!toInsert.length) return;
-  const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
-  if (insErr) throw new Error(`modelBoard[insert]: ${insErr.message}`);
-  console.log('[modelBoard] done');
+  const { inserted, duplicate } = await insertSignals(supabase, toInsert, 'modelBoard');
+  console.log(
+    `[modelBoard] done — inserted ${inserted}` +
+    `${duplicate ? ` (${duplicate} already on record)` : ''}`
+  );
 }
 
 if (require.main === module) {

@@ -1,0 +1,79 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — keep the settled English corpus current
+#
+# `match_results` is the entire source of the edge league table on /leagues:
+# 77,438 settled English matches with the closing prices they went off at.
+# NOTHING IN THIS REPO HAD EVER WRITTEN TO IT. The table was loaded once by hand
+# — last row created 16 Jul 2026, latest result 24 May 2026 — so on 20 Aug 2026,
+# with 2026/27 already under way, the newest season the product could offer was
+# the one that finished in May, and no amount of waiting would have changed it.
+#
+# `ensemble/scrapers/refresh_football_data.py` looks like it does this and does
+# not: it pulls the same CSVs into ensemble/data/_current/ for the λ model's
+# training corpus and never touches the database.
+#
+# TWICE A DAY IS ENOUGH. football-data.co.uk rewrites the current-season file a
+# few times a week, and a fixture's row appears when it is priced and gains its
+# result afterwards. The upsert targets the natural key, so re-reading the whole
+# season on every run refreshes rows rather than duplicating them — and a missed
+# run costs nothing, because the next one re-reads everything anyway.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Ingest Match Results
+
+on:
+  schedule:
+    # 06:20 and 23:20 UTC. The late run catches the day's results once
+    # football-data has posted them; the morning run picks up prices for the
+    # fixtures ahead. Offset off the hour so it does not queue behind the
+    # engine's own cron.
+    - cron: '20 6,23 * * *'
+  workflow_dispatch:
+    inputs:
+      season:
+        description: 'football-data season code, e.g. 2627. Defaults to the current season.'
+        type: string
+        required: false
+      dry_run:
+        description: 'Parse and report, write nothing'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ingest-match-results-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ingest:
+    name: Ingest settled results
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Ingest match results
+        shell: bash
+        run: |
+          set -o pipefail
+          ARGS=""
+          if [ -n "${{ inputs.season }}" ]; then ARGS="$ARGS --season=${{ inputs.season }}"; fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          node ingestMatchResults.js $ARGS | tee -a "$GITHUB_STEP_SUMMARY"
