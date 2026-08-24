@@ -59,6 +59,22 @@ const DIVISIONS = [
   { div: 'E2', country: 'England' },
   { div: 'E3', country: 'England' },
   { div: 'EC', country: 'England' },
+  // THE BIG FIVE, added 24 Aug 2026 to unblock /leagues. The top flight only,
+  // and the second tiers (SP2, D2, I2, F2) are deliberately NOT taken: they
+  // double the division rail for leagues most readers cannot sanity-check, and
+  // a reader's own sense of who is good is the only external validation an
+  // unpriced table gets. Nothing in the arithmetic ever sees a reputation.
+  //
+  // EQUAL SEASONS ARE LOAD-BEARING, not tidiness. `beyondChanceBar(n)` on
+  // /leagues corrects for how many clubs are being tested, so a division with a
+  // shorter record sitting beside a full one is judged on a different weight of
+  // evidence under one shared threshold. Backfill every new division across the
+  // same seasons England holds — `--seasons` exists for that.
+  { div: 'SP1', country: 'Spain' },
+  { div: 'D1',  country: 'Germany' },
+  { div: 'I1',  country: 'Italy' },
+  { div: 'F1',  country: 'France' },
+  { div: 'N1',  country: 'Netherlands' },
 ];
 
 /** Upsert batch. A division-season is 380–552 rows; a PostgREST body that
@@ -298,14 +314,75 @@ async function upsertRows(rows) {
   return written;
 }
 
+/**
+ * Pull every `href` out of an Apache error page.
+ *
+ * mod_negotiation answers a MISSING file whose neighbours have a similar base
+ * name with **300 Multiple Choices** and a list of what it did find — not a
+ * 404. So a 300 here is not "the server is confused", it is "that exact name is
+ * wrong and here are the near-misses", and the list is the diagnosis.
+ */
+function alternativesFrom(body) {
+  const out = [];
+  const re = /href="([^"]+)"/gi;
+  let m;
+  while ((m = re.exec(body)) !== null) out.push(m[1]);
+  return out;
+}
+
+/**
+ * Which of those near-misses is the season file we asked for.
+ *
+ * CASE IS THE WHOLE POINT. `E0.csv` and `E0.CSV` are one document to a reader
+ * and two to a web server, and this is the one division of ten that differs —
+ * so the rule has to be "the same name ignoring case", not a guess. It returns
+ * null rather than picking when it cannot tell, because silently fetching a
+ * DIFFERENT division's file would write one league's results under another's
+ * name, and every row would look completely ordinary.
+ */
+function resolveAlternative(div, alternatives) {
+  const basename = href => href.split('/').pop();
+  const want = `${div}.csv`.toLowerCase();
+
+  const exact = alternatives.find(h => basename(h).toLowerCase() === want);
+  if (exact) return basename(exact);
+
+  // Only when there is exactly ONE csv on offer — two means we are guessing.
+  const csvs = alternatives.filter(h => basename(h).toLowerCase().endsWith('.csv'));
+  return csvs.length === 1 ? basename(csvs[0]) : null;
+}
+
 async function fetchSeasonFile(code, div) {
-  const path = `/mmz4281/${code}/${div}.csv`;
-  const text = await httpGetText({
+  const get = path => httpGetText({
     host: HOST,
     path,
     headers: { 'User-Agent': 'maxedge-engine/1.0', Accept: 'text/csv,*/*' },
   });
-  return { text, path };
+
+  const path = `/mmz4281/${code}/${div}.csv`;
+  try {
+    return { text: await get(path), path };
+  } catch (err) {
+    if (err.status !== 300) throw err;
+
+    // 24 Aug 2026: E0 — the Premier League, the single most-read division on
+    // /leagues — 300ed on this path while E1, E2, E3 and EC all succeeded on
+    // the identical pattern, so the whole 2026/27 top flight was missing from a
+    // run that reported success. Resolve it from the server's own list rather
+    // than hard-coding whatever spelling is right today.
+    const options = alternativesFrom(err.body ?? err.message);
+    const name = resolveAlternative(div, options);
+    if (!name) {
+      err.message =
+        `HTTP 300 and no unambiguous alternative for ${div}.csv `
+        + `(offered: ${options.join(', ') || 'nothing parseable'})`;
+      throw err;
+    }
+
+    const retryPath = `/mmz4281/${code}/${name}`;
+    console.log(`  ${div}  —  300 Multiple Choices, retrying as ${name}`);
+    return { text: await get(retryPath), path: retryPath };
+  }
 }
 
 /* ── the run ──────────────────────────────────────────────────────────────── */
@@ -394,15 +471,59 @@ async function run({ code, dryRun } = {}) {
   return { season, totalRows, totalWritten, problems, notStarted };
 }
 
+/**
+ * Run several seasons in one go.
+ *
+ * WHY THIS EXISTS. A new division is not usable on /leagues until it holds the
+ * same seasons the others do — `beyondChanceBar(n)` corrects for how many clubs
+ * are on the table, so an unequal record is judged on an unequal weight of
+ * evidence under one shared bar. Adding five divisions therefore means loading
+ * seven seasons of each, and eight hand-dispatched runs is how one gets missed.
+ *
+ * A season that fails ENTIRELY is recorded and the walk continues, because the
+ * common cause is a division that did not exist that year rather than an
+ * outage. It throws only when EVERY season failed — a silent zero across the
+ * whole backfill would leave the corpus frozen with nothing to notice it.
+ */
+async function runSeasons({ codes, dryRun } = {}) {
+  const list = (codes ?? []).filter(Boolean);
+  if (list.length <= 1) return run({ code: list[0], dryRun });
+
+  const done = [];
+  const failed = [];
+  for (const code of list) {
+    try {
+      done.push(await run({ code, dryRun }));
+    } catch (err) {
+      failed.push(`${seasonLabel(code)} (${code}): ${err.message}`);
+      console.log(`\n  season ${code} FAILED — ${err.message}`);
+    }
+  }
+
+  const rows = done.reduce((n, r) => n + r.totalRows, 0);
+  const written = done.reduce((n, r) => n + r.totalWritten, 0);
+  console.log(`\n═══ ${list.length} seasons: ${rows} rows parsed, ${written} upserted ═══`);
+  if (failed.length) {
+    console.log(`\n${failed.length} season(s) failed outright:`);
+    for (const f of failed) console.log(`  · ${f}`);
+  }
+  if (!done.length) throw new Error(`every season failed (${list.length} attempted)`);
+  return { seasons: done, failed, totalRows: rows, totalWritten: written };
+}
+
 module.exports = {
-  run, parseSeasonCsv, seasonCode, seasonLabel, parseDate, splitLine, num, int,
-  DIVISIONS, COLUMN, REQUIRED_COLUMNS,
+  run, runSeasons, parseSeasonCsv, seasonCode, seasonLabel, parseDate, splitLine,
+  num, int, DIVISIONS, COLUMN, REQUIRED_COLUMNS,
+  alternativesFrom, resolveAlternative,
 };
 
 if (require.main === module) {
   const args = process.argv.slice(2);
-  const codeArg = (args.find(a => a.startsWith('--season=')) ?? '').split('=')[1];
-  run({ code: codeArg || undefined, dryRun: args.includes('--dry-run') })
+  const valueOf = flag => (args.find(a => a.startsWith(`${flag}=`)) ?? '').split('=')[1];
+  const codes = (valueOf('--seasons') ?? valueOf('--season') ?? '')
+    .split(',').map(c => c.trim()).filter(Boolean);
+
+  runSeasons({ codes, dryRun: args.includes('--dry-run') })
     .then(() => process.exit(0))
     .catch(err => { console.error(`✗ ${err.message}`); process.exit(1); });
 }

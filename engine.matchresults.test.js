@@ -28,6 +28,7 @@ function test(name, fn) {
 
 const {
   parseSeasonCsv, seasonCode, seasonLabel, parseDate, splitLine, num, int,
+  alternativesFrom, resolveAlternative, DIVISIONS,
 } = require('./ingestMatchResults');
 
 const HEADER = "Div,Date,Time,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,HTR,Referee,HS,AS,HST,AST,HF,AF,HC,AC,HY,AY,HR,AR,AHh,BVA,BVD,BVH,BWA,BWD,BWH,CLA,CLD,CLH,LBA,LBD,LBH,PSA,PSD,PSH,AHCh,AvgA,AvgD,AvgH,BFDA,BFDD,BFDH,BFEA,BFED,BFEH,BVCA,BVCD,BVCH,BWCA,BWCD,BWCH,CLCA,CLCD,CLCH,LBCA,LBCD,LBCH,MaxA,MaxD,MaxH,PAHA,PAHH,PSCA,PSCD,PSCH,AvgCA,AvgCD,AvgCH,B365A,B365D,B365H,BFDCA,BFDCD,BFDCH,BFECA,BFECD,BFECH,BMGMA,BMGMD,BMGMH,MaxCA,MaxCD,MaxCH,P<2.5,P>2.5,PCAHA,PCAHH,AvgAHA,AvgAHH,B365CA,B365CD,B365CH,BFEAHA,BFEAHH,BMGMCA,BMGMCD,BMGMCH,MaxAHA,MaxAHH,PC<2.5,PC>2.5,Avg<2.5,Avg>2.5,AvgCAHA,AvgCAHH,B365AHA,B365AHH,BFE<2.5,BFE>2.5,BFECAHA,BFECAHH,Max<2.5,Max>2.5,MaxCAHA,MaxCAHH,AvgC<2.5,AvgC>2.5,B365<2.5,B365>2.5,B365CAHA,B365CAHH,BFEC<2.5,BFEC>2.5,MaxC<2.5,MaxC>2.5,B365C<2.5,B365C>2.5";
@@ -209,6 +210,70 @@ test('parses a REAL current-season file off disk, byte-order mark and all', () =
   // And the vector /leagues de-vigs is present on a real row.
   const priced = rows.filter(r => r.odds.AvgCH != null && r.odds.AvgCD != null && r.odds.AvgCA != null);
   assert(priced.length > 0, 'at least one row carries the closing average');
+});
+
+/* ── the 300, and the ten divisions ──────────────────────────────────────── */
+//
+// E0 — the Premier League, the most-read division on /leagues — answered
+// 300 Multiple Choices for the whole 2026/27 season while E1, E2, E3 and EC
+// succeeded on the identical URL pattern, so the top flight was missing from a
+// run that reported success. mod_negotiation returns 300, not 404, when the
+// exact name is wrong and near-misses exist; the list it sends back IS the
+// diagnosis, and these pin that we read it rather than guess.
+
+const APACHE_300 = `<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html><head><title>300 Multiple Choices</title></head><body>
+<h1>Multiple Choices</h1>
+The document name you requested (<code>/mmz4281/2627/E0.csv</code>) could not be
+found on this server. However, we found documents with names similar to the one
+you requested.<p>Available documents:
+<ul>
+<li><a href="E0.CSV">E0.CSV</a> (common basename)</li>
+</ul>
+</body></html>`;
+
+test('the alternatives are read out of the page, not guessed', () => {
+  const found = alternativesFrom(APACHE_300);
+  assert(found.length === 1 && found[0] === 'E0.CSV',
+    `expected ['E0.CSV'], got ${JSON.stringify(found)}`);
+});
+
+test('a case-only difference resolves', () => {
+  assert(resolveAlternative('E0', ['E0.CSV']) === 'E0.CSV', 'E0.CSV should resolve');
+  assert(resolveAlternative('E0', ['/mmz4281/2627/e0.csv']) === 'e0.csv',
+    'a full href should resolve to its basename');
+});
+
+test('IT REFUSES TO GUESS BETWEEN TWO CSVs', () => {
+  // Picking one would write another division's results under this division's
+  // name, and every row would look completely ordinary.
+  assert(resolveAlternative('E0', ['E1.csv', 'E2.csv']) === null,
+    'two candidates must resolve to null, never to a coin flip');
+});
+
+test('a lone csv is taken even when the name differs', () => {
+  assert(resolveAlternative('E0', ['EPL.csv']) === 'EPL.csv',
+    'a single csv on offer is unambiguous');
+});
+
+test('nothing usable resolves to null rather than to a wrong file', () => {
+  assert(resolveAlternative('E0', []) === null, 'no alternatives → null');
+  // .gz is not a csv this parser can read, so it must not be handed to it.
+  assert(resolveAlternative('E0', ['E0.csv.gz', 'index.html']) === null,
+    'a compressed or unrelated file is not a season file');
+});
+
+test('the corpus is ten divisions and every one names its country', () => {
+  assert(DIVISIONS.length === 10, `expected 10 divisions, got ${DIVISIONS.length}`);
+  for (const d of DIVISIONS) {
+    // country is NOT NULL and half the unique key, so a blank one collides
+    // rows from different leagues onto each other.
+    assert(d.div && d.country, `${JSON.stringify(d)} is missing a field`);
+  }
+  assert(new Set(DIVISIONS.map(d => d.div)).size === 10, 'division codes must be unique');
+  const foreign = DIVISIONS.filter(d => d.country !== 'England').map(d => d.div).sort().join(',');
+  assert(foreign === 'D1,F1,I1,N1,SP1',
+    `the big five, top flight only — second tiers are a deliberate omission; got ${foreign}`);
 });
 
 console.log('\n' + (failed === 0 ? '✓' : '✗') + ' match results ingest: ' + passed + ' passed, ' + failed + ' failed');
