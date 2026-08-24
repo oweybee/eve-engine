@@ -31,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       season:
-        description: 'football-data season code, e.g. 2627. Defaults to the current season.'
+        description: 'Season code, e.g. 2627. Comma-separate to backfill several: 1920,2021,2122. Defaults to the current season.'
         type: string
         required: false
       dry_run:
@@ -50,7 +50,10 @@ jobs:
   ingest:
     name: Ingest settled results
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A full backfill is ten divisions x seven seasons = 70 files and ~30k
+    # upserts. The twice-daily incremental run finishes in seconds; this
+    # ceiling exists for the dispatch that loads a new division's history.
+    timeout-minutes: 45
 
     env:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
@@ -74,6 +77,6 @@ jobs:
         run: |
           set -o pipefail
           ARGS=""
-          if [ -n "${{ inputs.season }}" ]; then ARGS="$ARGS --season=${{ inputs.season }}"; fi
+          if [ -n "${{ inputs.season }}" ]; then ARGS="$ARGS --seasons=${{ inputs.season }}"; fi
           if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
           node ingestMatchResults.js $ARGS | tee -a "$GITHUB_STEP_SUMMARY"
