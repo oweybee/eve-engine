@@ -245,8 +245,18 @@ function captureClient() {
   const q = {
     select: () => q, in: () => q, eq: () => q, gt: () => q, gte: () => q,
     lte: () => q, order: () => q, limit: () => q, not: () => q, is: () => q,
+    // `range` is here because the history pre-filters are PAGED now — a
+    // PostgREST response is capped at 1,000 rows, so an unpaged pre-filter
+    // silently stops catching collisions once a match set gets big enough.
+    // A stub missing this reports the paging as a TypeError, not as a miss.
+    range: () => q,
     then: (r) => Promise.resolve({ data: [], error: null }).then(r),
-    insert: (batch) => { rows.push(...batch); return Promise.resolve({ error: null }); },
+    // Accepts a batch OR a single row: `insertSignals` falls back to row-by-row
+    // when the unique index rejects a batch.
+    insert: (batch) => {
+      rows.push(...(Array.isArray(batch) ? batch : [batch]));
+      return Promise.resolve({ error: null });
+    },
   };
   return { rows, from: () => q };
 }

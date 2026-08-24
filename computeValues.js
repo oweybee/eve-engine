@@ -32,6 +32,8 @@ const { BETTABLE_BOOKS } = ma;
 const { buildPrematchVector } = require('./lib/halftimeFeatures');
 const { checkQuality, thresholdsFromEnv } = require('./lib/dataQuality');
 const { resolveTeamKey, initTeamKeyResolver } = require('./lib/teamKey');
+const { insertSignals } = require('./lib/insertSignals');
+const { inChunks } = require('./lib/pagedRead');
 
 // Config
 const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '2',    10);
@@ -649,11 +651,20 @@ async function insertValueSignals(
   // history for these matches, the same pattern insertSecondarySignals uses
   // just below. The window above still controls is_mover tagging / spam
   // suppression; this set is what actually has to satisfy the DB constraint.
-  const { data: everSignalled, error: histErr } = await supabase
-    .from('value_signals')
-    .select('match_id, market, outcome, model_architecture, detected_odds')
-    .in('match_id', matchIds);
-  if (histErr) throw new Error(`insertValueSignals(history select): ${histErr.message}`);
+  // PAGED AND CHUNKED, because this pre-filter is only as complete as the read
+  // behind it. `.in()` inlines every id into the request line and a PostgREST
+  // response is capped at 1,000 rows — both caps are silent, and a short read
+  // here does not fail, it just stops catching collisions. At today's volumes
+  // it does not bite (measured 24 Aug 2026: a 36-fixture batch carries 10
+  // historical signals), so this is a trap closed before it opens rather than
+  // a live bug. `insertSignals` is the backstop underneath it either way.
+  const everSignalled = await inChunks(
+    matchIds, 'id', 'insertValueSignals(history select)',
+    chunk => supabase
+      .from('value_signals')
+      .select('id, match_id, market, outcome, model_architecture, detected_odds')
+      .in('match_id', chunk)
+  );
 
   const priceKey = (matchId, market, outcome, modelArch, odds) =>
     `${matchId}|${market ?? 'h2h'}|${outcome}|${modelArch ?? 'MARKET_CONSENSUS'}|${parseFloat(odds).toFixed(3)}`;
@@ -706,15 +717,19 @@ async function insertValueSignals(
 
   if (!toInsert.length) return 0;
 
-  const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
-  if (insErr) throw new Error(`insertValueSignals(insert): ${insErr.message}`);
+  const { inserted, duplicate } = await insertSignals(supabase, toInsert, 'value_signals');
+  if (!inserted) return 0;
 
   const mv = toInsert.filter(r => r.is_mover).length;
   const pr = toInsert.filter(r => r.signal_category === 'prime').length;
   const va = toInsert.filter(r => r.signal_category === 'value').length;
   const ls = toInsert.filter(r => r.signal_category === 'longshot').length;
-  console.log(`[value_signals] inserted ${toInsert.length} (Prime=${pr} Value=${va} Longshot=${ls} movers=${mv})`);
-  return toInsert.length;
+  console.log(
+    `[value_signals] inserted ${inserted}` +
+    `${duplicate ? ` (${duplicate} already on record)` : ''}` +
+    ` (Prime=${pr} Value=${va} Longshot=${ls} movers=${mv})`
+  );
+  return inserted;
 }
 
 // The canonical club key comes from lib/teamKey now, shared with computeElo
@@ -758,11 +773,14 @@ async function insertSecondarySignals(supabase, candidates, phase = 'prematch') 
   if (!candidates.length) return 0;
   const matchIds = [...new Set(candidates.map(c => c.match_id))];
 
-  const { data: existing, error } = await supabase
-    .from('value_signals')
-    .select('match_id, market, outcome, model_architecture')
-    .in('match_id', matchIds);
-  if (error) throw new Error(`insertSecondarySignals(select): ${error.message}`);
+  // Paged and chunked for the reason the 1X2 path above records.
+  const existing = await inChunks(
+    matchIds, 'id', 'insertSecondarySignals(select)',
+    chunk => supabase
+      .from('value_signals')
+      .select('id, match_id, market, outcome, model_architecture')
+      .in('match_id', chunk)
+  );
 
   const key  = r => `${r.match_id}|${r.market ?? 'h2h'}|${r.outcome}|${r.model_architecture ?? ''}`;
   const seen = new Set((existing ?? []).map(key));
@@ -791,12 +809,15 @@ async function insertSecondarySignals(supabase, candidates, phase = 'prematch') 
 
   if (!toInsert.length) { console.log('[secondary] no new signals'); return 0; }
 
-  const { error: insErr } = await supabase.from('value_signals').insert(toInsert);
-  if (insErr) throw new Error(`insertSecondarySignals(insert): ${insErr.message}`);
+  const { inserted, duplicate } = await insertSignals(supabase, toInsert, 'secondary');
+  if (!inserted) return 0;
 
   const byMkt = toInsert.reduce((m, r) => ((m[r.market] = (m[r.market] || 0) + 1), m), {});
-  console.log(`[secondary] inserted ${toInsert.length}:`, byMkt);
-  return toInsert.length;
+  console.log(
+    `[secondary] inserted ${inserted}${duplicate ? ` (${duplicate} already on record)` : ''}:`,
+    byMkt
+  );
+  return inserted;
 }
 
 async function updateBetOfDay(supabase, rows) {
