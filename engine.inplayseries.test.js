@@ -4,11 +4,22 @@
  */
 'use strict';
 const assert = require('assert');
-const { buildRows, median, best } = require('./captureInplaySeries');
+const { buildRows, captureMomentum, median, best } = require('./captureInplaySeries');
 
 let passed = 0;
 function test(name, fn) {
   try { fn(); passed++; console.log(`  ✓ ${name}`); }
+  catch (e) { console.error(`  ✗ ${name}: ${e.message}`); process.exitCode = 1; }
+}
+/**
+ * Async cases need their OWN runner. Handing an async function to `test` above
+ * resolves nothing: it returns a promise, the tick prints immediately, and a
+ * failed assertion lands after the summary as an unhandled rejection — a
+ * ratchet that cannot fail. engine.inplayloop.test.js carries the same note
+ * after the same mistake.
+ */
+async function testAsync(name, fn) {
+  try { await fn(); passed++; console.log(`  ✓ ${name}`); }
   catch (e) { console.error(`  ✗ ${name}: ${e.message}`); process.exitCode = 1; }
 }
 
@@ -92,4 +103,102 @@ test('model reprices as the game changes (late 1-0 → higher home prob)', () =>
     `same 1-0 lead is worth more at 88' (${early.model_prob} → ${late.model_prob})`);
 });
 
-console.log(`\nin-play series tests: ${passed} passed${process.exitCode ? ' (with failures)' : ''}`);
+// ── the momentum corpus, written beside the price ─────────────────────────
+// `match_stats` is upserted per (fixture, side), so nothing anywhere records
+// what a match looked like at minute 60. These pin the two things that decide
+// whether the corpus is worth fitting on: it must be keyed to OUR match id
+// through external_id, and it must not record a re-read as a new observation.
+
+/**
+ * A stub PostgREST client, narrow to the three tables captureMomentum touches.
+ * Chainable, because supabase-js is, and the shape of the call is half of what
+ * is being tested — a query keyed on the wrong column returns nothing and looks
+ * exactly like a feed that is not reporting.
+ */
+function stubClient({ stats = [], last = [], onInsert = () => {} }) {
+  const q = rows => {
+    const chain = {
+      select: () => chain, in: () => chain, gte: () => chain, order: () => chain,
+      then: (res) => Promise.resolve({ data: rows, error: null }).then(res),
+    };
+    return chain;
+  };
+  return {
+    from(table) {
+      if (table === 'match_stats') return q(stats);
+      if (table === 'inplay_momentum') {
+        const chain = q(last);
+        chain.upsert = (rows, opts) => { onInsert(rows, opts); return Promise.resolve({ error: null }); };
+        return chain;
+      }
+      return q([]);
+    },
+  };
+}
+
+const M_LIVE = { id: 'aaaaaaaa-0000-0000-0000-000000000001', external_id: 998877,
+                 minute: 63, goals_home: 1, goals_away: 0 };
+const STATS = t => ([
+  { fixture_id: 998877, team_side: 'home', fetched_at: t,
+    stats: [{ type: 'Total Shots', value: 12 }, { type: 'expected_goals', value: '1.40' }] },
+  { fixture_id: 998877, team_side: 'away', fetched_at: t,
+    stats: [{ type: 'Total Shots', value: 4 }, { type: 'expected_goals', value: null }] },
+]);
+
+async function momentumTests() {
+await testAsync('a momentum row is written for a live match with stats', async () => {
+  let written = null;
+  const n = await captureMomentum(
+    stubClient({ stats: STATS('2026-08-26T20:00:00Z'), onInsert: r => (written = r) }),
+    [M_LIVE], new Date('2026-08-26T20:01:00Z'));
+  assert.strictEqual(n, 1);
+  assert.strictEqual(written[0].match_id, M_LIVE.id, 'keyed to OUR id, not the fixture id');
+  assert.strictEqual(written[0].shots_home, 12);
+  assert.strictEqual(written[0].xg_away, null, 'an untracked xG is never a zero');
+  assert.strictEqual(written[0].minute, 63);
+});
+
+await testAsync('an UNCHANGED snapshot writes nothing — a re-read is not an observation', () => {
+  // fetchLiveStats gates each fixture behind 90s while the loop passes every
+  // 60, so most ticks re-read the same numbers. Counting them twice would bias
+  // any fit toward whatever the feed happened to be slow about.
+  return captureMomentum(
+    stubClient({
+      stats: STATS('2026-08-26T20:00:00Z'),
+      last: [{ match_id: M_LIVE.id, stats_fetched_at: '2026-08-26T20:00:00Z' }],
+      onInsert: () => assert.fail('an already-recorded observation must not be written'),
+    }),
+    [M_LIVE], new Date('2026-08-26T20:01:00Z'),
+  ).then(n => assert.strictEqual(n, 0));
+});
+
+await testAsync('a MOVED snapshot does write', () => {
+  return captureMomentum(
+    stubClient({
+      stats: STATS('2026-08-26T20:02:00Z'),
+      last: [{ match_id: M_LIVE.id, stats_fetched_at: '2026-08-26T20:00:00Z' }],
+    }),
+    [M_LIVE], new Date('2026-08-26T20:03:00Z'),
+  ).then(n => assert.strictEqual(n, 1));
+});
+
+await testAsync('a match with no external_id is skipped, not crashed on', () => {
+  return captureMomentum(stubClient({ stats: [] }), [{ ...M_LIVE, external_id: null }], new Date())
+    .then(n => assert.strictEqual(n, 0));
+});
+
+await testAsync('the series reads external_id, because match_stats is keyed on it', () => {
+  // A source assertion: joining on matches.id returns nothing and is
+  // indistinguishable from a competition the feed does not report.
+  const src = require('fs').readFileSync(require('path').join(__dirname, 'captureInplaySeries.js'), 'utf8');
+  assert.ok(/select\('id, external_id,/.test(src),
+    'fetchLiveMatches must select external_id');
+  assert.ok(/captureMomentum\(supabase, live, now\)/.test(src),
+    'run() must actually call it — an uncalled writer is the trap this repo keeps paying for');
+});
+
+}
+
+momentumTests().then(() => {
+  console.log(`\nin-play series tests: ${passed} passed${process.exitCode ? ' (with failures)' : ''}`);
+});

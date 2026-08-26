@@ -27,11 +27,18 @@
  * duty is to make sure a process is running at all — exactly the arrangement
  * lineups.yml uses, and for the same reason.
  *
- * LOOP_MINUTES MUST EXCEED THE DELIVERED GAP. That is the whole trick: at 50
- * minutes against a median gap of ~35 a fresh tick almost always lands while a
- * loop is still running, GitHub holds it as the single pending run and starts
- * it the instant this one ends, so coverage closes up instead of gapping.
- * Raise this, not the cron, if holes reappear.
+ * LOOP_MINUTES MUST EXCEED THE DELIVERED GAP. That is the whole trick: a fresh
+ * tick lands while a loop is still running, GitHub holds it as the single
+ * pending run and starts it the instant this one ends, so coverage closes up
+ * instead of gapping. Raise this, not the cron, if holes reappear.
+ *
+ * 50 WAS NOT ENOUGH, AND THE HOLE IT LEFT WAS MEASURED THE SAME EVENING. The
+ * delivered gaps are not distributed around the median — the tail lands in the
+ * evening, when the fixtures are. The last four scheduled runs of 26 Aug were
+ * 100, 102 and 113 minutes apart, so the 19:00 kickoffs got their first tick at
+ * 20:14 and seven matches carry that timestamp to the millisecond. It reads 170
+ * in the workflow now, which exceeds the worst gap observed with margin; the
+ * cost is deploy latency, and run-inplay.yml states it.
  *
  * IT SPAWNS THE EXISTING SCRIPTS UNCHANGED, as child processes, rather than
  * requiring them in-process. Each one owns its own Supabase client, its own

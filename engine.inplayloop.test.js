@@ -69,11 +69,23 @@ test('only the metered step is on the slower clock', () => {
 
 console.log('the two settings that are not arbitrary');
 test('LOOP_MINUTES EXCEEDS the gap GitHub actually delivers', () => {
-  // Measured 26 Aug 2026 on run-inplay.yml: gaps of 25-102 minutes, median
-  // ~35, against a declared 5. A loop shorter than the delivered gap leaves a
+  // Measured 26 Aug 2026 on run-inplay.yml: gaps of 25-113 minutes, median
+  // ~43, against a declared 5. A loop shorter than the delivered gap leaves a
   // systematic hole and the schedule is still deciding coverage.
   assert.ok(loop.LOOP_MINUTES >= 40,
-    `LOOP_MINUTES ${loop.LOOP_MINUTES} must exceed the ~35m median delivered gap`);
+    `LOOP_MINUTES ${loop.LOOP_MINUTES} must exceed the ~43m median delivered gap`);
+});
+test('the WORKFLOW clears the worst delivered gap, not just the median', () => {
+  // THE MEDIAN IS NOT THE THING TO CLEAR. The delivered gaps are not spread
+  // around it: the tail lands in the evening, when the fixtures are. 50 cleared
+  // the median comfortably and still left the 19:00 kickoffs unwatched until
+  // 20:14, because the last four scheduled runs of 26 Aug were 100, 102 and 113
+  // minutes apart. This asserts the DECLARED value in the workflow, which is
+  // what production runs — the module default is only the fallback.
+  const declared = yamlNum('INPLAY_LOOP_MINUTES');
+  assert.ok(declared != null, 'the workflow must state INPLAY_LOOP_MINUTES');
+  assert.ok(declared > 113,
+    `INPLAY_LOOP_MINUTES ${declared} must exceed the worst gap observed (113 min)`);
 });
 test('the workflow timeout EXCEEDS LOOP_MINUTES — being killed is not stopping', () => {
   const timeout = yamlNum('timeout-minutes');

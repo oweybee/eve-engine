@@ -67,11 +67,32 @@ jobs:
       # arrive in: the format can be watched in the log before a channel exists.
       INPLAY_BROADCAST_ENABLED:  'true'
       # Self-polling. LOOP_MINUTES must EXCEED the gap GitHub actually
-      # delivers (median ~35m on this repo) so a fresh tick lands while this
-      # loop is still running and GitHub holds it as the single pending run —
-      # coverage closes up instead of gapping. PASS_INTERVAL is the real
-      # cadence. The Odds API step is metered and keeps its own slower clock.
-      INPLAY_LOOP_MINUTES:            '50'
+      # delivers so a fresh tick lands while this loop is still running and
+      # GitHub holds it as the single pending run — coverage closes up instead
+      # of gapping. PASS_INTERVAL is the real cadence. The Odds API step is
+      # metered and keeps its own slower clock.
+      #
+      # 50 WAS NOT ENOUGH AND THE HOLE IT LEFT WAS MEASURED. Delivered start
+      # times for this workflow on 26 Aug 2026, in UTC:
+      #
+      #   02:07 03:15 04:04 04:51 05:19 05:53 06:29 07:26 08:07 08:57 09:41
+      #   10:16 10:53 11:18 11:49 12:19 13:27 14:10 15:50 16:38 18:20 20:13
+      #
+      # Median gap 43 minutes — and the tail lands in the evening, exactly when
+      # the fixtures are on: 100, 102 and 113 minutes between the last four.
+      # So the 19:00 kickoffs got their FIRST tick at 20:14, and seven matches
+      # share that timestamp to the millisecond because it is the loop's first
+      # pass, not a coincidence. Over the ten days before the loop existed the
+      # series covered an average match from minute 28.8 to minute 61.6, and
+      # only 47 of 330 completed matches were still being watched at 85'.
+      #
+      # 170 EXCEEDS THE WORST GAP OBSERVED (113) WITH MARGIN. The cost is
+      # DEPLOY LATENCY: the run checks out `main` when it starts, so a merge
+      # can take up to LOOP_MINUTES to reach production, and `concurrency` is
+      # cancel-in-progress:false so a manual dispatch QUEUES behind the running
+      # loop rather than replacing it. To ship immediately: cancel the running
+      # job, then dispatch.
+      INPLAY_LOOP_MINUTES:            '170'
       INPLAY_PASS_INTERVAL_SECONDS:   '60'
       INPLAY_ODDS_API_INTERVAL_SECONDS: '600'
 
@@ -102,7 +123,7 @@ jobs:
       # not the same as stopping — a killed run prints no summary, which is how
       # this repo has already lost a fortnight of team statistics.
       - name: In-play loop (live odds → values → series → post)
-        timeout-minutes: 55
+        timeout-minutes: 175
         run: node runInplayLoop.js
 
       # `if: failure()` DOES NOT RUN ON A CANCELLED JOB, and a job killed by a
