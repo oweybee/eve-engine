@@ -24,6 +24,7 @@
 
 const https = require('https');
 const { getClient } = require('./lib/supabaseClient');
+const apiQuota = require('./lib/apiFootballQuota');
 
 const API_KEY = process.env.API_FOOTBALL_KEY;
 const DRY = process.argv.includes('--dry-run');
@@ -39,6 +40,11 @@ function httpGet(path) {
       let body = '';
       res.on('data', d => (body += d));
       res.on('end', () => {
+        // The vendor reports the day's counter on EVERY response and calling its
+// /status endpoint spends one against the counter it reports, so the reading
+// is taken from a call we were making anyway. Never throws; see lib/apiFootballQuota.
+        apiQuota.report(res.headers);
+
         if (res.statusCode >= 400) return reject(new Error(`API ${res.statusCode}: ${body.slice(0, 120)}`));
         try { resolve(JSON.parse(body)); } catch (e) { reject(new Error(`bad JSON: ${e.message}`)); }
       });
@@ -133,7 +139,9 @@ async function run() {
 }
 
 if (require.main === module) {
-  run().catch(err => { console.error('[liveStats] FATAL:', err.message); process.exit(1); });
+  run()
+    .then(() => apiQuota.persistQuota(getClient()))
+    .catch(err => { console.error('[liveStats] FATAL:', err.message); process.exit(1); });
 }
 
 module.exports = { run };

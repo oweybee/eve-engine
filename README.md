@@ -973,6 +973,69 @@ backstop under the writer's own skip.
 
 ---
 
+## The API-Football usage tracker
+
+Added 26 Aug 2026. Until then the daily allowance had **never been measured**:
+twelve scripts call `v3.football.api-sports.io` and **not one read a response
+header**. The only number in the system was `DAILY_REQUEST_BUDGET`, which
+`planDay.js` spends against — a configured intention, not a reading, and three
+different ones (the workflows set 75000, the module default is 200,
+`.env.example` says 100). The Odds API has had `quotaFromHeaders` since it was
+wired, which is why "how many credits are left" had an answer for one vendor and
+not the other.
+
+`lib/apiFootballQuota.js` stores it in `engine_state.api_football_quota`,
+alongside `odds_api_quota`. Read it with **`npm run api-quota`**.
+
+**MEASURING MUST NOT COST A REQUEST.** API-Football's `/status` endpoint reports
+the counter and **spends one against the counter it reports** — a tracker whose
+own cost grows with how often you want the truth. So the four numbers are read
+off responses the engine was already going to receive, and the only change at a
+call site is to stop throwing the headers away:
+
+    x-ratelimit-requests-limit       the DAY's allowance
+    x-ratelimit-requests-remaining   what is left of it
+    x-ratelimit-limit                the per-MINUTE allowance
+    x-ratelimit-remaining            what is left of that
+
+The per-minute pair is worth carrying: the in-play loop issues ~1.5 calls per
+live fixture per pass and **71 concurrent fixtures have been observed**, so a
+daily quota with room in it says nothing about a minute that is already full.
+
+**THE SERVER HOLDS THE COUNTER, WHICH IS WHY THIS IS CHEAP.** `remaining` is a
+fact the vendor maintains, not a total we accumulate — so one report per run is
+enough, a missed report loses nothing, and `spent_today` is DERIVED
+(`limit − remaining`) rather than tallied. It persists on the **success path
+only**: a crashed run leaves its reading unwritten, which costs nothing because
+the next response carries the current truth, and doing otherwise would mean
+turning `process.exit(1)` into `process.exitCode` across six scripts — a real
+change to ingestion, to save a number that reappears sixty seconds later.
+
+Reporting is wired into `ingestLiveOdds`, `fetchLiveStats`, `ingestOdds`,
+`fetchMatchDetails`, `fetchLineups` and `fetchTeamStats`, which between them
+cover both loops. `engine.apiquota.test.js` asserts each one on its SOURCE,
+because a reporter that stops reporting looks exactly like a vendor that stopped
+sending the header.
+
+**IT IS A TRACKER, NOT A GUARD.** Nothing here refuses a request. `canSpend` on
+the Odds API side exists because that is a MONTHLY pool where overspending in
+week one darkens three weeks; this is a daily one that resets. Turning a reading
+into a throttle changes what the engine ingests and needs its own measurement —
+which cannot be made honestly until there IS a reading, which is what this
+produces. What it does do is make an exhausted quota **loud** (a `::error::`
+annotation under 10% remaining) instead of showing up as a feed that
+mysteriously went quiet.
+
+**THE HEADER NAMES ARE NOT VERIFIED AGAINST A LIVE RESPONSE.** No
+`API_FOOTBALL_KEY` was available where this was written, so they come from the
+v3 documentation — the same footing `lib/oddsApi.js` shipped on. Every one is
+optional and an unrecognised header yields nulls rather than zeros, so a wrong
+name records nothing and breaks nothing. **Run `npm run api-quota` after the
+first real run**: a stored `limitDay` of 75000 confirms the names, and
+`never recorded` means they are wrong.
+
+---
+
 ## Teaching the model — uploading historical seasons
 
 The ELO/form **supermodels** (`ensemble/models/supermodel_prematch_v2.onnx` and
