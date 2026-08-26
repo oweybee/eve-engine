@@ -658,6 +658,88 @@ book and Stage 1 (book-lag, multi-book) can never fire on one. And
 minute and a scoreline; several notes in eve-frontend's CLAUDE.md still say no
 row has ever carried it.
 
+### The in-play channel — a fourth gate, and it was the one that decided it
+
+26 Aug 2026, owner request. The `🔴 IN-PLAY` branch has sat in
+`postToX.buildMessage` since it was written and **had never once been
+reachable** — and would not have become reachable however
+`TELEGRAM_INPLAY_CHAT_ID` was set.
+
+**`fetchRecentSignals` filters every row through `isPublished` before anything
+else sees it**, and no in-play architecture is in `PUBLICATION`:
+
+    INPLAY_DIXON_COLES   not in the calibration set, so it has no measured error
+    SECOND_HALF_SNIPER   anchored on inplay_baseline, a recombined consensus
+
+So the row was gone at the door. Three gates on this feature were already
+documented — the RESTRICTIVE RLS policy, `trg_score_needs_measured_sigma`, and
+the browser's own `lib/publication` — and every one of them was described as
+the reason in-play stays "recorded, not posted". **This is the fourth and it is
+the one that actually decided it.** Counting gates is not the same as finding
+the binding one.
+
+**`INPLAY_BROADCAST` IS A SEPARATE SET, NOT AN ENTRY IN `PUBLICATION`.** Those
+answer different questions. `PUBLICATION` decides whether output may be
+presented as a BACKED SELECTION — it governs the site, the pre-match channel
+and the published record — and for these two the answer is still no: no
+`model_calibration` row, no measured error bar, and `performance_summary` keyed
+'inplay' has sat at **zero settled** since it was created. What the new set
+decides is narrower: may a live alert reach a DEDICATED, OPT-IN channel that
+states on every post what it is.
+
+**TWO SWITCHES, BOTH FAILING CLOSED.** `INPLAY_BROADCAST_ENABLED` admits
+in-play rows past the gate and is unset by default; the chat id decides where
+they go. With the flag on and the id UNSET nothing posts and the run says so,
+which is the safe order to arrive in — the format can be watched in the log
+before a channel exists. A new in-play architecture does not inherit the
+channel: the set is by name.
+
+**AND THE DISCLOSURE IS THE CONDITION IT IS ADMITTED ON.** Every message states
+that the model has no measured error bar and no settled record, and that the
+price is live and may be gone. If that is ever removed from `buildMessage`,
+`INPLAY_BROADCAST` should go with it.
+
+**RED IS THE IN-PLAY MARK AND NOTHING ELSE USES IT.** The pre-match channel
+runs `>>` for its backed rungs and 🎯 / ⚡ for the rest; nothing there is red.
+A reader scanning two channels on a phone can tell which one they are in from
+the first glyph, so the header, the rule and the live clock carry it and
+nothing else does.
+
+**A MAN ADVANTAGE IS PRINTED ABOVE THE PRICE**, because it is *why* the price
+moved and a reader should not have to infer it from a number that looks wrong.
+It comes from `lib/inplayState` through `match_stats` — the same read the model
+now uses — and an absent line means **not reported**, never "no cards".
+
+**THE BOOKMAKER WAS BEING PRINTED RAW, AND THAT IS A MARKDOWN BUG WITH THE
+CHANNEL'S ONLY BOOK IN IT.** `value_signals.bookmaker` holds The Odds API's
+keys verbatim — `unibet_uk`, `betfair_sb_uk`, `apifootball_live` — and an
+underscore is Telegram's italic delimiter: two silently italicise everything
+between them, one leaves a stray `_`. The file already knew this about
+OUTCOMES ("Underscores in outcomes are Markdown italic delimiters") and printed
+the bookmaker beside it unescaped. It goes through `bookmakerLabel` now, which
+fixes the pre-match channel too.
+
+`apifootball_live` had no entry in `BOOKMAKER_LABEL`, so it slugified to
+**`apifootballlive`** — a bookmaker nobody has heard of, on the ONE source that
+prices every in-play row. It is `Live feed (aggregated)`, which is what it
+actually is. **That needed an `ALIASES` entry as well**:
+`engine.bookmakers.test.js` pins that a label round-trips back to its own key,
+and no display name slugifies to a string containing an underscore — without
+it, a bet recorded from an in-play alert would store a bookmaker nothing can
+resolve. The first fix keyed only the slug and still failed, because
+`bookmakerKey` tries the raw lowercase first.
+
+`engine.inplaybroadcast.test.js` is the ratchet: both switches, the named-only
+admission, the pre-match gate held unmoved, the disclosure present in every
+message, the paired-underscore check over the real keys, and that an in-play
+post can never reach the pre-match channel.
+
+**WHAT IS STILL THE OWNER'S.** Creating the Telegram channel and setting
+`TELEGRAM_INPLAY_CHAT_ID` — a channel cannot be created from here. Until it is
+set, in-play signals are computed, stored, and logged with their message body,
+and posted nowhere.
+
+
 
 
 **Why they must be separate.** The pre-match headline metric is CLV
