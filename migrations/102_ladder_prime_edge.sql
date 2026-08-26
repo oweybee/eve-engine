@@ -2,6 +2,24 @@
 -- 102 — the ladder becomes yield-calibrated: PRIME / EDGE / WATCH / SLIGHT /
 -- TRACE / NIL, and THE BOX PICKS THE RUNG while the score can only demote.
 --
+-- APPLIED AND VERIFIED IN PRODUCTION, 26 Aug 2026 (ledger 20260826144918).
+-- Verified from the database rather than from the success flag: maxedge_band(60)
+-- is PRIME and (59) is WATCH, f(0.04)=0.68 and f(0.08)=0.85, and the six rung
+-- cases all return what the runbook publishes. The two widened constraints were
+-- probed on a temp table built `like public.value_signals including
+-- constraints`, so the CHECKs under test are the live ones and not a hand-copy:
+-- of four inserts exactly ONE was accepted — the shape the engine now writes
+-- (mes_basis 'yield_calibrated' + signal_category 'edge') — while mxs_band
+-- 'EDGE', an invented basis and an invented category were all refused. The
+-- positive control ran first, so the three refusals mean denial and not a test
+-- that never ran.
+--
+-- NO ROW WAS REWRITTEN, and the proof is on the table: 56 rows scoring 60-64
+-- still carry the stored band WATCH the 65 cut gave them, where the new
+-- function would say PRIME. `mes_basis` is what tells the two definitions
+-- apart. 1,262 rows total, 0 on the new basis and 0 in the edge bucket until
+-- the engine build deploys.
+--
 -- Owner ruling, 26 Aug 2026, on the settled book to 25 Aug. This is the SQL
 -- third of a three-part release: `eve-engine/lib/signalTier.js`, this file, and
 -- `eve-frontend/lib/maxedge.ts` are three copies of ONE table and land together
