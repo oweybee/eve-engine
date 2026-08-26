@@ -98,9 +98,15 @@ const prematchSignal = {
 };
 test('isInplay true for inplay phase', () => assert.ok(isInplay(inplaySignal)));
 test('in-play message has live header + score', () => {
+  // The header gained the MODEL NAME on 26 Aug — the channel now carries two
+  // architectures (live win-probability and second-half goals) and a reader
+  // scanning it should not have to work out which one a post came from. The
+  // score line lost its "Live:" prefix and gained the red mark instead, so the
+  // first glyph of every line says which channel this is.
   const m = buildMessage(inplaySignal);
-  assert.ok(m.includes('IN-PLAY VALUE'), 'header');
-  assert.ok(m.includes('Live: 0-1 40\''), 'live score');
+  assert.ok(m.includes('IN-PLAY'), 'header');
+  assert.ok(m.startsWith('🔴'), 'red is the in-play mark');
+  assert.ok(m.includes("0-1 40'"), 'live score');
   assert.ok(m.includes('#InPlay'), 'hashtag');
 });
 test('prematch unbacked edge (odds 2.5 / edge 2.5%) → info-only header, not suggested', () => {

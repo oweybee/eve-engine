@@ -52,6 +52,13 @@ jobs:
       TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
       TELEGRAM_INPLAY_CHAT_ID:   ${{ secrets.TELEGRAM_INPLAY_CHAT_ID }}
+      # The in-play channel. Two switches, on purpose: this flag admits in-play
+      # rows past the publication gate in fetchRecentSignals (they are NOT in
+      # PUBLICATION and never will be — see lib/publication.js), and the chat
+      # id above decides where they go. With the flag on and the id UNSET
+      # nothing is posted and the run says so, which is the safe order to
+      # arrive in: the format can be watched in the log before a channel exists.
+      INPLAY_BROADCAST_ENABLED:  'true'
       # Self-polling. LOOP_MINUTES must EXCEED the gap GitHub actually
       # delivers (median ~35m on this repo) so a fresh tick lands while this
       # loop is still running and GitHub holds it as the single pending run —

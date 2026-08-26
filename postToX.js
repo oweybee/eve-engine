@@ -40,9 +40,12 @@ const https  = require('https');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { formatLiveState } = require('./lib/inplay');
+const { liveState, adjustLambdaForCards } = require('./lib/inplayState');
+const { bookmakerLabel } = require('./lib/bookmakers');
 const { classifyTier, dedupeConflicts, isBacked, rungFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
-const { isPublished, withheldReason } = require('./lib/publication');
+const { isPublished, withheldReason, mayBroadcastInplay, inplayDisclosure, inplayLabel,
+} = require('./lib/publication');
 
 const DRY_RUN = process.env.DRY_RUN === '1';
 const CHANNEL = 'telegram';
@@ -123,19 +126,94 @@ async function fetchRecentSignals(supabase) {
   // the call sites is deliberate: this is the only door out of the database and
   // into a channel, so a future caller cannot forget the gate exists.
   const rows = data ?? [];
-  const backed = rows.filter(r => isPublished(r.model_architecture));
+  // IN-PLAY IS ADMITTED BY ITS OWN GATE, NOT BY THIS ONE.
+  //
+  // `isPublished` answers "may this be presented as a backed selection" and no
+  // in-play architecture is in PUBLICATION — so every in-play row was dropped
+  // HERE, and the 🔴 branch in buildMessage below has never once been
+  // reachable, whatever TELEGRAM_INPLAY_CHAT_ID was set to. That was the
+  // fourth gate on this feature and the one that decided it.
+  //
+  // `mayBroadcastInplay` is off unless INPLAY_BROADCAST_ENABLED is set, admits
+  // only named architectures, and every message it lets through carries the
+  // disclosure. Nothing pre-match changes: the pre-match arm of this filter is
+  // the same call it always was.
+  const backed = rows.filter(r => (
+    isInplay(r) ? mayBroadcastInplay(r.model_architecture) : isPublished(r.model_architecture)
+  ));
   if (backed.length !== rows.length) {
     const byArch = new Map();
     for (const r of rows) {
-      if (isPublished(r.model_architecture)) continue;
-      const k = r.model_architecture ?? '(null)';
+      if (isInplay(r) ? mayBroadcastInplay(r.model_architecture) : isPublished(r.model_architecture)) continue;
+      const k = isInplay(r) ? `${r.model_architecture ?? '(null)'} [in-play]` : (r.model_architecture ?? '(null)');
       byArch.set(k, (byArch.get(k) ?? 0) + 1);
     }
     for (const [arch, count] of byArch) {
-      console.log(`[postToX] withheld ${count} ${arch} signal(s): ${withheldReason(arch)}`);
+      // An in-play row withheld because the CHANNEL IS OFF is a different fact
+      // from one withheld because the model does not publish, and reading the
+      // pre-match reason against it would send the next person to the wrong
+      // gate entirely.
+      const why = arch.endsWith('[in-play]')
+        ? 'the in-play channel is off (set INPLAY_BROADCAST_ENABLED=true), or this architecture is not in INPLAY_BROADCAST'
+        : withheldReason(arch);
+      console.log(`[postToX] withheld ${count} ${arch} signal(s): ${why}`);
     }
   }
+  await attachLiveState(supabase, backed);
   return backed;
+}
+
+/**
+ * Attach `live_state` to the in-play rows, from `match_stats`.
+ *
+ * A man advantage is WHY a live price moved, so the alert says it above the
+ * price rather than leaving a reader to infer it from a number that looks
+ * wrong. Read here rather than in `buildMessage` because that function is pure
+ * and unit-tested, and it must stay that way.
+ *
+ * Fails soft and does nothing at all when no in-play row survived the gate:
+ * the alert simply omits the line, which is correct — an absent card line
+ * means "not reported", never "no cards".
+ */
+async function attachLiveState(supabase, rows) {
+  const inplayRows = rows.filter(isInplay);
+  if (!inplayRows.length) return;
+
+  // match_stats keys on the API-FOOTBALL fixture id, and value_signals carries
+  // only match_id — so the external id has to be looked up. Joining the wrong
+  // one returns nothing and looks exactly like a feed with no stats.
+  const matchIds = [...new Set(inplayRows.map(r => r.match_id).filter(Boolean))];
+  if (!matchIds.length) return;
+
+  const { data: matchRows, error: mErr } = await supabase
+    .from('matches').select('id, external_id').in('id', matchIds);
+  if (mErr) { console.warn(`[postToX] live state: match lookup failed: ${mErr.message}`); return; }
+
+  const externalByMatch = new Map();
+  for (const m of matchRows ?? []) if (m.external_id != null) externalByMatch.set(m.id, String(m.external_id));
+  const externals = [...new Set(externalByMatch.values())];
+  if (!externals.length) return;
+
+  const { data: statRows, error: sErr } = await supabase
+    .from('match_stats').select('fixture_id, team_side, stats').in('fixture_id', externals);
+  if (sErr) { console.warn(`[postToX] live state: stats read failed: ${sErr.message}`); return; }
+
+  const sides = new Map();
+  for (const r of statRows ?? []) {
+    let e = sides.get(String(r.fixture_id));
+    if (!e) { e = { home: null, away: null }; sides.set(String(r.fixture_id), e); }
+    if (r.team_side === 'home' || r.team_side === 'away') e[r.team_side] = r;
+  }
+
+  let attached = 0;
+  for (const row of inplayRows) {
+    const ext = externalByMatch.get(row.match_id);
+    const e = ext ? sides.get(ext) : null;
+    if (!e) continue;
+    row.live_state = liveState(e.home, e.away);
+    attached++;
+  }
+  console.log(`[postToX] live state attached to ${attached}/${inplayRows.length} in-play signal(s)`);
 }
 
 function isMover(signal) { return signal.is_mover === true; }
@@ -246,25 +324,61 @@ function buildMessage(signal) {
   // frontend's risk-adjusted computeMes is the single implementation), so this
   // renders nothing rather than a number nobody can reconcile with the board.
   const mes     = signal.detected_mes != null ? ` | MES: ${signal.detected_mes}/100` : '';
-  const book    = signal.bookmaker ?? 'Best price';
+  // THROUGH bookmakerLabel, AND THE REASON IS THE SAME ONE THE OUTCOME LINE
+  // ABOVE GIVES. `value_signals.bookmaker` holds The Odds API's KEYS verbatim
+  // — `unibet_uk`, `betfair_sb_uk`, `apifootball_live` — and an underscore is
+  // Telegram's italic delimiter. Two of them in one message silently italicise
+  // everything between, and one on its own leaves a stray `_` in the post.
+  // This was already known about outcomes and the bookmaker was printed raw
+  // beside it. The label is also simply the right thing to show a reader.
+  const book    = bookmakerLabel(signal.bookmaker) ?? 'Best price';
   const kickoff = formatKickoff(signal.kickoff_at);
 
   // In-play signals are a separate tier: live score/minute instead of kickoff,
   // and a distinct header so the dedicated channel reads unmistakably "live".
   if (isInplay(signal)) {
-    const liveState = formatLiveState(
+    // RED IS THE IN-PLAY MARK AND IT IS THE ONLY THING THAT USES IT. The
+    // pre-match channel runs `>>` for its backed rungs and 🎯 / ⚡ for the
+    // rest; nothing there is red. A reader scanning two channels on a phone
+    // should be able to tell which one they are in from the first glyph, so
+    // the header, the rule and the clock all carry it and nothing else does.
+    const state = formatLiveState(
       signal.match?.goals_home, signal.match?.goals_away, signal.match?.minute
     );
+    const marketLabel = signal.market && signal.market !== 'h2h'
+      ? `${signal.market.toUpperCase()}${signal.market_line != null ? ` ${signal.market_line}` : ''} · `
+      : '';
+
+    // A MAN ADVANTAGE IS WHY THE PRICE MOVED, so it goes above the price
+    // rather than being left for the reader to infer. lib/inplayState is the
+    // one place that reads it, and it returns nothing when the feed did not
+    // report cards — an absent line is "not reported", never "none".
+    const cards = signal.live_state
+      ? adjustLambdaForCards({ lambdaHome: 1, lambdaAway: 1 }, signal.live_state)
+      : null;
+    let cardLine = null;
+    if (cards?.applied) {
+      const short = cards.differential > 0 ? home : away;
+      cardLine = `🔴 *${short} down to ${11 - Math.min(Math.abs(cards.differential), 2)} men* — priced in`;
+    }
+
     return [
-      `🔴 *IN-PLAY VALUE*`, ``,
-      `*${home} vs ${away}*`,
+      `🔴 *IN-PLAY* · ${inplayLabel(signal.model_architecture)}`,
+      `━━━━━━━━━━━━━━━━━━━━`,
+      `*${home} v ${away}*`,
       league ? `_${league}_` : null,
-      `Live: ${liveState}`,
-      `${outcome} @ ${odds} (${book})`,
-      `Edge: +${edgePct}%${mes}`,
+      `🔴 *${state}*`,
+      cardLine,
       ``,
-      `[View on MaxEdge](https://maxedge.live/feed)`,
-      `#MaxEdge #InPlay #LiveValue`,
+      `${marketLabel}*${outcome}* @ *${odds}*`,
+      `_${book}_ · EV *+${edgePct}%*${mes}`,
+      ``,
+      // The two things a live reader needs and a pre-match reader does not.
+      `⚠️ _Live price — it moves, and it may be gone. Check the book before you take it._`,
+      `_${inplayDisclosure(signal.model_architecture)}_`,
+      ``,
+      `[Live board](https://maxedge.live/in-play)`,
+      `#MaxEdge #InPlay`,
     ].filter(l => l !== null).join('\n');
   }
 
