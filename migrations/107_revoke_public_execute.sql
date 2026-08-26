@@ -1,6 +1,16 @@
 
 -- 107 — `revoke ... from anon, authenticated` does not revoke anything.
 --
+-- APPLIED AND VERIFIED IN PRODUCTION, 26 Aug 2026. Anon-executable VOLATILE
+-- functions in `public` went 15 -> 0. Probed from the anon seat with a positive
+-- control first, so silence means denial and not a test that never ran:
+-- current_tier() succeeded, then refresh_performance_by_band(),
+-- refresh_band_calibration(), bookmaker_prime_performance() and
+-- upsert_value_signal() all failed with insufficient_privilege. The read
+-- surface is unchanged as anon — matches 101,663, computed_values 10,
+-- value_signals 5, odds 833, model_record() 8, free_pick_candidates() 3,
+-- preview_match_ids() 46 — and service_role keeps every path the engine uses.
+--
 -- Postgres grants EXECUTE to PUBLIC on every function it creates, and every
 -- `create or replace` reinstates it. Revoking from two roles BY NAME leaves the
 -- PUBLIC grant standing, and `anon` inherits through it. Measured before this
