@@ -9,7 +9,7 @@
 'use strict';
 
 const assert = require('assert');
-const { clusterTeams, fetchLeagueTeams, currentSeasonYear } = require('./backfillTeamCrests');
+const { clusterTeams, fetchLeagueTeams, currentSeasonYear, chooseClubPerRow } = require('./backfillTeamCrests');
 
 let passed = 0, failed = 0;
 function t(name, fn) {
@@ -67,6 +67,46 @@ t('the crest is offered to every row of a matched club', () => {
   assert.strictEqual(forApi('Wolves').rows.length, 2);
   assert.ok(forApi('Wolves').api.logo);
 });
+
+console.log('\ncrest backfill — one row carries ONE club');
+
+{
+  // TWO API CLUBS CLUSTERING ONTO ONE OF OUR ROWS is what produced ten rows in
+  // production holding one club's id and another's badge — the crest was
+  // written last-wins and the id claimed first-wins, two tie-breaks on one row.
+  const row = { id: 'u1', name: 'Real Sociedad' };
+  const first  = { id: 548,  name: 'Real Sociedad',   logo: 'a.png' };
+  const second = { id: 9585, name: 'Real Sociedad II', logo: 'b.png' };
+
+  t('the EXACT name match wins, whichever order it arrives in', () => {
+    const forward = chooseClubPerRow([{ api: first, rows: [row] }, { api: second, rows: [row] }]);
+    const reverse = chooseClubPerRow([{ api: second, rows: [row] }, { api: first, rows: [row] }]);
+    assert.strictEqual(forward.get('Real Sociedad').id, 548);
+    assert.strictEqual(reverse.get('Real Sociedad').id, 548,
+      'arrival order must not decide which club a row is');
+  });
+
+  t('the id and the badge come from the SAME club', () => {
+    const chosen = chooseClubPerRow([{ api: first, rows: [row] }, { api: second, rows: [row] }]);
+    const club = chosen.get('Real Sociedad');
+    assert.strictEqual(String(club.id), '548');
+    assert.strictEqual(club.logo, 'a.png');
+  });
+
+  t('with no exact match the first sighting stands', () => {
+    const other = { id: 1, name: 'Sociedad Real', logo: 'c.png' };
+    const chosen = chooseClubPerRow([{ api: other, rows: [row] }, { api: second, rows: [row] }]);
+    assert.strictEqual(chosen.get('Real Sociedad').id, 1);
+  });
+
+  t('every spelling of one club resolves to that one club', () => {
+    const rows = [{ id: 'u1', name: 'Wolves' }, { id: 'u2', name: 'Wolverhampton Wanderers' }];
+    const api = { id: 39, name: 'Wolves', logo: 'w.png' };
+    const chosen = chooseClubPerRow([{ api, rows }]);
+    assert.strictEqual(chosen.get('Wolves').id, 39);
+    assert.strictEqual(chosen.get('Wolverhampton Wanderers').id, 39);
+  });
+}
 
 console.log('\ncrest backfill — the API envelope');
 
