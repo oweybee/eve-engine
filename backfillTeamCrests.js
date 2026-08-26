@@ -198,6 +198,25 @@ async function readNextWeekTeamIds(supabase) {
   return ids;
 }
 
+/**
+ * One API club per row. Exported so the tie-break is testable: a row carrying
+ * one club's id and another club's badge is invisible on screen and only shows
+ * up as a query.
+ *
+ * @param {{api: object, rows: object[]}[]} matched
+ * @returns {Map<string, object>} our row name -> the api club it is
+ */
+function chooseClubPerRow(matched) {
+  const chosen = new Map();
+  for (const { api, rows } of matched) {
+    for (const r of rows) {
+      const cur = chosen.get(r.name);
+      if (!cur || (cur.name !== r.name && api.name === r.name)) chosen.set(r.name, api);
+    }
+  }
+  return chosen;
+}
+
 async function main() {
   if (!API_KEY) { console.error('[crests] API_FOOTBALL_KEY is not set'); process.exit(1); }
 
@@ -245,19 +264,45 @@ async function main() {
   const claimedIds = new Set(ourTeams.filter(t => t.external_id).map(t => t.external_id));
   let noLogo = 0;
 
-  for (const { api, rows } of matched) {
-    if (!api.logo) noLogo++;
+  // ── ONE API CLUB PER ROW, CHOSEN BEFORE ANYTHING IS WRITTEN ──────────────
+  //
+  // This block used to write the crest with `set` on EVERY match — last one
+  // wins — while claiming the id only if unclaimed — first one wins. Two
+  // different tie-breaks on one row, so wherever two API clubs clustered onto
+  // a single spelling the row ended up carrying one club's id and another
+  // club's badge. Measured after the first production run: 10 rows of 865,
+  // among them `Paris Saint Germain` (id 85, crest 114) and `Real Sociedad`
+  // (id 548, crest 9585).
+  //
+  // It was not visible, and that is the part worth keeping. `lib/crest.crestId`
+  // prefers `external_id`, so the badge SERVED was the id's — which happened to
+  // be the right club in all ten, because `trackedLeagues` puts the big leagues
+  // first and the first sighting won the id. A row holding two clubs' identities
+  // is a coin-flip waiting for the league order to change.
+  //
+  // An EXACT name match beats one that merely clustered with it; otherwise the
+  // first sighting stands. Then BOTH fields are written from that one club.
+  const chosen = chooseClubPerRow(matched);
 
+  // Regroup by club, because the several spellings of one club must share a
+  // badge and exactly one of them may carry the id.
+  const byApiId = new Map();
+  for (const [name, api] of chosen) {
+    const key = String(api.id);
+    if (!byApiId.has(key)) byApiId.set(key, { api, names: [] });
+    byApiId.get(key).names.push(name);
+  }
+
+  for (const [key, { api, names }] of byApiId) {
     // THE CREST GOES TO EVERY SPELLING. Two rows for one club must not draw two
     // different badges, and nothing about `crest_url` is unique.
-    if (api.logo) for (const r of rows) crestByName.set(r.name, api.logo);
+    if (api.logo) for (const n of names) crestByName.set(n, api.logo);
+    else noLogo++;
 
     // THE ID GOES TO ONE ROW ONLY — migration 109 makes it unique. An id already
     // standing in the table is left where it is rather than moved.
-    const key = String(api.id);
     if (!claimedIds.has(key)) {
-      const canonicalRow = rows.find(r => r.name === api.name) ?? rows[0];
-      idByName.set(canonicalRow.name, key);
+      idByName.set(names.find(n => n === api.name) ?? names[0], key);
       claimedIds.add(key);
     }
   }
@@ -312,4 +357,4 @@ if (require.main === module) {
   main().catch(e => { console.error(`[crests] ${e.stack || e.message}`); process.exit(1); });
 }
 
-module.exports = { clusterTeams, fetchLeagueTeams, currentSeasonYear };
+module.exports = { clusterTeams, fetchLeagueTeams, currentSeasonYear, chooseClubPerRow };
