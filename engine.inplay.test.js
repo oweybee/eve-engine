@@ -506,8 +506,12 @@ test('winProbStage actually PASSES the census — a dead out-parameter is the tr
   // function took it, the tests covered it, and the call site went on passing
   // the old argument list, so it defaulted to null on every production run.
   const src = require('fs').readFileSync(require('path').join(__dirname, 'computeInplayValues.js'), 'utf8');
-  assert.ok(/winProbCandidates\(m,\s*baseByMatch\.get\(m\.id\),\s*\{\s*census\s*\}\)/.test(src),
+  assert.ok(/winProbCandidates\(m,\s*baseByMatch\.get\(m\.id\),\s*\{[\s\S]{0,200}?census[\s\S]{0,200}?\}\)/.test(src),
     'winProbStage must hand winProbCandidates the census');
+  assert.ok(/winProbCandidates\(m,\s*baseByMatch\.get\(m\.id\),\s*\{[\s\S]{0,200}?liveState[\s\S]{0,200}?\}\)/.test(src),
+    'winProbStage must hand winProbCandidates the live state');
+  assert.ok(/liveState:\s*stateByMatch\.get\(m\.id\)/.test(src),
+    'sniperStage must hand sniperCandidates the live state too');
   assert.ok(/win-prob declined:/.test(src), 'and must print it');
 });
 
