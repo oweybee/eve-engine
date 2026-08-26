@@ -40,7 +40,7 @@ const https  = require('https');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { formatLiveState } = require('./lib/inplay');
-const { classifyTier, dedupeConflicts, isBacked } = require('./lib/signalTier');
+const { classifyTier, dedupeConflicts, isBacked, rungFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
 const { isPublished, withheldReason } = require('./lib/publication');
 
@@ -175,6 +175,24 @@ function bandOf(signal) {
 }
 
 /**
+ * THE WORD THE POST PRINTS — and it is NOT `bandOf`.
+ *
+ * `mxs_band` is the SCORE band: what the number alone says. Since 26 Aug 2026
+ * the printed rung is decided by the BOX first and the score can only demote
+ * it, so the two now disagree routinely — a 99-scoring row at a 4% edge has
+ * `mxs_band = 'PRIME'` and a rung of WATCH. Printing `bandOf` here would put
+ * the top word on a row the ladder declines, which is the exact failure the
+ * 21 Aug badge fix removed from the site.
+ */
+function rungOf(signal) {
+  return rungFor({
+    odds: signal.detected_odds,
+    edge: signal.detected_edge,
+    mxs:  signal.mxs ?? rescore(signal).mxs,
+  });
+}
+
+/**
  * Both ladders agree: suggested by the price+edge box AND scored at or above the
  * backing line.
  *
@@ -187,12 +205,22 @@ function bandOf(signal) {
  *
  * ON 21 Aug 2026 IT WENT BACK TO FIVE and PRIME re-took the 65 line (migration
  * 089), which is the same lesson from the other side: a name comparison written
- * today would be correct today and wrong the next time a word moves. The line
- * has been 65 throughout both re-cuts. Read the line.
+ * today would be correct today and wrong the next time a word moves. Read the
+ * line, never the word.
+ *
+ * ON 26 Aug 2026 THE BOX BECAME PART OF THE GATE, not just the score. `isBacked`
+ * takes the ROW now and `rungFor` asks both ladders inside it, so the explicit
+ * `isSuggested(signal) &&` that used to sit here is not gone — it moved in, and
+ * expressing the conjunction ONCE is the point. Passing a bare score here would
+ * make `rungFor` return null and the channel would go silent without throwing.
  */
 function isBroadcastable(signal) {
   const mxs = signal.mxs ?? rescore(signal).mxs;
-  return isSuggested(signal) && isBacked(mxs);
+  return isBacked({
+    odds: signal.detected_odds,
+    edge: signal.detected_edge,
+    mxs,
+  });
 }
 
 function formatKickoff(isoStr) {
@@ -246,27 +274,33 @@ function buildMessage(signal) {
     hashtags = `#MaxEdge #OddsMove`;
   } else {
     const { tier, notable } = classifyTier(signal);
-    const band = bandOf(signal);
     const mxs  = signal.mxs ?? rescore(signal).mxs;
-    if (tier === 'prime' && isBacked(mxs)) {
-      // NOT "PRIME SIGNAL" ANY MORE, AND NOT BECAUSE THE GATE MOVED.
-      //
-      // The gate is unchanged — the ladder must suggest it AND the score must
-      // clear the backing line — but the word was wrong twice over. `isBacked`
-      // admits STRONG as well as PRIME, so a row the site badges ◈ STRONG went
-      // out of here headed PRIME, which is the exact drift the 6 Aug
-      // unification was for. And PRIME itself is capped at publication
-      // (lib/maxedge.ts, migration 064): no row on the current de-vigged basis
-      // has ever scored above 77, every 85+ score in the history came from the
-      // legacy `implied` basis, and the 88 cutoff sits inside a band — 85 to 91
-      // — that nothing occupies.
-      //
-      // So the post names the rung it actually scored and makes no claim above
-      // it. The score and the band still go out; it is the headline that stops
-      // asserting a rung the platform has not earned.
-      header   = `🟢 *BACKED SIGNAL*`;
-      note     = `_Our backed tier — the ladder suggests it and it scores ${mxs}/100 (${band})_`;
-      hashtags = `#MaxEdge #Backed #ValueBet`;
+    const rung = rungOf(signal);
+
+    // TWO BACKED RUNGS NOW, AND THEY MUST NOT SHARE COPY.
+    //
+    // It read `🟢 BACKED SIGNAL` for one rung from 21 Aug, because PRIME was
+    // capped out of the product and naming it would have claimed a rung no row
+    // could reach. That is no longer true: PRIME is the 5.0-6.9% box at 60+ and
+    // rows reach it, so the word is earned again and the post says it.
+    //
+    // EDGE IS BROADCAST AND IS NOT PRIME. The two are settled separately and
+    // reported separately (`performance_band`), so a post that blurs them
+    // creates a record nobody can reconcile. The branch splits on `rungFor`,
+    // never on the score band — see rungOf above.
+    if (rung === 'PRIME') {
+      header   = `>> *PRIME SIGNAL*`;
+      note     = `_Our headline tier — the ladder suggests it and it scores ${mxs}/100_`;
+      hashtags = `#MaxEdge #PrimeSignal`;
+    } else if (rung === 'EDGE') {
+      // The scope line is deliberate and is the same disclosure
+      // `performance_band.headline_scope_note` carries on the site: this rung is
+      // backed and broadcast, and it is NOT in the published headline record.
+      // Quoting it as though it were is the "we count our best band" charge the
+      // split has to answer every time it is made.
+      header   = `>> *EDGE SIGNAL*`;
+      note     = `_Backed at ${mxs}/100 — tracked and reported separately from our headline record_`;
+      hashtags = `#MaxEdge #EdgeSignal`;
     } else if (tier === 'longshot') {
       // A fact about the price, not a rung: every settled bet at 3.00+ lost.
       header   = notable ? `🎯 *LONGSHOT · NOTABLE EDGE*` : `🎯 *LONGSHOT*`;

@@ -261,6 +261,66 @@ function calcPlan(fixtures, today) {
 // Upsert match records so ingestOdds.js can link odds to real team names
 // ---------------------------------------------------------------------------
 
+/**
+ * Rows per bulk write. Module scope because BOTH `upsertMatches` and
+ * `upsertTeamRows` need it — it was a local inside `upsertMatches`, and the
+ * team helper referencing it from module scope was a ReferenceError that no
+ * existing test reached and that would have thrown on the first real ingest.
+ */
+const CHUNK = 500;
+
+/**
+ * Upsert team rows, keyed on `name`, filling `byName` with the ids that come
+ * back. Two things here are not incidental.
+ *
+ * BATCHED BY KEY SIGNATURE. PostgREST builds ONE statement per request and
+ * rejects a bulk payload whose objects have different keys (PGRST102, "All
+ * object keys must match"). Our rows deliberately differ — a team the API sent
+ * a logo for carries `crest_url`, one it did not carry nothing at all, because
+ * an explicit null would blank a crest we already hold. So group first, then
+ * chunk inside each group.
+ *
+ * A UNIQUE `external_id` COLLISION MUST NOT STOP AN INGEST. Migration 109 makes
+ * `external_id` unique where present, and `lib/teamNames.js` keeps one row per
+ * SPELLING — so the day a second spelling of a club is offered an id another row
+ * already holds, Postgres answers 23505 and the whole chunk fails. The fixtures
+ * in that chunk would then have no team ids and would be skipped: a day's board
+ * lost over a decoration. The chunk is retried without `external_id`, which
+ * still lands the crest and leaves the canonical row's key where it is.
+ */
+async function upsertTeamRows(supabase, rows, byName) {
+  const groups = new Map();
+  for (const r of rows) {
+    const sig = Object.keys(r).sort().join(',');
+    if (!groups.has(sig)) groups.set(sig, []);
+    groups.get(sig).push(r);
+  }
+
+  for (const group of groups.values()) {
+    for (let i = 0; i < group.length; i += CHUNK) {
+      const slice = group.slice(i, i + CHUNK);
+      let { data, error } = await supabase.from('teams')
+        .upsert(slice, { onConflict: 'name' })
+        .select('id, name');
+
+      // 23505 is the unique violation. PostgREST reports the SQLSTATE in
+      // `code`; match on that rather than on the message text, which is
+      // localised and carries the index name.
+      if (error?.code === '23505' && slice.some(r => r.external_id)) {
+        const withoutId = slice.map(({ external_id, ...rest }) => rest);
+        console.warn(`[plan] teams: external_id collision in a chunk of ${slice.length} — ` +
+                     'retrying without it (the crest still lands; the id stays on the row that holds it)');
+        ({ data, error } = await supabase.from('teams')
+          .upsert(withoutId, { onConflict: 'name' })
+          .select('id, name'));
+      }
+
+      if (error) { console.warn(`[plan] upsertTeams: ${error.message}`); continue; }
+      for (const t of data ?? []) byName.set(t.name, t.id);
+    }
+  }
+}
+
 async function upsertMatches(supabase, fixtures, { extraCols } = {}) {
   // BATCHED, not per-fixture. The old shape — three sequential round trips per
   // fixture (home team, away team, match) — was fine for planDay's ~50-game
@@ -271,7 +331,6 @@ async function upsertMatches(supabase, fixtures, { extraCols } = {}) {
   // `extraCols(fixture)` optionally returns extra columns to merge into that
   // fixture's row (the season backfill uses it to write final scores in the
   // same pass). Rows keep status 'scheduled' unless extraCols overrides it.
-  const CHUNK = 500;
   const shortName = n => n.length > 12 ? n.split(' ').slice(0, 2).join(' ') : n;
 
   // 1. Leagues — a handful, resolved (and cached) one upsert each. League
@@ -304,22 +363,30 @@ async function upsertMatches(supabase, fixtures, { extraCols } = {}) {
   }
 
   // 2. Teams — unique by name (bulk upsert rejects in-batch duplicates), chunked.
+  //
+  // ITERATE THE TEAM OBJECTS, NOT THEIR NAMES. `f.teams.home` is
+  // `{ id, name, logo, winner }`; this loop read `.name` out of it and dropped
+  // the rest, which is the whole reason `crest_url` sat at 0 of 1,561 rows
+  // while the crest arrived on every fixture of every ingest. Migration 109
+  // adds `external_id` for the id half.
   const uniqueTeams = new Map();
   for (const f of fixtures) {
-    for (const name of [f.teams?.home?.name ?? `home_${f.fixture.id}`,
-                        f.teams?.away?.name ?? `away_${f.fixture.id}`]) {
-      if (!uniqueTeams.has(name)) uniqueTeams.set(name, { name, short_name: shortName(name) });
+    for (const [side, t] of [['home', f.teams?.home], ['away', f.teams?.away]]) {
+      const name = t?.name ?? `${side}_${f.fixture.id}`;
+      if (uniqueTeams.has(name)) continue;
+      // A NULL MUST NEVER REACH THE UPSERT. PostgREST builds `ON CONFLICT DO
+      // UPDATE SET` from the keys PRESENT in the payload, so an absent key
+      // leaves the stored value alone and a `crest_url: null` overwrites a good
+      // crest with nothing. The API omits `logo` often enough that sending the
+      // null would blank rows on an ordinary day's ingest.
+      const row = { name, short_name: shortName(name) };
+      if (t?.id != null) row.external_id = String(t.id);
+      if (t?.logo) row.crest_url = t.logo;
+      uniqueTeams.set(name, row);
     }
   }
   const teamIdByName = new Map();
-  const teamRows = [...uniqueTeams.values()];
-  for (let i = 0; i < teamRows.length; i += CHUNK) {
-    const { data, error } = await supabase.from('teams')
-      .upsert(teamRows.slice(i, i + CHUNK), { onConflict: 'name' })
-      .select('id, name');
-    if (error) { console.warn(`[plan] upsertTeams: ${error.message}`); continue; }
-    for (const t of data ?? []) teamIdByName.set(t.name, t.id);
-  }
+  await upsertTeamRows(supabase, [...uniqueTeams.values()], teamIdByName);
 
   // 3. Matches — unique by external_id (twin rows in one batch are a Postgres
   //    error, "cannot affect row a second time"), chunked.
@@ -455,4 +522,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { upsertMatches, fetchFixturesForDate, calcPlan, TRACKED_LEAGUES };
+module.exports = { upsertMatches, upsertTeamRows, fetchFixturesForDate, calcPlan, TRACKED_LEAGUES };

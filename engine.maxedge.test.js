@@ -177,14 +177,15 @@ test('writes the band beside the score, from the score', () => {
   // probability and the price are untouched.
   const s = scoreSignal(row({ ...at2, detected_edge: 0.06 }));
   assert.strictEqual(s.mxs_band, bandFor(s.mxs));
-  assert.strictEqual(isBacked(s.mxs), true);
-  assert.ok(s.mxs >= 65);
+  // isBacked takes a ROW since 26 Aug 2026 — the box is half the answer.
+  assert.strictEqual(isBacked({ odds: 2.0, edge: 0.06, mxs: s.mxs }), true);
+  assert.ok(s.mxs >= 60);
   assert.strictEqual(s.mxs, s.mxs_raw, 'the plateau keeps the whole score');
   assert.strictEqual(s.mes_efficiency, 1);
 
   const weak = scoreSignal(row({ ...at2, detected_edge: 0.02 }));
   assert.strictEqual(weak.mxs_band, bandFor(weak.mxs));
-  assert.strictEqual(isBacked(weak.mxs), false);
+  assert.strictEqual(isBacked({ odds: 2.0, edge: 0.02, mxs: weak.mxs }), false);
 
   // AND THE BAND IS CUT FROM THE FINAL SCORE, which is the whole change: the
   // 20% row keeps its raw disagreement and loses three quarters of its shown
@@ -195,9 +196,9 @@ test('writes the band beside the score, from the score', () => {
   assert.strictEqual(trap.mes_efficiency, 0.25);
   assert.strictEqual(trap.mxs, Math.round(trap.mxs_raw * 0.25));
   assert.strictEqual(trap.mxs_band, bandFor(trap.mxs));
-  assert.strictEqual(isBacked(trap.mxs), false);
-  assert.ok(trap.mxs_raw >= 65, 'the raw disagreement is still a big one');
-  assert.strictEqual(trap.mes_basis, 'edge_adjusted');
+  assert.strictEqual(isBacked({ odds: 2.0, edge: 0.20, mxs: trap.mxs }), false);
+  assert.ok(trap.mxs_raw >= 60, 'the raw disagreement is still a big one');
+  assert.strictEqual(trap.mes_basis, 'yield_calibrated');
 });
 
 test('an unmeasured architecture yields nulls, and does NOT lose the row', () => {
@@ -272,25 +273,32 @@ const SCORED = ['model_prob', 'market_prob', 'prob_gap', 'model_sigma', 'mxs', '
 // in production and neither copy threw. The same three cases are asserted in
 // the migration and in lib/maxedge.test.ts, so a drift in any one shows up.
 
-test('f(edge) reproduces the three cases the brief states', () => {
-  assert.strictEqual(edgeEfficiency(0.075), 1);
-  assert.ok(Math.abs(edgeEfficiency(0.101) - 0.6375) < 1e-9, `got ${edgeEfficiency(0.101)}`);
-  assert.strictEqual(Math.round(80 * edgeEfficiency(0.101)), 51);
-  assert.strictEqual(edgeEfficiency(0.158), 0.25);
-  assert.strictEqual(Math.round(80 * edgeEfficiency(0.158)), 20);
+test('f(edge) reproduces the three cases the runbook states', () => {
+  // The three published values, exactly. r4 because the ramp is floating point.
+  const r4 = x => Math.round(x * 1e4) / 1e4;
+  assert.strictEqual(r4(edgeEfficiency(0.04)), 0.68, 'below the floor, on the ramp');
+  assert.strictEqual(edgeEfficiency(0.06), 1.00, 'the PRIME band keeps everything');
+  assert.strictEqual(edgeEfficiency(0.08), 0.85, 'the EDGE band takes 15%');
 });
 
-test('f(edge) never lets an edge over 10% reach the PRIME line', () => {
-  // 65 / 0.65 = 100 and maxedgeScore caps the raw score at 99, so this is a
-  // theorem rather than an observation about today's rows. Walked over every
-  // (raw, edge) pair the scorer can produce.
-  for (let bp = 1001; bp <= 3000; bp++) {
-    const e = bp / 10000;
-    for (let raw = 0; raw <= 99; raw++) {
-      const final = Math.round(raw * edgeEfficiency(e));
-      assert.ok(final < 65, `raw ${raw} at edge ${e} scored ${final}`);
-    }
-  }
+test('TWO of the three seams are true cliffs; the third is continuous', () => {
+  // A smooth curve would imply the bands shade into each other. The two that
+  // separate the BACKED bands do not — they are different populations with
+  // different realised yields, and the box cuts hard at exactly those points.
+  const r4 = x => Math.round(x * 1e4) / 1e4;
+  assert.strictEqual(r4(edgeEfficiency(0.0499)), 0.7493, 'ramp tops just under 0.75');
+  assert.strictEqual(edgeEfficiency(0.05), 1.00, 'CLIFF: 0.7493 -> 1.00 at the floor');
+  assert.strictEqual(edgeEfficiency(0.0699), 1.00, 'plateau holds to 7%');
+  assert.strictEqual(edgeEfficiency(0.07), 0.85, 'CLIFF: 1.00 -> 0.85 at the seam');
+
+  // The 10% transition is NOT a cliff and the patch's phrasing implies it is.
+  // f(0.10) is exactly 0.85 — the shoulder BEGINS at the edge band's value and
+  // decays from there, so the curve is continuous. Worth pinning: a future edit
+  // that made it a real cliff would be a silent change to every row over 10%.
+  assert.strictEqual(edgeEfficiency(0.0999), 0.85, 'holds to 10%');
+  assert.strictEqual(edgeEfficiency(0.10),   0.85, 'continuous at the shoulder');
+  assert.ok(edgeEfficiency(0.1001) < 0.85, 'and decays immediately after');
+  assert.strictEqual(edgeEfficiency(0.1201), 0.25, 'trap floor');
 });
 
 test('f(edge) is a decay, never a boost, and never zero', () => {
@@ -303,12 +311,32 @@ test('f(edge) is a decay, never a boost, and never zero', () => {
   assert.strictEqual(edgeEfficiency(undefined), 1);
 });
 
-test('the knee sits exactly where the guarantee needs it', () => {
-  // Soften this to make a PRIME appear above a 10% edge and the theorem above
-  // goes with it — so the constant is pinned rather than inferred.
-  assert.strictEqual(EDGE_EFFICIENCY.knee, 0.65);
-  assert.strictEqual(EDGE_EFFICIENCY.kneeAt, 0.10);
-  assert.ok(Math.round(99 * EDGE_EFFICIENCY.knee) < 65);
+test('NOTHING OUTSIDE THE PRIME BOX CAN BE PRIME — and it is the BOX that says so', () => {
+  // THE OLD THEOREM IS SUPERSEDED AND THIS IS ITS REPLACEMENT.
+  //
+  // It used to read "65 / 0.65 = 100 and maxedgeScore caps the raw at 99, so
+  // nothing over a 10% edge can reach the PRIME line" — an ARITHMETIC guarantee
+  // resting on the knee constant. That guarantee is GONE: f(0.1001) is 0.848,
+  // and a raw 99 through it scores 84, comfortably over the 60 line.
+  //
+  // It is not needed, because the guarantee moved from the curve to the BOX.
+  // `rungFor` gives PRIME to the 5.0-6.9% band and to nothing else, whatever
+  // the score, so the property is now structural rather than a coincidence of
+  // two constants. Softening f(edge) can no longer manufacture a PRIME.
+  const { rungFor } = require('./lib/signalTier');
+  for (let bp = 1; bp <= 3000; bp++) {
+    const e = bp / 10000;
+    const inPrimeBox = e >= 0.05 && e < 0.07;
+    for (const mxs of [0, 41, 59, 60, 84, 99]) {
+      const rung = rungFor({ odds: 2.00, edge: e, mxs });
+      if (!inPrimeBox) {
+        assert.notStrictEqual(rung, 'PRIME', `edge ${e} score ${mxs} reached PRIME`);
+      }
+    }
+  }
+  // And the price leg, which the curve never saw at all.
+  assert.notStrictEqual(rungFor({ odds: 3.50, edge: 0.06, mxs: 99 }), 'PRIME');
+  assert.notStrictEqual(rungFor({ odds: 1.39, edge: 0.06, mxs: 99 }), 'PRIME');
 });
 
 (async () => {
@@ -331,13 +359,27 @@ test('the knee sits exactly where the guarantee needs it', () => {
     for (const col of SCORED) assert.ok(col in c1.rows[0], `${col} is written`);
     assert.strictEqual(c1.rows[0].market_prob, 0.44);
     assert.strictEqual(c1.rows[0].gap_basis, 'devigged');
-    assert.strictEqual(c1.rows[0].mxs, 86);
+    // 86 -> 73 ON 26 Aug 2026, and the arithmetic is the release working: a 9%
+    // edge left the plateau for the EDGE band, so f(0.09) went 1.00 -> 0.85 and
+    // round(86 * 0.85) = 73. The RAW disagreement is untouched.
+    assert.strictEqual(c1.rows[0].mxs, 73);
+    assert.strictEqual(c1.rows[0].mxs_raw, 86, 'the raw score did not move');
+    assert.strictEqual(c1.rows[0].mes_efficiency, 0.85);
+    assert.strictEqual(c1.rows[0].mes_basis, 'yield_calibrated');
     assert.strictEqual(c1.rows[0].mxs_band, bandFor(c1.rows[0].mxs));
     // Both ladders on one row, and they are allowed to differ. The eligibility
     // bucket is LOWER CASE — it is a key, not the badge word the conviction
-    // ladder prints. See the note on categoryFor in lib/signalTier.js, and the
-    // CHECK constraint on value_signals, which admits only these three.
-    assert.strictEqual(c1.rows[0].signal_category, 'prime');
+    // ladder prints.
+    //
+    // 'prime' -> 'edge': at 2.20 with a 9% edge this row sits in the EDGE box,
+    // not the PRIME one. Migration 102 widens value_signals_signal_category_check
+    // to admit it; without that widening this insert is REJECTED.
+    assert.strictEqual(c1.rows[0].signal_category, 'edge');
+    // The stored SCORE band still reads PRIME — 73 clears 60 — while the RUNG
+    // the product prints is EDGE. That disagreement is the design, not a bug.
+    assert.strictEqual(c1.rows[0].mxs_band, 'PRIME');
+    assert.strictEqual(
+      require('./lib/signalTier').rungFor({ odds: 2.20, edge: 0.09, mxs: 73 }), 'EDGE');
     assert.strictEqual(c1.rows[0].signal_category,
       c1.rows[0].signal_category.toLowerCase());
   });
@@ -381,8 +423,18 @@ test('the knee sits exactly where the guarantee needs it', () => {
     for (const col of SCORED) assert.ok(col in c2.rows[0], `${col} is written`);
     assert.strictEqual(c2.rows[0].market_prob, 0.52);
     assert.strictEqual(c2.rows[0].gap_basis, 'devigged');
-    assert.strictEqual(c2.rows[0].mxs, 63);
+    // 63 -> 46 ON 26 Aug 2026, and this row is the point of the whole release:
+    // a 4.8% edge is now BELOW the 5% floor, so it sits on the ramp at
+    // f = 0.40 + (0.048 / 0.05) * 0.35 = 0.736, and round(63 * 0.736) = 46.
+    // The 4.0-4.9% band returns -19.36% and has been negative every period
+    // since June, so the score it is shown at falls to match.
+    assert.strictEqual(c2.rows[0].mxs, 46);
+    assert.strictEqual(c2.rows[0].mxs_raw, 63, 'the raw score did not move');
+    assert.ok(Math.abs(c2.rows[0].mes_efficiency - 0.736) < 1e-9);
     assert.strictEqual(c2.rows[0].mxs_band, 'WATCH');
+    // Below the floor it is not backed at any score.
+    assert.strictEqual(
+      require('./lib/signalTier').rungFor({ odds: 1.91, edge: 0.048, mxs: 46 }), 'WATCH');
   });
 
   test('the secondary path keeps the model probability it was handed', () => {
@@ -391,17 +443,22 @@ test('the knee sits exactly where the guarantee needs it', () => {
   });
 
   
-test('the plateau starts at 3% — mirrors eve-frontend/lib/maxedge.ts', () => {
-  // Loosened 4% -> 3% on 22 Aug. This file is the ENGINE half of a mirrored
-  // constant, and a mirror nobody tests is the MODEL_SIGMA hand-copy again —
-  // it failed twice in production without either copy throwing.
-  assert(Math.abs(edgeEfficiency(0.015) - 0.75) < 1e-9, 'halfway up the ramp');
-  assert(edgeEfficiency(0.03) === 1, '3% keeps the whole score');
-  assert(edgeEfficiency(0.0332) === 1, 'the 3-4% band is on the plateau now');
-  assert(Math.abs(edgeEfficiency(0.0247) - 0.9117) < 1e-3, 'the ramp still exists below 3%');
-  // The high side is untouched: the guarantee rests on these, not on the ramp.
-  assert(Math.abs(edgeEfficiency(0.10) - 0.65) < 1e-9, 'knee unmoved');
-  assert(edgeEfficiency(0.1201) === 0.25, 'trap floor unmoved');
+test('the plateau is the PRIME band, and every seam is derived', () => {
+  // This file is the ENGINE half of a mirrored constant, and a mirror nobody
+  // tests is the MODEL_SIGMA hand-copy again — it failed twice in production
+  // without either copy throwing. Assert the WIRING, not the numbers.
+  const { THRESHOLDS } = require('./lib/signalTier');
+  assert.strictEqual(EDGE_EFFICIENCY.rampTo,     THRESHOLDS.PRIME_EDGE_MIN);
+  assert.strictEqual(EDGE_EFFICIENCY.peakTo,     THRESHOLDS.PRIME_EDGE_MAX);
+  assert.strictEqual(EDGE_EFFICIENCY.edgeBandTo, THRESHOLDS.EDGE_EDGE_MAX);
+  assert.strictEqual(EDGE_EFFICIENCY.plateauFrom, undefined, 'renamed to rampTo');
+  assert.strictEqual(EDGE_EFFICIENCY.knee,        undefined, 'the knee is retired');
+
+  // The plateau is EXACTLY the PRIME box's edge band.
+  assert.strictEqual(edgeEfficiency(THRESHOLDS.PRIME_EDGE_MIN), 1);
+  assert.strictEqual(edgeEfficiency(THRESHOLDS.PRIME_EDGE_MAX), 0.85);
+  assert.ok(edgeEfficiency(THRESHOLDS.PRIME_EDGE_MIN - 0.0001) < 1,
+    'a hair under the floor is already decaying');
 });
 
 console.log(`\n  ${passed} passed`);

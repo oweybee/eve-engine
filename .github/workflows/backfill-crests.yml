@@ -1,0 +1,93 @@
+name: Backfill Team Crests
+
+# Gives every club we already hold its provider id and its crest.
+#
+# WHY IT EXISTS
+# `planDay.js` captures `{ id, logo }` off every team object it ingests, so from
+# here on a club picks up its crest the first time it plays. That does nothing
+# for the rows already in the table — 1,561 of them, with `crest_url` populated
+# on ZERO when this was written — and nothing for a club whose next fixture is a
+# fortnight away. This walks the tracked leagues once and fills them in.
+#
+# COST
+# `/teams?league={id}&season={year}` returns every club in a competition in ONE
+# response, so the whole tracked set is ~40 requests. Same shape and the same
+# argument as backfill-fixtures.yml, which is the sibling to read first.
+#
+# NO SCHEDULE, DELIBERATELY.
+# The ingest now captures a crest on every fixture it writes, so a club that
+# plays gets its badge without this. What this catches is the standing backlog
+# and any club that has not played since the capture landed — a one-off, not a
+# cadence. Add a monthly cron here if a feed ever starts renaming clubs; ~40
+# requests a month is trivial against the allowance, it just is not needed yet.
+#
+# SAFE TO RE-RUN. Every write is an upsert on `name`, an id already standing in
+# the table is left where it is, and a null is never sent — an absent key leaves
+# the stored value alone, so a re-run can only add crests, never blank them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Match and report coverage without writing anything'
+        type: boolean
+        default: true
+      season:
+        description: 'Season start year (blank = current, e.g. 2026 for 2026/27)'
+        type: string
+        default: ''
+      leagues:
+        description: 'Comma-separated corpus keys, e.g. epl,e1 (blank = all tracked)'
+        type: string
+        default: ''
+      floor:
+        description: 'Fuzzy-match similarity floor, 0-1 (blank = 0.92). Raise it to refuse more.'
+        type: string
+        default: ''
+
+concurrency:
+  group: backfill-crests-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    name: Fill teams.crest_url and teams.external_id
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Backfill crests
+        run: |
+          ARGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ -n "${{ inputs.season }}" ]; then
+            ARGS="$ARGS --season ${{ inputs.season }}"
+          fi
+          if [ -n "${{ inputs.leagues }}" ]; then
+            ARGS="$ARGS --leagues ${{ inputs.leagues }}"
+          fi
+          if [ -n "${{ inputs.floor }}" ]; then
+            ARGS="$ARGS --floor ${{ inputs.floor }}"
+          fi
+          echo "node backfillTeamCrests.js$ARGS"
+          node backfillTeamCrests.js $ARGS

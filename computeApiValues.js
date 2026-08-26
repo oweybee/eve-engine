@@ -450,12 +450,17 @@ async function insertValueSignals(supabase, rows) {
 
   const mv = toInsert.filter(r => r.is_mover).length;
   const pr = toInsert.filter(r => r.signal_category === 'prime').length;
+  // EDGE joined the buckets on 26 Aug 2026. Without its own counter an EDGE row
+  // is counted in NONE of them, so the operator line reads `Prime=0 Value=0
+  // Longshot=0` beside `inserted 1` — a census that does not add up, which is
+  // the shape this repo fixes rather than tolerates.
+  const eg = toInsert.filter(r => r.signal_category === 'edge').length;
   const va = toInsert.filter(r => r.signal_category === 'value').length;
   const ls = toInsert.filter(r => r.signal_category === 'longshot').length;
   console.log(
     `[api_engine] inserted ${inserted}` +
     `${duplicate ? ` (${duplicate} already on record)` : ''}` +
-    ` (Prime=${pr} Value=${va} Longshot=${ls} movers=${mv})`
+    ` (Prime=${pr} Edge=${eg} Value=${va} Longshot=${ls} movers=${mv})`
   );
   return inserted;
 }
