@@ -450,5 +450,112 @@ test('pre-match: unsupported league / cold ELO → dormant', () => {
     homeElo: { elo: 1500, games: 1 }, awayElo: goodElo }).vector, null);
 });
 
+// ── Stage 3 price ceiling + the live odds window ─────────────────────────────
+// The win-prob stage held a FROZEN pre-match lambda against a price taken from
+// a 24-HOUR bucket, with no odds band of any kind. Over the 3,798 h2h ticks in
+// inplay_market_series that combination priced 72.7% of everything the model
+// produced above INPLAY_MAX_EDGE. lib/inplay.js carries the measurement.
+console.log('in-play price ceiling + live odds window');
+const { winProbCandidates } = require('./computeInplayValues');
+const liveH2h = (odds) => ({
+  id: 'm1', kickoff_at: '2026-07-01T16:00:00Z', minute: 60,
+  goals_home: 0, goals_away: 0, home_team: { name: 'A' }, away_team: { name: 'B' },
+  odds: [{ market: 'h2h', bookmaker: 'live', home_odds: odds[0], draw_odds: odds[1], away_odds: odds[2] }],
+});
+const lam = { lambda_home: 1.5, lambda_away: 1.2 };
+
+test('a longshot outcome is declined on PRICE, and lifting the ceiling restores it', () => {
+  // A drifted away price the frozen lambda still fancies: rejected at 3.00,
+  // admitted at 99. Same row, same model, same edge — only the ceiling moved.
+  // 0-0 at minute 60 with lambda 1.5/1.2: the model reads home .289 / draw .492
+  // / away .219, against a REAL market carrying its margin (2.60 / 2.10 / 5.00
+  // is an overround of 1.06 — a vector that sums under one is an arbitrage the
+  // de-vig correctly refuses, so a fixture must not use one). Two legs clear
+  // the EV band: the draw at +3.3% and the away at +9.5%. Only the draw is
+  // inside the price band; the away is rejected on price alone. That is the
+  // whole finding in one row.
+  const m = liveH2h([2.60, 2.10, 5.00]);
+  const capped = winProbCandidates(m, lam, { maxOdds: 3.00 });
+  const lifted = winProbCandidates(m, lam, { maxOdds: 99 });
+  assert.strictEqual(capped.length, 1, 'only the in-band leg survives');
+  assert.strictEqual(capped[0].outcome, 'draw');
+  assert.strictEqual(lifted.length, 2, 'the away leg clears every gate but the price');
+  assert.ok(capped.every(c => c.detected_odds < 3.00));
+  assert.ok(lifted.some(c => c.detected_odds >= 3.00));
+});
+
+test('the ceiling defaults to lib/inplay and is not typed here', () => {
+  const m = liveH2h([2.60, 2.10, 5.00]);
+  assert.deepStrictEqual(
+    winProbCandidates(m, lam).map(c => c.detected_odds),
+    winProbCandidates(m, lam, { maxOdds: inplay.INPLAY_MAX_ODDS }).map(c => c.detected_odds),
+  );
+});
+
+test('the de-vigged market side still sees ALL THREE legs', () => {
+  // The ceiling is on the CANDIDATE, never inside bestH2hOdds: that map also
+  // feeds devigLiveH2h, and dropping a leg there would de-vig a two-legged
+  // 1X2 vector and silently mis-state every market_prob on the row.
+  // devigProbs returns NULL unless it is handed all three legs, so a non-null
+  // market_prob is itself the proof the map was complete. And a de-vigged
+  // probability must sit BELOW its own implied 1/odds — that difference is the
+  // margin, and it is the thing being removed.
+  const m = liveH2h([2.60, 2.10, 5.00]);
+  const c = winProbCandidates(m, lam, { maxOdds: 99 });
+  assert.ok(c.length >= 2, 'need more than one leg to check the vector');
+  for (const x of c) {
+    assert.ok(Number.isFinite(x.market_prob), `${x.outcome} lost its market_prob`);
+    assert.ok(x.market_prob > 0 && x.market_prob < 1, 'a probability');
+    assert.ok(x.market_prob < 1 / x.detected_odds,
+      `${x.outcome}: de-vigged ${x.market_prob} must be under implied ${1 / x.detected_odds}`);
+  }
+});
+
+test('fetchLiveMatches asks for a LIVE odds window, not the pre-match default', () => {
+  // A source assertion, because the alternative is a live read that quietly
+  // takes the 24-hour bucket again and looks identical from outside.
+  const src = require('fs').readFileSync(require('path').join(__dirname, 'computeInplayValues.js'), 'utf8');
+  assert.ok(/oddsMaxAgeMinutes:\s*inplay\.INPLAY_ODDS_MAX_AGE_MIN/.test(src),
+    'fetchLiveMatches must pass inplay.INPLAY_ODDS_MAX_AGE_MIN');
+  assert.ok(inplay.INPLAY_ODDS_MAX_AGE_MIN > 0 && inplay.INPLAY_ODDS_MAX_AGE_MIN <= 60,
+    'a live price window is minutes, not hours');
+});
+
+test('captureInplaySeries reads the SAME window the signal stages do', () => {
+  // These two disagreed — the chart read 10 minutes and the signals beside it
+  // read 24 hours. One constant now, and this is what keeps it one.
+  const src = require('fs').readFileSync(require('path').join(__dirname, 'captureInplaySeries.js'), 'utf8');
+  assert.ok(/require\('\.\/lib\/inplay'\)/.test(src), 'must read the shared constant');
+  assert.ok(!/process\.env\.INPLAY_ODDS_MAX_AGE_MIN\s*\|\|\s*'10'/.test(src),
+    'must not re-declare its own copy of the window');
+});
+
+test('winProbStage actually PASSES the census — a dead out-parameter is the trap', () => {
+  // Written after the secondary-market census shipped dead for a day: the
+  // function took it, the tests covered it, and the call site went on passing
+  // the old argument list, so it defaulted to null on every production run.
+  const src = require('fs').readFileSync(require('path').join(__dirname, 'computeInplayValues.js'), 'utf8');
+  assert.ok(/winProbCandidates\(m,\s*baseByMatch\.get\(m\.id\),\s*\{[\s\S]{0,200}?census[\s\S]{0,200}?\}\)/.test(src),
+    'winProbStage must hand winProbCandidates the census');
+  assert.ok(/winProbCandidates\(m,\s*baseByMatch\.get\(m\.id\),\s*\{[\s\S]{0,200}?liveState[\s\S]{0,200}?\}\)/.test(src),
+    'winProbStage must hand winProbCandidates the live state');
+  assert.ok(/liveState:\s*stateByMatch\.get\(m\.id\)/.test(src),
+    'sniperStage must hand sniperCandidates the live state too');
+  assert.ok(/win-prob declined:/.test(src), 'and must print it');
+});
+
+test('the census counts the ceiling separately from the max-edge guard', () => {
+  // They are different findings — one says the model is not calibrated at this
+  // price, the other says it is not calibrated at all — and an empty board that
+  // cannot tell them apart is one silence with two causes.
+  const census = { overPriceCeiling: 0, belowEv: 0, aboveMaxEdge: 0 };
+  winProbCandidates(liveH2h([2.60, 2.10, 5.00]), lam, { census });
+  // home 2.60 is inside the price band and simply has no edge (-24.9%);
+  // the draw fires; away 5.00 is declined on price and never reaches the edge.
+  assert.strictEqual(census.overPriceCeiling, 1);
+  assert.strictEqual(census.belowEv, 1);
+  assert.strictEqual(census.aboveMaxEdge, 0);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

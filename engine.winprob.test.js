@@ -132,13 +132,22 @@ test('consensus → live, probs valid and consistent at KO', () => {
 });
 
 console.log('winProbCandidates (Stage 3 candidate builder)');
-// England-style favourite, 0-1 down at 40' → model home ≈ 0.28. A live home
-// price of 4.0 implies ~0.25, so backing it is +value.
+// England-style favourite still level at 40' → model home ≈ 0.593. A live home
+// price of 1.85 implies 0.541 with the margin in it, so backing it is +value —
+// and it is inside the price band, which is what a backable in-play claim now
+// has to be.
+//
+// THIS FIXTURE USED TO BACK HOME AT 4.00 AFTER GOING 0-1 DOWN, and that case
+// has its own test below. It was the exact shape lib/inplay.INPLAY_MAX_ODDS
+// exists to decline: a frozen pre-match lambda fancying a longshot comeback.
+// Over the whole inplay_market_series record the model claims 2.4x the
+// market's own probability at prices of 10-25, and 58.6% of everything it
+// produced above 3.00 was already being thrown away by INPLAY_MAX_EDGE.
 const baseline = { lambda_home: 2.2, lambda_away: 0.6 };
 const liveMatch = (over = {}) => ({
-  id: 'm1', kickoff_at: '2026-07-01T16:00:00Z', goals_home: 0, goals_away: 1, minute: 40,
+  id: 'm1', kickoff_at: '2026-07-01T16:00:00Z', goals_home: 0, goals_away: 0, minute: 40,
   home_team: { name: 'England' }, away_team: { name: 'Congo DR' },
-  odds: [{ bookmaker: 'x', market: 'h2h', home_odds: 4.0, draw_odds: 3.4, away_odds: 1.9 }],
+  odds: [{ bookmaker: 'x', market: 'h2h', home_odds: 1.85, draw_odds: 3.20, away_odds: 6.50 }],
   ...over,
 });
 const opts = { evThreshold: 0.02, maxEdge: 0.20, minuteCap: 85 };
@@ -149,8 +158,23 @@ test('emits an INPLAY_DIXON_COLES home candidate when the live price beats the m
   assert.ok(home, 'home candidate present');
   assert.strictEqual(home.model_architecture, 'INPLAY_DIXON_COLES');
   assert.strictEqual(home.phase, 'inplay');
-  assert.strictEqual(home.detected_odds, 4.0);
+  assert.strictEqual(home.detected_odds, 1.85);
   assert.ok(home.detected_edge > 0.02 && home.detected_edge <= 0.20);
+});
+test('the old 0-1-down comeback at 4.00 is declined on PRICE, not on edge', () => {
+  // Same model, same EV band, same maxEdge — it clears all three and is
+  // rejected only by the ceiling. Lifting the ceiling brings it straight back,
+  // which is what says the ceiling is the thing rejecting it.
+  const comeback = liveMatch({
+    goals_home: 0, goals_away: 1,
+    odds: [{ bookmaker: 'x', market: 'h2h', home_odds: 4.0, draw_odds: 3.4, away_odds: 1.9 }],
+  });
+  assert.ok(!winProbCandidates(comeback, baseline, opts).find(x => x.outcome === 'home'));
+  const lifted = winProbCandidates(comeback, baseline, { ...opts, maxOdds: 99 })
+    .find(x => x.outcome === 'home');
+  assert.ok(lifted, 'it clears every gate except the price');
+  assert.strictEqual(lifted.detected_odds, 4.0);
+  assert.ok(lifted.detected_edge > 0.02 && lifted.detected_edge <= 0.20);
 });
 test('no baseline → no candidates', () => {
   assert.strictEqual(winProbCandidates(liveMatch(), null, opts).length, 0);
@@ -162,14 +186,24 @@ test('past the minute cap → no candidates', () => {
   assert.strictEqual(winProbCandidates(liveMatch({ minute: 88 }), baseline, opts).length, 0);
 });
 test('short/no-edge price → no candidate for that outcome', () => {
-  // home at 2.0 implies 0.5 >> model 0.28 → negative edge, filtered.
-  const c = winProbCandidates(liveMatch({ odds: [{ bookmaker: 'x', market: 'h2h', home_odds: 2.0, draw_odds: 3.4, away_odds: 1.9 }] }), baseline, opts);
+  // home at 1.40 implies 0.714 >> model 0.593 → negative edge, filtered. The
+  // price is INSIDE the band, so this still tests the EV gate and not the
+  // ceiling standing in front of it.
+  const c = winProbCandidates(liveMatch({ odds: [{ bookmaker: 'x', market: 'h2h', home_odds: 1.40, draw_odds: 3.20, away_odds: 6.50 }] }), baseline, opts);
   assert.ok(!c.find(x => x.outcome === 'home'));
+  const census = { overPriceCeiling: 0, belowEv: 0, aboveMaxEdge: 0 };
+  winProbCandidates(liveMatch({ odds: [{ bookmaker: 'x', market: 'h2h', home_odds: 1.40, draw_odds: 3.20, away_odds: 6.50 }] }), baseline, { ...opts, census });
+  assert.strictEqual(census.belowEv > 0, true, 'declined on EV');
+  assert.strictEqual(census.overPriceCeiling, 2, 'the 3.20 draw and the 6.50 away are both over the ceiling');
 });
 test('implausibly generous price is capped out (miscalibration guard)', () => {
-  // home at 20.0 → edge ~4.6, above maxEdge → rejected.
-  const c = winProbCandidates(liveMatch({ odds: [{ bookmaker: 'x', market: 'h2h', home_odds: 20.0, draw_odds: 3.4, away_odds: 1.9 }] }), baseline, opts);
-  assert.ok(!c.find(x => x.outcome === 'home'));
+  // home at 20.0 → edge ~10.9, above maxEdge. With the ceiling lifted it is
+  // maxEdge that rejects it, which is the guard this case is about.
+  const wild = { odds: [{ bookmaker: 'x', market: 'h2h', home_odds: 20.0, draw_odds: 3.20, away_odds: 6.50 }] };
+  assert.ok(!winProbCandidates(liveMatch(wild), baseline, opts).find(x => x.outcome === 'home'));
+  const census = { overPriceCeiling: 0, belowEv: 0, aboveMaxEdge: 0 };
+  winProbCandidates(liveMatch(wild), baseline, { ...opts, maxOdds: 99, census });
+  assert.strictEqual(census.aboveMaxEdge, 1, 'INPLAY_MAX_EDGE is what rejects it');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

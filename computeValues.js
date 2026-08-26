@@ -118,7 +118,7 @@ const MAX_PLAUSIBLE_EDGE = parseFloat(process.env.MAX_PLAUSIBLE_EDGE || '0.30');
 // Skip re-signal if same odds seen within this window (avoid spam)
 const SIGNAL_DEDUP_MINUTES = parseInt(process.env.SIGNAL_DEDUP_MINUTES || '60', 10);
 
-async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
+async function fetchMatchesForComputation(supabase, statuses = ['scheduled'], opts = {}) {
   // Pre-match engine: scheduled only. In-play matches are handled by
   // computeInplayValues.js so their signals are tagged phase='inplay' and kept
   // out of the CLV-tracked pre-match performance summary. (Was previously
@@ -152,7 +152,15 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled']) {
   // rejects with a bare 400 before PostgREST sees it. Odds inside the
   // freshness window are one slate's worth, so fetching them all and
   // intersecting here costs at most a page or two of rows we discard.
-  const freshCutoff = new Date(Date.now() - ODDS_MAX_AGE_HOURS * 3_600_000).toISOString();
+  // The freshness window is an ARGUMENT, because the two engines that call this
+  // disagree about what a current price is and both are right: a pre-match
+  // market has not started moving, so 24 hours of it is one market, while a
+  // live market at minute 70 has nothing to do with the price it opened at.
+  // computeInplayValues.js passes minutes; the pre-match default is unchanged.
+  const maxAgeMs = Number.isFinite(opts.oddsMaxAgeMinutes)
+    ? opts.oddsMaxAgeMinutes * 60_000
+    : ODDS_MAX_AGE_HOURS * 3_600_000;
+  const freshCutoff = new Date(Date.now() - maxAgeMs).toISOString();
   const oddsData = [];
   const ODDS_PAGE = 1000;
   for (let from = 0; ; from += ODDS_PAGE) {

@@ -191,5 +191,45 @@ test('no goals market → empty', () => {
   assert.strictEqual(extractLiveTotals([{ name: 'Match Winner', values: [] }]).length, 0);
 });
 
+// ── the in-play price ceiling (lib/inplay.INPLAY_MAX_ODDS) ───────────────────
+// Every pre-match signal path has an odds band and the three in-play stages had
+// none, while liveWinProb advances a FROZEN pre-match lambda and so carries a
+// favourite-longshot bias that grows with price. The measurement is in
+// lib/inplay.js. These pin the guard, NOT the number: read the constant.
+console.log('in-play price ceiling');
+test('the ceiling is the pre-match box\'s own PRIME_ODDS_MAX, not a second number', () => {
+  const { THRESHOLDS } = require('./lib/signalTier');
+  assert.strictEqual(inplay.INPLAY_MAX_ODDS, THRESHOLDS.PRIME_ODDS_MAX);
+});
+test('isBackablePrice fails closed on a missing or nonsense price', () => {
+  for (const bad of [null, undefined, NaN, 'x', 0, 1, -2]) {
+    assert.ok(!inplay.isBackablePrice(bad), `${bad} must not be backable`);
+  }
+  assert.ok(inplay.isBackablePrice(2.5));
+});
+test('the ceiling is exclusive at the box boundary', () => {
+  assert.ok(inplay.isBackablePrice(inplay.INPLAY_MAX_ODDS - 0.01));
+  assert.ok(!inplay.isBackablePrice(inplay.INPLAY_MAX_ODDS));
+});
+test('the sniper declines a longshot Over that clears every other gate', () => {
+  // Over 2.5 @ 6.00 is edge ~0.072 — inside the EV band, inside maxEdge, and
+  // rejected on PRICE alone. Raising the ceiling brings it straight back, which
+  // is what says the ceiling is the thing rejecting it.
+  const onlyLongshot = liveMatch({
+    odds: [{ market: 'totals', market_line: 2.5, bookmaker: 'live', home_odds: 6.00, away_odds: 1.12 }],
+  });
+  assert.strictEqual(sniperCandidates(onlyLongshot, baseline, opts).length, 0);
+  const lifted = sniperCandidates(onlyLongshot, baseline, { ...opts, maxOdds: 99 });
+  assert.strictEqual(lifted.length, 1);
+  assert.strictEqual(lifted[0].market_line, 2.5);
+  assert.ok(lifted[0].detected_edge >= 0.02 && lifted[0].detected_edge <= 0.20);
+});
+test('a short Over is untouched by the ceiling', () => {
+  const c = sniperCandidates(liveMatch(), baseline, opts);
+  assert.strictEqual(c.length, 1);
+  assert.strictEqual(c[0].market_line, 1.5);
+  assert.ok(c[0].detected_odds < inplay.INPLAY_MAX_ODDS);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

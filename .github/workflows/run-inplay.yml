@@ -52,6 +52,14 @@ jobs:
       TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
       TELEGRAM_INPLAY_CHAT_ID:   ${{ secrets.TELEGRAM_INPLAY_CHAT_ID }}
+      # Self-polling. LOOP_MINUTES must EXCEED the gap GitHub actually
+      # delivers (median ~35m on this repo) so a fresh tick lands while this
+      # loop is still running and GitHub holds it as the single pending run —
+      # coverage closes up instead of gapping. PASS_INTERVAL is the real
+      # cadence. The Odds API step is metered and keeps its own slower clock.
+      INPLAY_LOOP_MINUTES:            '50'
+      INPLAY_PASS_INTERVAL_SECONDS:   '60'
+      INPLAY_ODDS_API_INTERVAL_SECONDS: '600'
 
     steps:
       - name: Checkout
@@ -67,23 +75,37 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Ingest live odds + match state
-        run: node ingestLiveOdds.js
+      # THE SIX STEPS THAT USED TO BE HERE ARE NOW ONE LOOP. They run in the
+      # same order, as the same scripts, unchanged — runInplayLoop.js spawns
+      # them — but repeatedly for INPLAY_LOOP_MINUTES rather than once per
+      # GitHub tick. The cron above asks for twelve ticks an hour and GitHub
+      # delivered about 1.3 on 26 Aug; see that file's header for the measured
+      # gaps and for the match it cost. Raise INPLAY_LOOP_MINUTES, not the
+      # cron, if holes reappear.
+      #
+      # `timeout-minutes` MUST stay above INPLAY_LOOP_MINUTES: the loop stops
+      # itself before a pass would overrun its own budget, and being killed is
+      # not the same as stopping — a killed run prints no summary, which is how
+      # this repo has already lost a fortnight of team statistics.
+      - name: In-play loop (live odds → values → series → post)
+        timeout-minutes: 55
+        run: node runInplayLoop.js
 
-      - name: Compute in-play values
-        run: node computeInplayValues.js
-
-      - name: Ingest live odds — The Odds API (multi-book, h2h)
-        continue-on-error: true
-        run: node ingestOddsApi.js --inplay
-
-      - name: Fetch live match statistics (possession/shots/xG)
-        continue-on-error: true
-        run: node fetchLiveStats.js
-
-      - name: Capture in-play market series (for the live chart)
-        continue-on-error: true
-        run: node captureInplaySeries.js
-
-      - name: Post in-play signals to Telegram
-        run: node postToX.js
+      # `if: failure()` DOES NOT RUN ON A CANCELLED JOB, and a job killed by a
+      # timeout ends as cancelled rather than failed — the finding engine.yml
+      # already carries. always() covers all three outcomes.
+      - name: Report loop health
+        if: always()
+        run: |
+          OUTCOME='${{ job.status }}'
+          if [ "$OUTCOME" = "success" ]; then
+            echo "[loop] job succeeded"
+            exit 0
+          fi
+          echo "::error::in-play loop ended $OUTCOME — live coverage has a hole"
+          if [ -n "${{ secrets.ALERT_WEBHOOK_URL }}" ]; then
+            printf '{"text":"in-play loop ended %s — run %s"}' \
+              "$OUTCOME" "${{ github.run_id }}" \
+              | curl -sS -X POST -H 'Content-Type: application/json' \
+                     -d @- '${{ secrets.ALERT_WEBHOOK_URL }}' || true
+          fi

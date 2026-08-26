@@ -26,10 +26,15 @@
 
 const { getClient } = require('./lib/supabaseClient');
 const { liveWinProb, goalsOverProb } = require('./lib/inplayWinProb');
+const { INPLAY_ODDS_MAX_AGE_MIN } = require('./lib/inplay');
 
 const DRY = process.argv.includes('--dry-run');
 const MIN_GAP_SECONDS = parseInt(process.env.INPLAY_SERIES_MIN_GAP || '20', 10);
-const ODDS_MAX_AGE_MIN = parseFloat(process.env.INPLAY_ODDS_MAX_AGE_MIN || '10');
+// Shared with computeInplayValues.js. This file has always read 10 minutes and
+// the SIGNAL engine beside it read 24 hours, so the chart and the signals it
+// sits under held two different beliefs about what the live price is. The
+// chart was the correct one; lib/inplay owns the number now.
+const ODDS_MAX_AGE_MIN = INPLAY_ODDS_MAX_AGE_MIN;
 const TOTALS_LINE = 2.5;
 
 /** Median of a numeric array (null when empty). */

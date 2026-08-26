@@ -446,6 +446,220 @@ to declare the constraint, and that `'ELO'` is not. Its first version could not
 go red — it read the revert quoted in 108's own header comment — and the note in
 the file records that, because a ratchet nobody has seen fail is not one.
 
+### The stages had no odds band, and a live price read 24 hours back (26 Aug 2026)
+
+Follow-on from the section above, and it is a different finding: 108 made an
+in-play signal STORABLE, and this is why so few were worth storing.
+**`INPLAY_MAX_EDGE` was rejecting 42% of everything the model produced**, and the
+first report of it named the 24-hour odds window as the cause. That was only ~30
+of those 78 points. **`INPLAY_MAX_EDGE` IS NOT MOVED** — it is the last guard,
+it is correctly catching a miscalibration, and lowering a threshold to make a
+signal appear is the move this repo forbids. Both fixes are on the INPUT.
+
+**THE CHART AND THE SIGNALS BESIDE IT HELD TWO BELIEFS ABOUT THE LIVE PRICE.**
+`captureInplaySeries.js` has read a 10-minute window since it was written;
+`computeInplayValues.fetchLiveMatches` called `fetchMatchesForComputation` with
+no window override and got the pre-match default, `ODDS_MAX_AGE_HOURS = 24`. So
+on a match that had moved, `bestH2hOdds` returned a PRE-MATCH price and the
+"edge" against it was mostly the game state. The chart was the correct one.
+`lib/inplay.INPLAY_ODDS_MAX_AGE_MIN` is the single constant now and both read
+it; the pre-match path is untouched and still reads 24 hours, which is right for
+a market that has not started moving. Replayed over the same 3,798 h2h ticks:
+**72.7% above `INPLAY_MAX_EDGE` at 24 hours, 42.4% at 10 minutes.**
+
+**It does not starve the book-lag stage**, which is the one thing a tighter
+window could break — Stage 1 needs a multi-book pack, not one price. Measured
+over 400 recent live captures: a 10-minute window holds a mean of **10.5
+distinct h2h books and never zero** (24 hours reads 23.17, and the difference is
+the pre-match panel). It is also tighter than `lib/dataQuality`'s own 15-minute
+`maxPriceAgeMinutes`, so nothing surviving the window can then fail that gate on
+age.
+
+**AND EVERY PRE-MATCH PATH HAS AN ODDS BAND WHILE THESE THREE HAD NONE.**
+`liveWinProb` advances a FROZEN pre-match λ by minute and score and never reads
+the live market, which is a textbook favourite–longshot bias — and it is
+monotonic in price. Median model probability over the market's own implied
+probability, same ticks:
+
+    price < 2.0    0.80        price 5-10     1.38
+    price 2-3      1.10        price 10-25    2.40
+    price 3-5      1.06        price 25+      2.47
+
+Above 3.00 the model claims one and a half to two and a half times the market's
+chance. Split by market:
+
+    market   band          ticks   med ratio   above max edge     fires
+    h2h      <= 3.00        1349       0.868      175 (13.0%)       258
+    h2h      >  3.00        2449       1.431     1434 (58.6%)       206
+    totals   <= 3.00         882       0.751      155 (17.6%)       156
+    totals   >  3.00         276       3.491      265 (96.0%)         0
+
+The totals row is the plainest form of it: above 3.00 the sniper has **never
+once** produced a candidate inside the band, only rejects. `lib/inplay`'s
+`INPLAY_MAX_ODDS` applies the ceiling to all three stages and **READS the
+pre-match box's own `PRIME_ODDS_MAX`** rather than declaring a second 3.00 —
+a constant typed twice in this repo drifted inside twenty-four hours once
+already. It removes **1,434 of the 1,609 above-max rejects (89%)** and keeps
+**258 of the 464 in-band candidates (56%)**.
+
+**NO LOWER BOUND, deliberately.** The box's 1.40 floor is a staking rule, not a
+calibration one: under 2.00 the model claims 0.80× the market and produces 52
+above-max ticks in 993. Adding it would cut fires 258 → 164 and the rejects only
+175 → 172 — all cost, no correction.
+
+**THE CEILING IS ON THE CANDIDATE, NEVER INSIDE `bestH2hOdds`.** That map also
+feeds `devigLiveH2h`, which needs all three legs to remove the margin, so
+dropping a leg there would silently de-vig a two-legged 1X2 vector and mis-state
+every `market_prob` on the row. `isBackablePrice` fails closed on an absent or
+non-numeric price, and `engine.inplay.test.js` asserts each surviving leg's
+de-vigged probability still sits BELOW its own `1/odds` — which is only possible
+if the vector was complete.
+
+**AND THE STAGE SAYS WHY IT IS EMPTY.** `winProbCandidates` takes a census
+out-parameter and `winProbStage` prints it, so "over the price ceiling" and
+"over the max edge" are separate counts rather than one silence — they are
+different findings, one saying the model is not calibrated at THIS PRICE and the
+other that it is not calibrated at all. The test suite asserts the CALL SITE
+passes it, because this repo has already shipped a census that was dead for a
+day while its own tests covered it.
+
+**STILL OPEN, AND IT IS THE MODEL'S.** The ceiling contains the bias; it does
+not remove it. `liveWinProb` reading 2.4× the market at 10–25 is a calibration
+defect in the model itself, and correcting it means letting the live market
+inform λ rather than freezing it at kickoff. That is its own change with its own
+measurement, and nothing in `lib/inplayWinProb.js` was touched here.
+
+### The cron was never the cadence, and the model could not see the match (26 Aug 2026)
+
+Found by tracing one live fixture: **Rapid Vienna v Heart Of Midlothian**,
+Conference League, kicked off 16:45, 1-1 at 84'. Nothing shot for it. Three
+independent causes, and the section above is only the second of them.
+
+**THE ENGINE LOOKED AT A 90-MINUTE MATCH ONCE, WITH FOURTEEN MINUTES LEFT.**
+`run-inplay.yml` declares `2-59/5` — twelve ticks an hour. Consecutive
+scheduled runs delivered on 26 Aug:
+
+    04:04 04:51 05:19 05:53 06:29 07:26 08:07 08:57 09:41 10:16 10:53
+    11:18 11:49 12:19 13:27 14:10 15:50 16:38 18:20
+
+Gaps of **25 to 102 minutes**, about 1.3 ticks an hour — a tenth of what the
+cron asks for. Exactly one landed inside the match (18:20, the 76th minute), so
+`odds` holds a single post-kickoff row for it and `inplay_market_series` a
+single capture. `fetchLineups.js` already recorded the same thing ("a MEDIAN
+GAP OF 34 MINUTES, minimum 17, never once 15"); **do not read a cron expression
+in this project as a statement about how often something happens.**
+
+**`runInplayLoop.js` is that file's fix applied where cadence IS the product.**
+One GitHub tick keeps a process alive for `INPLAY_LOOP_MINUTES` (50) running a
+pass every `INPLAY_PASS_INTERVAL_SECONDS` (60); the cron's only duty is to make
+sure a process is running at all. LOOP_MINUTES **must exceed the delivered
+gap** — at 50 against a median ~35 a fresh tick lands while a loop is still
+running, GitHub holds it as the single pending run (`cancel-in-progress:
+false`) and starts it the instant this one ends, so coverage closes up instead
+of gapping. Raise that, not the cron, if holes reappear.
+
+It **spawns the six existing scripts unchanged**, in the workflow's own order,
+rather than requiring them in-process: each owns its Supabase client, its
+budget guard and its exit code, and one dying must not take the loop with it.
+Nothing about what any of them writes changes. Two guards make the new cadence
+affordable: **The Odds API step keeps its own slower clock**
+(`INPLAY_ODDS_API_INTERVAL_SECONDS`, 600) because it is the only metered one,
+and **a pass is skipped entirely when nothing is in the live window** — 47% of
+all hours — on one indexed count that **fails OPEN**, because a database blip
+must not become a silent in-play outage.
+
+`timeout-minutes` (55) exceeds LOOP_MINUTES and the loop stops itself before a
+pass would overrun its own budget: being killed is not stopping, and a killed
+run prints no summary. Health is reported on `always()`, because a job killed
+by a timeout ends **cancelled, not failed**, and `if: failure()` does not fire
+on it.
+
+**AND THE MODEL COULD NOT SEE THE MATCH.** `liveWinProb` takes
+(λ_home, λ_away, goals, minute) and nothing else, and λ is FROZEN — inverted
+from the pre-match de-vigged 1X2 at `inplay_baseline` capture time (15:58 for
+this fixture, 47 minutes before kickoff) and never revised. Meanwhile
+`fetchLiveStats.js` has been writing **18 statistics per side** into
+`match_stats` every ~90 seconds and **nothing in the signal path read them**:
+the frontend drew possession 61/39 and shots 11/7 on the match page, beside a
+probability that had never seen either.
+
+`lib/inplayState.js` is where live state now enters, and it moves **exactly one
+thing**, because exactly one thing is measured.
+
+**A SENDING-OFF, AND THE NUMBER IS THE CORPUS'S.** Over `match_results`: 10,215
+matches carrying exactly one red card and a half-time score, against 64,294
+with none. Second-half goals only (FT − HT), each compared with the
+**same-half-time-margin** baseline so a side already chasing is not counted as
+evidence:
+
+    ten-man side     0.4973 observed / 0.8050 expected   = x0.6178
+    eleven-man side  1.0604 observed / 0.6620 expected   = x1.6018
+
+Stable across game state, which is what says it is the card and not the
+scoreline — the ten-man multiplier reads 0.544 / 0.624 / 0.655 for a side
+ahead / level / behind at the break, and the eleven-man 1.747 / 1.604 / 1.517.
+A card therefore RAISES the expected total slightly (1.6018 outweighs 0.6178),
+which is what the raw record shows, so the sniper prices it through the same
+multipliers.
+
+**IT IS A FLOOR, NOT A POINT ESTIMATE.** HR/AR are whole-match with no minute,
+so a card shown in the 89th counts identically to one in the 20th and dilutes
+the average toward 1 — the true effect from the moment of the card is LARGER.
+Using them unrounded is already the conservative direction; do not round toward
+no effect again on top of that, and do not inflate them to guess at the
+undiluted value either. Re-measure with event timings if it ever needs to be
+exact. A differential of two or more is priced **as one card** (553 matches in
+75,875, not separately measured) rather than compounding a multiplier past its
+evidence.
+
+**POSSESSION, SHOTS AND CORNERS MOVE NO NUMBER, DELIBERATELY.** There is no
+measurement in this repo for what a possession share is worth in goals, and
+inventing one would be a second unmeasured model priced as evidence — the
+failure `model_calibration` and the publication gate both exist to prevent.
+They are read, carried and printed per match in the run log, so a reader and
+the model finally look at the same object.
+
+**EVERYTHING FAILS CLOSED.** No `match_stats` row, a feed that does not report
+`Red Cards`, an even count, or a non-finite λ all leave the pair exactly as the
+baseline froze it — the behaviour before this existed. The join is on
+`matches.external_id`, NOT `matches.id`: `match_stats` keys on the
+API-Football fixture id, and joining on the wrong one returns an empty map that
+looks exactly like a feed with no stats.
+
+**`Number(null)` IS 0 AND 0 IS FINITE**, so `Number.isFinite(Number(x))` files
+a null λ as a real zero — a team that cannot score, which the Poisson grid
+prices happily. The frontend bans that shape with a lint rule and this repo has
+none, so `lib/inplayState.num` is explicit. Caught by this module's own test
+before it ran anywhere.
+
+**Replayed against the fixture that found all three**, with production's own
+row (76', 1-0, `apifootball_live` 1.166 / 5.500 / 23.000, the real
+`match_stats` payload):
+
+    live state read   reds 0-0 · shots 11-7 · poss 61%
+    candidate         home @ 1.166, INPLAY_DIXON_COLES, phase=inplay
+    census            2 over the price ceiling, 0 under EV, 0 over max edge
+    with a red card   no candidate, and cardAdjusted=1
+
+Under the old code that row was rejected at a fake **+48.2%** edge and the log
+said `0 candidate(s)`.
+
+`engine.inplaystate.test.js` and `engine.inplayloop.test.js` are the ratchets.
+The loop suite pins the step ORDER (a chart must not record a tick the signals
+never saw), that LOOP_MINUTES exceeds the delivered gap, and that
+`timeout-minutes` exceeds LOOP_MINUTES — read out of the workflow YAML, so
+editing one without the other fails a test.
+
+**STILL OPEN.** `[oddsApi] EXPECTED a sport key and did not find one: ucl,
+uecl` — the Champions and Conference Leagues have no Odds API mapping, so the
+only live price on a European tie is the single synthetic `apifootball_live`
+book and Stage 1 (book-lag, multi-book) can never fire on one. And
+`matches.status = 'live'` **is** being written now, on this fixture with a
+minute and a scoreline; several notes in eve-frontend's CLAUDE.md still say no
+row has ever carried it.
+
+
+
 **Why they must be separate.** The pre-match headline metric is CLV
 (`ln(detected/closing)`), where "closing" is the price at kickoff. *In-play,
 the line has already closed* — CLV is undefined. So in-play signals are tagged
