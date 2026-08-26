@@ -11,7 +11,7 @@
 const assert = require('assert');
 const {
   classifyTier, categoryFor, isPrime,
-  LABELS, BAND_MIN, bandFor, isBacked,
+  LABELS, BAND_MIN, bandFor, isBacked, rungFor, capAtWatch,
   THRESHOLDS,
 } = require('./lib/signalTier');
 
@@ -23,8 +23,11 @@ function test(n, f) {
 
 /* ── The conviction ladder ─────────────────────────────────────────────── */
 
-test('names the five rungs, strongest first, and nothing else', () => {
-  assert.deepStrictEqual([...LABELS], ['PRIME', 'WATCH', 'SLIGHT', 'TRACE', 'NIL']);
+test('names the six rungs, strongest first, and nothing else', () => {
+  // EDGE joined on 26 Aug 2026. It is the only rung here that is NOT a score
+  // band — it is a BOX rung, which is why it has no BAND_MIN entry.
+  assert.deepStrictEqual([...LABELS], ['PRIME', 'EDGE', 'WATCH', 'SLIGHT', 'TRACE', 'NIL']);
+  assert.strictEqual(BAND_MIN.EDGE, undefined, 'EDGE is a box rung, not a score band');
 });
 
 test('carries none of the eligibility ladder’s words', () => {
@@ -39,12 +42,14 @@ test('carries none of the eligibility ladder’s words', () => {
   }
 });
 
-test('bands at 10 / 23 / 41 / 65, every one a round sigma', () => {
+test('bands at 10 / 23 / 41 / 60 — and 60 is CHOSEN, not derived', () => {
   assert.strictEqual(bandFor(99), 'PRIME');
-  assert.strictEqual(bandFor(88), 'PRIME');
-  assert.strictEqual(bandFor(87), 'PRIME');
-  assert.strictEqual(bandFor(65), 'PRIME');
-  assert.strictEqual(bandFor(64), 'WATCH');
+  assert.strictEqual(bandFor(60), 'PRIME');
+  // MOVED 65 -> 60 on 26 Aug 2026. This assertion pinned 65 and had to fail:
+  // the score no longer SELECTS, it only demotes, so the line stopped needing
+  // to sit on a whole error bar. 12 of 25 in-box rows clear 60; at 65 it was a
+  // handful.
+  assert.strictEqual(bandFor(59), 'WATCH');
   assert.strictEqual(bandFor(41), 'WATCH');
   assert.strictEqual(bandFor(40), 'SLIGHT');
   assert.strictEqual(bandFor(23), 'SLIGHT');
@@ -52,25 +57,64 @@ test('bands at 10 / 23 / 41 / 65, every one a round sigma', () => {
   assert.strictEqual(bandFor(10), 'TRACE');
   assert.strictEqual(bandFor(9), 'NIL');
   assert.strictEqual(bandFor(0), 'NIL');
-  // 65 is still the selection boundary BY CONSTRUCTION, and since 21 Aug 2026
-  // it belongs to PRIME again — the 2σ rung above it named a band no row has
-  // ever occupied. isBacked() reads the cutoff, which is why the relabel moved
-  // no row: same 65, different word.
-  assert.strictEqual(BAND_MIN.PRIME, 65);
+  assert.strictEqual(BAND_MIN.PRIME, 60);
   assert.strictEqual(BAND_MIN.STRONG, undefined);
-  for (let mxs = 0; mxs <= 100; mxs++) {
-    assert.strictEqual(isBacked(mxs), mxs >= 65, `mxs ${mxs}`);
+});
+
+test('the box picks the rung and the score can only demote', () => {
+  // A perfect score outside the box buys nothing.
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.049, mxs: 99 }), 'WATCH');
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.15,  mxs: 99 }), 'WATCH');
+  assert.strictEqual(rungFor({ odds: 3.50, edge: 0.06,  mxs: 99 }), 'WATCH');
+  // A 7-9.9% row is never PRIME, however it scores.
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.08, mxs: 99 }), 'EDGE');
+  // Demotion inside the PRIME box.
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 60 }), 'PRIME');
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 59 }), 'EDGE');
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 40 }), 'SLIGHT');
+  // No score is not a low score.
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: null }), null);
+  // The cap that text-sorting gets wrong: 'PRIME' < 'WATCH' alphabetically.
+  assert.strictEqual(capAtWatch('PRIME'), 'WATCH');
+  assert.strictEqual(capAtWatch('SLIGHT'), 'SLIGHT');
+});
+
+test('rungFor is monotonic in score and never promotes across the box', () => {
+  // Walk every score at four price/edge points. The rung may only weaken as the
+  // score falls, and a row outside the box may never reach a backed rung.
+  const order = ['NIL', 'TRACE', 'SLIGHT', 'WATCH', 'EDGE', 'PRIME'];
+  for (const [odds, edge] of [[2.00, 0.06], [2.00, 0.08], [2.00, 0.04], [3.50, 0.06]]) {
+    let prev = -1;
+    for (let mxs = 0; mxs <= 100; mxs++) {
+      const rung = rungFor({ odds, edge, mxs });
+      const rank = order.indexOf(rung);
+      assert.ok(rank >= prev, `rung weakened as score rose at ${odds}/${edge}/${mxs}`);
+      prev = rank;
+      const inPrimeBox = edge >= 0.05 && edge < 0.07 && odds >= 1.40 && odds < 3.00;
+      const inEdgeBox  = edge >= 0.07 && edge < 0.10 && odds >= 1.40 && odds < 3.00;
+      if (!inPrimeBox && !inEdgeBox) {
+        assert.ok(rung !== 'PRIME' && rung !== 'EDGE',
+          `out-of-box row reached ${rung} at score ${mxs}`);
+      }
+      if (!inPrimeBox) assert.notStrictEqual(rung, 'PRIME', `only the PRIME box may be PRIME`);
+    }
   }
 });
 
-test('backed means at or above the 1 sigma line, not the top rung', () => {
-  // The bug this pins: `bandFor(mxs) === 'PRIME'` after the re-cut would have
-  // moved every backed check from 65 to 88 without looking like a threshold
-  // change — including the Telegram broadcast gate.
-  assert.strictEqual(isBacked(88), true);
-  assert.strictEqual(isBacked(65), true);
-  assert.strictEqual(isBacked(64), false);
-  assert.strictEqual(isBacked(null), false);
+test('isBacked takes a ROW now, and a bare score is silently false', () => {
+  // THE SIGNATURE CHANGED on 26 Aug 2026 and this is the failure mode: a bare
+  // number destructures to undefined odds/edge, rungFor returns null, and this
+  // returns false WITHOUT THROWING. A missed call site does not announce
+  // itself — the broadcast channel just goes quiet.
+  assert.strictEqual(isBacked(99), false, 'a bare score must not read as backed');
+  assert.strictEqual(isBacked(60), false);
+
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: 60 }), true,  'PRIME');
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: 41 }), true,  'demoted to EDGE');
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.08, mxs: 41 }), true,  'EDGE band');
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: 40 }), false, 'below WATCH');
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.04, mxs: 99 }), false, 'outside the box');
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: null }), false, 'unscored');
 });
 
 test('an unscorable row is null, never the bottom rung', () => {
@@ -82,10 +126,17 @@ test('an unscorable row is null, never the bottom rung', () => {
   assert.strictEqual(bandFor(0), 'NIL', 'a genuine zero survives as a value');
 });
 
-test('only PRIME is backed', () => {
-  assert.strictEqual(isBacked(88), true);
-  assert.strictEqual(isBacked(64), false);
-  assert.strictEqual(isBacked(null), false);
+test('two rungs are backed now, and only those two', () => {
+  const backed = ['PRIME', 'EDGE'];
+  for (const rung of LABELS) {
+    const shouldBack = backed.includes(rung);
+    assert.strictEqual(
+      rung === 'PRIME' ? isBacked({ odds: 2.00, edge: 0.06, mxs: 60 })
+      : rung === 'EDGE' ? isBacked({ odds: 2.00, edge: 0.08, mxs: 60 })
+      : false,
+      shouldBack, `${rung}`);
+  }
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: null }), false);
 });
 
 /* ── The eligibility ladder, unchanged ─────────────────────────────────── */
@@ -148,7 +199,10 @@ test('the two ladders can disagree, and that is a fact not a bug', () => {
   // conviction rung and lets the eligibility ladder decide what is offered.
   const row = { odds: 4.50, edge: 0.09 };
   assert.strictEqual(isPrime(row), false, 'not suggested');
-  assert.strictEqual(isBacked(80), true, 'reads strongly all the same');
+  assert.strictEqual(bandFor(80), 'PRIME', 'the SCORE still reads strongly');
+  // But the printed rung is capped, because the box declines the price.
+  assert.strictEqual(rungFor({ ...row, mxs: 80 }), 'WATCH');
+  assert.strictEqual(isBacked({ ...row, mxs: 80 }), false);
 });
 
 test('neither ladder is reachable from the other', () => {
@@ -158,34 +212,89 @@ test('neither ladder is reachable from the other', () => {
 });
 
 
-/* ── The 3% floor, and that it is ONE constant ─────────────────────────── */
+/* ── The two backed bands, and that they are ONE set of constants ──────── */
 
-test('suggests at exactly 3.0% and declines a hair under it', () => {
-  // Lowered 4% -> 3% by owner ruling, 22 Aug 2026. The band this admits —
-  // 3-4% at odds 1.40-3.00 — returns +6.26% over 38 settled bets, z 0.35:
-  // positive and indistinguishable from zero, which was the cost stated when
-  // the ruling was made. The band above it is +15.71% over 143, z 1.64.
-  assert.strictEqual(THRESHOLDS.PRIME_EDGE_MIN, 0.03);
-  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.0300 }).suggested, true);
-  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.0299 }).suggested, false);
-  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.0350 }).suggested, true);
-  // The cap did not move with the floor.
-  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.0999 }).suggested, true);
-  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.1001 }).suggested, false);
+test('two backed bands, and the seam between them is exact', () => {
+  // MOVED 3% -> 5% on 26 Aug 2026. The band this closes is not merely unproven:
+  // inside the price box everything below 5% returns -11.88% at clustered
+  // z -1.51 over 163 fixtures, and 4.0-4.9% alone is -19.36% and has been
+  // negative in every period since June.
+  assert.strictEqual(THRESHOLDS.PRIME_EDGE_MIN, 0.05);
+  assert.strictEqual(THRESHOLDS.PRIME_EDGE_MAX, 0.07);
+  assert.strictEqual(THRESHOLDS.EDGE_EDGE_MIN,  0.07);
+  assert.strictEqual(THRESHOLDS.EDGE_EDGE_MAX,  0.10);
+  // No gap and no overlap: PRIME's cap IS EDGE's floor.
+  assert.strictEqual(THRESHOLDS.PRIME_EDGE_MAX, THRESHOLDS.EDGE_EDGE_MIN);
+
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.0499 }).tier, 'value');
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.0500 }).tier, 'prime');
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.0699 }).tier, 'prime');
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.0700 }).tier, 'edge');
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.0999 }).tier, 'edge');
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.1000 }).tier, 'value');
+
+  // Both backed bands are SUGGESTED — both go to the channel.
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.06 }).suggested, true);
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.08 }).suggested, true);
+  // Only PRIME is TRACKED — only PRIME feeds the headline record.
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.06 }).tracked, true);
+  assert.strictEqual(classifyTier({ odds: 2.00, edge: 0.08 }).tracked, false);
+
   // And the PRICE leg is unchanged in both directions.
-  assert.strictEqual(classifyTier({ odds: 1.39, edge: 0.05 }).suggested, false);
-  assert.strictEqual(classifyTier({ odds: 3.00, edge: 0.05 }).suggested, false);
+  assert.strictEqual(classifyTier({ odds: 1.39, edge: 0.06 }).suggested, false);
+  assert.strictEqual(classifyTier({ odds: 3.00, edge: 0.06 }).suggested, false);
 });
 
-test('the floor the ENGINE applies is the one f(edge) reads', () => {
-  // `lib/maxedge.js` reads THRESHOLDS.PRIME_EDGE_MIN for its plateau — that
-  // direction, because maxedge already requires signalTier and the reverse is
-  // a cycle. Typed separately they drifted within twenty-four hours, so this
-  // asserts the wiring rather than the number.
+test('NOTABLE is gone and `notable` reads the backed band', () => {
+  // It was a separately-chosen 6-10% range. It now points at the SAME span the
+  // product backs at short prices, so "best of the longshots" means the band
+  // with the measured edge rather than a range nobody re-derived.
+  assert.strictEqual(THRESHOLDS.NOTABLE_EDGE_MIN, undefined);
+  assert.strictEqual(THRESHOLDS.NOTABLE_EDGE_MAX, undefined);
+  assert.strictEqual(classifyTier({ odds: 4.00, edge: 0.049 }).notable, false);
+  assert.strictEqual(classifyTier({ odds: 4.00, edge: 0.05  }).notable, true);
+  assert.strictEqual(classifyTier({ odds: 4.00, edge: 0.099 }).notable, true);
+  assert.strictEqual(classifyTier({ odds: 4.00, edge: 0.10  }).notable, false);
+  // Still never suggested and never tracked, whatever `notable` says.
+  assert.strictEqual(classifyTier({ odds: 4.00, edge: 0.06 }).suggested, false);
+  assert.strictEqual(classifyTier({ odds: 4.00, edge: 0.06 }).tracked, false);
+});
+
+test('EDGE is broadcast but never counted in the headline record', () => {
+  // The asymmetry this file exists to pin. If EDGE ever stops being shown as
+  // prominently as PRIME, flip `tracked` back to true rather than keeping the
+  // flattering number — see performance_band.headline_scope_note.
+  const edge = classifyTier({ odds: 2.00, edge: 0.08 });
+  assert.strictEqual(edge.suggested, true,  'broadcast');
+  assert.strictEqual(edge.tracked,   false, 'not in the headline record');
+  assert.strictEqual(categoryFor({ odds: 2.00, edge: 0.08 }), 'edge');
+});
+
+test('every seam of f(edge) is DERIVED from the box, not retyped', () => {
+  // `lib/maxedge.js` reads THRESHOLDS for all three seams — that direction,
+  // because maxedge already requires signalTier and the reverse is a cycle.
+  // Typed separately they drifted within twenty-four hours on 22 Aug, so this
+  // asserts the wiring rather than the numbers.
   const { EDGE_EFFICIENCY, edgeEfficiency } = require('./lib/maxedge');
-  assert.strictEqual(EDGE_EFFICIENCY.plateauFrom, THRESHOLDS.PRIME_EDGE_MIN);
-  // At the floor the score is undecayed and the box suggests: the two agree
-  // at the same point, which is the whole reason they share a constant.
+  assert.strictEqual(EDGE_EFFICIENCY.rampTo,     THRESHOLDS.PRIME_EDGE_MIN);
+  assert.strictEqual(EDGE_EFFICIENCY.peakTo,     THRESHOLDS.PRIME_EDGE_MAX);
+  assert.strictEqual(EDGE_EFFICIENCY.edgeBandTo, THRESHOLDS.EDGE_EDGE_MAX);
+  assert.strictEqual(EDGE_EFFICIENCY.plateauFrom, undefined, 'renamed to rampTo');
+
+  // The three cliffs sit exactly on the box boundaries. r4 because the ramp is
+  // floating-point: f(0.04) lands on 0.6799999999999999.
+  const r4 = x => Math.round(x * 1e4) / 1e4;
+  assert.strictEqual(r4(edgeEfficiency(0.04)),   0.68, 'the runbook value');
+  assert.strictEqual(r4(edgeEfficiency(0.0499)), 0.7493, 'ramp tops at 0.75');
+  assert.strictEqual(edgeEfficiency(0.05),   1);
+  assert.strictEqual(edgeEfficiency(0.0699), 1);
+  assert.strictEqual(edgeEfficiency(0.07),   0.85);
+  assert.strictEqual(edgeEfficiency(0.0999), 0.85);
+  // A decay, never a boost.
+  assert.ok(edgeEfficiency(0.049) < 1);
+  assert.strictEqual(edgeEfficiency(0.15), EDGE_EFFICIENCY.trap);
+  // At the floor the score is undecayed and the box suggests: the two agree at
+  // the same point, which is the whole reason they share a constant.
   assert.strictEqual(edgeEfficiency(THRESHOLDS.PRIME_EDGE_MIN), 1);
   assert.strictEqual(
     classifyTier({ odds: 2.00, edge: THRESHOLDS.PRIME_EDGE_MIN }).suggested, true);

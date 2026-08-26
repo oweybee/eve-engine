@@ -8,7 +8,7 @@
 const assert = require('assert');
 const inplay = require('./lib/inplay');
 const { buildMessage, isInplay, isSuggested, isBroadcastable, bandOf, chatIdForSignal } = require('./postToX');
-const { classifyTier, dedupeConflicts, bandFor, isBacked } = require('./lib/signalTier');
+const { classifyTier, dedupeConflicts, bandFor, isBacked, rungFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
 const { extractLiveH2h } = require('./ingestLiveOdds');
 const elo = require('./lib/elo');
@@ -115,20 +115,23 @@ test('prematch unbacked edge (odds 2.5 / edge 2.5%) → info-only header, not su
   assert.strictEqual(isSuggested(prematchSignal), false);
 });
 
-// THE FLOOR IS 3% AND IT IS INCLUSIVE — the boundary itself, pinned.
+// THE FLOOR IS 5% AND IT IS INCLUSIVE, and there are TWO backed bands now.
 //
-// It was 4% until 22 Aug 2026, and the day the plateau moved to 3% without it
-// the two ladders disagreed in [3%, 4%): the score kept its full value (f = 1
-// on the plateau) while this box declined the row, and the homepage drew
-// `◆ PRIME · 65` under a header reading NOTHING BACKED TODAY. They read ONE
-// constant now — `EDGE_EFFICIENCY.plateauFrom` is `THRESHOLDS.PRIME_EDGE_MIN`
-// — so this asserts the number the whole product turns on.
-test('the eligibility box admits 3% and refuses just under it', () => {
+// It was 3% from 22 Aug to 26 Aug 2026. The band that closed is not merely
+// unproven: inside the price box everything below 5% returns -11.88% at
+// clustered z -1.51 over 163 fixtures, and 4.0-4.9% alone is -19.36% and has
+// been negative in every period since June. The plateau of f(edge) reads
+// `THRESHOLDS.PRIME_EDGE_MIN`, so the two ladders still meet at ONE constant.
+test('the eligibility box admits 5% and refuses just under it', () => {
   const at = (edge) => isSuggested({ ...prematchSignal, detected_edge: edge });
-  assert.strictEqual(at(0.03), true, '3% is ON the floor and suggested');
-  assert.strictEqual(at(0.0299), false, 'just under the floor is not');
-  assert.strictEqual(at(0.099), true, 'still open just under the 10% cap');
+  assert.strictEqual(at(0.05), true, '5% is ON the floor and suggested');
+  assert.strictEqual(at(0.0499), false, 'just under the floor is not');
+  assert.strictEqual(at(0.099), true, 'the EDGE band is suggested too');
   assert.strictEqual(at(0.10), false, 'and closed at the cap');
+  // The seam between the two backed bands, which must have no gap and no overlap.
+  const tier = (edge) => classifyTier({ ...prematchSignal, detected_edge: edge }).tier;
+  assert.strictEqual(tier(0.0699), 'prime');
+  assert.strictEqual(tier(0.07),   'edge');
 });
 
 // Tier classifier + PRIME broadcast policy -----------------------------------
@@ -154,27 +157,42 @@ const backedSignal = {
 };
 const longshotSignal = { ...prematchSignal, detected_odds: 5.0, detected_edge: 0.07 };
 
-test('prime box + a backed score → BACKED header, broadcastable', () => {
-  assert.strictEqual(classifyTier(backedSignal).tier, 'prime');
+// `backedSignal` carries a 9% edge, which since 26 Aug 2026 is the EDGE box —
+// backed and broadcast, but never PRIME however it scores. This is its PRIME
+// sibling: the same row moved into the 5.0-6.9% band.
+const primeSignal = { ...backedSignal, detected_edge: 0.06, mxs: 76, mxs_band: 'PRIME' };
+
+test('the PRIME box + a backed score → PRIME SIGNAL header, broadcastable', () => {
+  assert.strictEqual(classifyTier(primeSignal).tier, 'prime');
+  assert.strictEqual(isSuggested(primeSignal), true);
+  assert.strictEqual(isBroadcastable(primeSignal), true);
+  const m = buildMessage(primeSignal);
+  // THE WORD IS EARNED AGAIN. It read `BACKED SIGNAL` from 21 Aug because PRIME
+  // was capped out of the product and naming it would have claimed a rung no row
+  // could reach. PRIME is the 5.0-6.9% box at 60+ now and rows reach it.
+  assert.ok(m.includes('PRIME SIGNAL'), 'header names the rung it earned');
+  assert.ok(!m.includes('EDGE SIGNAL'), 'and never the other backed rung');
+});
+
+test('the EDGE box → EDGE SIGNAL header, and NEVER under PRIME copy', () => {
+  // The rule this pins: an EDGE signal must never go out under PRIME copy. The
+  // two are settled and reported separately (performance_band), so a post that
+  // blurs them creates a record nobody can reconcile.
+  assert.strictEqual(classifyTier(backedSignal).tier, 'edge');
   assert.strictEqual(isSuggested(backedSignal), true);
-  assert.strictEqual(isBroadcastable(backedSignal), true);
+  assert.strictEqual(isBroadcastable(backedSignal), true, 'EDGE is broadcast');
   const m = buildMessage(backedSignal);
-  // NOT "PRIME SIGNAL", and the gate has not moved — both ladders are still
-  // required. The header states what the post is gated ON rather than naming a
-  // rung, and that is deliberate: the rung word has moved twice (STRONG took the
-  // 65 line on 6 Aug, PRIME took it back on 21 Aug) while the gate — `isBacked`
-  // — never moved at all. A header carrying the word goes stale on a re-label;
-  // a header carrying the predicate cannot.
-  assert.ok(m.includes('BACKED SIGNAL'), 'header');
-  // The BAN IS ON THE HEADER, not on the word. `PRIME SIGNAL` was the
-  // eligibility ladder's bucket key wearing a rung's clothes, and it went out
-  // over rows the site badged WATCH. The NOTE may name the rung the row
-  // actually earned — asserted against `bandOf` rather than a literal, so the
-  // next re-label moves this test with the ladder instead of breaking it.
-  assert.ok(!m.includes('PRIME SIGNAL'), 'the header states the gate, never a rung');
-  assert.ok(m.includes(`(${bandOf(backedSignal)})`), 'names the rung it earned');
-  assert.ok(m.includes('backed'), 'backed note');
-  assert.ok(m.includes('76/100'), 'states the score it is claiming');
+  assert.ok(m.includes('EDGE SIGNAL'), 'header');
+  assert.ok(!m.includes('PRIME SIGNAL'), 'NEVER under PRIME copy');
+  // And it discloses that it is outside the headline record — the same
+  // statement performance_band.headline_scope_note carries on the site.
+  assert.ok(m.includes('separately'), 'the scope disclosure travels with the post');
+});
+
+test('EDGE is suggested but NOT tracked — the asymmetry, on a real row', () => {
+  assert.strictEqual(classifyTier(backedSignal).suggested, true);
+  assert.strictEqual(classifyTier(backedSignal).tracked, false);
+  assert.strictEqual(classifyTier(primeSignal).tracked, true);
 });
 
 test('the rung is read from the row, and recomputed when it is absent', () => {
@@ -185,44 +203,38 @@ test('the rung is read from the row, and recomputed when it is absent', () => {
   // here is what broke when the ladder was re-cut: the recomputed rung moved to
   // STRONG while the row's meaning — suggested, and backed — did not change.
   assert.strictEqual(bandOf(unstored), bandFor(scoreSignal(unstored).mxs));
-  assert.strictEqual(isBacked(scoreSignal(unstored).mxs), true);
+  // isBacked takes a ROW since 26 Aug 2026 — a bare score returns false without
+  // throwing, which is how a missed call site silences the channel.
+  assert.strictEqual(isBacked({
+    odds: unstored.detected_odds, edge: unstored.detected_edge,
+    mxs: scoreSignal(unstored).mxs,
+  }), true);
   assert.strictEqual(isBroadcastable(unstored), true);
 });
 
 test('THE BOX AND THE RUNG DO NOT COINCIDE, and that is the point', () => {
-  // odds 2.2 at a 6% edge is well inside the eligibility ladder's profitable
-  // box, and it scores 62 — WATCH. Measured against production on 6 Aug 2026,
-  // 4 of the 10 published prematch signals in the box clear MXS 65; the other
-  // 6 do not. Under the old policy all 10 were broadcast as "PRIME SIGNAL"
-  // while the site badged six of them WATCH. Requiring both is what stops the
-  // word meaning two things, and a quieter channel is the cost of that.
-  // Scored against the de-vigged 0.4400 rather than 1/2.20, this is 83 — BACKED.
-  // Under the old convention the same row scored 62 and was withheld.
-  // That is the change working: the margin was hiding a real disagreement, and 7
-  // of the live board's selections move across the line the same way. The pair
-  // still does not coincide — the point of the test — it just no longer needs a
-  // row this strong to make it.
-  const inBox = { ...backedSignal, detected_edge: 0.06 };
+  // odds 2.2 at a 6% edge is inside the PRIME box and scores well, so both
+  // ladders agree and it is broadcast.
+  const inBox = { ...primeSignal };
   delete inBox.mxs; delete inBox.mxs_band;
   assert.strictEqual(classifyTier(inBox).suggested, true, 'the box suggests it');
-  // THROUGH `isBacked`, NOT AGAINST A LITERAL. The test two above says exactly
-  // this — "pinning 'PRIME' here is what broke when the ladder was re-cut" — and
-  // this line was still pinning 'STRONG', so the 21 Aug re-label broke it. The
-  // claim is that the de-vigged score BACKS the row; the word is incidental.
-  assert.strictEqual(isBacked(scoreSignal(inBox).mxs), true, 'the de-vigged score backs it');
+  assert.strictEqual(isBacked({
+    odds: inBox.detected_odds, edge: inBox.detected_edge,
+    mxs: scoreSignal(inBox).mxs,
+  }), true, 'the de-vigged score backs it');
   assert.strictEqual(isBroadcastable(inBox), true);
 
-  // The divergence itself, which needs a LONGER price than it used to. At 2.20
-  // against a de-vigged 0.44 the whole 4–10% box now clears 65, so the two
-  // ladders agree there; they part company further out, where the same edge is a
-  // smaller probability disagreement. 2.80 at 4.5% scores 63 — WATCH — and is
-  // suggested. That asymmetry is §6.2's argument for leading with the gap
-  // instead of the edge, and de-vigging sharpened it rather than removing it.
+  // THE DIVERGENCE, AND SINCE 26 Aug IT RUNS THE OTHER WAY TOO. A 4.5% edge is
+  // now BELOW the floor: the box declines it whatever it scores, and `rungFor`
+  // caps it at WATCH rather than letting a strong score buy a backed rung. That
+  // is the new guarantee — the box picks the rung and the score can only demote.
   const thin = { ...backedSignal, detected_odds: 2.8, detected_edge: 0.045, market_prob: 0.345 };
   delete thin.mxs; delete thin.mxs_band;
-  assert.strictEqual(classifyTier(thin).suggested, true, 'the box suggests it');
-  assert.strictEqual(bandOf(thin), 'WATCH', 'the score does not back it');
+  assert.strictEqual(classifyTier(thin).suggested, false, 'below the floor, declined');
   assert.strictEqual(isBroadcastable(thin), false);
+  assert.strictEqual(rungFor({
+    odds: 2.8, edge: 0.045, mxs: 99,
+  }), 'WATCH', 'a perfect score outside the box buys nothing');
 });
 
 test('a legacy row is never re-scored under the new convention', () => {
@@ -239,9 +251,22 @@ test('a legacy row is never re-scored under the new convention', () => {
 test('suggested but scored below the backing line is NOT broadcast', () => {
   // This is the case the old policy got wrong: the ladder suggests it, so the
   // channel would have opened with "PRIME SIGNAL" while the site badged WATCH.
-  const watch = { ...backedSignal, mxs: 52, mxs_band: 'WATCH' };
-  assert.strictEqual(isSuggested(watch), true);
-  assert.strictEqual(isBroadcastable(watch), false);
+  // THE LINE DEPENDS ON THE BOX NOW. In the EDGE box the demotion line is WATCH
+  // (41), not 60 — a 52 there is still EDGE and still broadcast. It takes a
+  // score under 41 to drop out of a backed rung entirely.
+  const stillBacked = { ...backedSignal, mxs: 52, mxs_band: 'WATCH' };
+  assert.strictEqual(isSuggested(stillBacked), true);
+  assert.strictEqual(isBroadcastable(stillBacked), true, '52 in the EDGE box is EDGE');
+
+  const watch = { ...backedSignal, mxs: 30, mxs_band: 'SLIGHT' };
+  assert.strictEqual(isSuggested(watch), true, 'the box still suggests it');
+  assert.strictEqual(isBroadcastable(watch), false, 'but the score demoted it out');
+
+  // And in the PRIME box the line is 60: a 52 there is demoted to EDGE, which
+  // is still backed — so the same score means different things in the two boxes.
+  const demoted = { ...primeSignal, mxs: 52, mxs_band: 'WATCH' };
+  assert.strictEqual(rungFor({ odds: 2.2, edge: 0.06, mxs: 52 }), 'EDGE');
+  assert.strictEqual(isBroadcastable(demoted), true);
 });
 
 test('suggested but UNSCORABLE is not broadcast either', () => {
@@ -263,7 +288,11 @@ test('classifier boundaries: 3.00 odds is a longshot, edge <2% hidden, ≥10% no
   assert.strictEqual(classifyTier({ odds: 3.0, edge: 0.06 }).tier, 'longshot');
   assert.strictEqual(classifyTier({ odds: 2.0, edge: 0.015 }).tier, null);
   assert.strictEqual(classifyTier({ odds: 2.0, edge: 0.12 }).tier, 'value');
-  assert.strictEqual(classifyTier({ odds: 1.4, edge: 0.04 }).tier, 'prime');
+  // 1.4 / 4% WAS 'prime' and is 'value' now — 4% is below the 5% floor, and the
+  // 4.0-4.9% band is the one cohort on the board that has consistently lost.
+  assert.strictEqual(classifyTier({ odds: 1.4, edge: 0.04 }).tier, 'value');
+  assert.strictEqual(classifyTier({ odds: 1.4, edge: 0.06 }).tier, 'prime');
+  assert.strictEqual(classifyTier({ odds: 1.4, edge: 0.08 }).tier, 'edge');
 });
 test('dedupeConflicts keeps the highest-edge pick per match/market (no home+away wash)', () => {
   const rows = [
