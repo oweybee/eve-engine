@@ -722,6 +722,32 @@ async function calculatePerformance(supabase) {
   return { prematch, inplay, supermodel };
 }
 
+/**
+ * Refresh the per-band performance record (`performance_band`).
+ *
+ * WHY IT RUNS HERE AND NOT ONLY ON A SCHEDULE. `refresh_performance_by_band()`
+ * was reachable only from a weekly scheduled task, and /performance is a public
+ * page: a settled fixture that landed on Saturday would not reach the band table
+ * until the following week, so the page would state a record that the database
+ * had already superseded. Settlement is the event that changes the answer, so
+ * settlement is where the recompute belongs — the same rule
+ * `calculatePerformance` above already follows for `performance_summary`.
+ *
+ * IT IS INDEPENDENT OF THE ELIGIBILITY LADDER, DELIBERATELY. The function
+ * buckets `value_signals` by EDGE BAND and never reads `tracked`, so it does not
+ * change meaning when the PRIME/EDGE boxes move. That is why it can be wired
+ * ahead of the ladder release rather than with it.
+ *
+ * The argument is left to its default (`p_tracked_from = 2026-08-06`, the
+ * tracked epoch) so the bar is stated in one place — the function — rather than
+ * copied into a caller, which is how the sigma hand-copy failed twice.
+ */
+async function refreshPerformanceBands(supabase) {
+  const { error } = await supabase.rpc('refresh_performance_by_band');
+  if (error) throw new Error(`refreshPerformanceBands: ${error.message}`);
+  console.log('[performance] band table refreshed');
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -758,6 +784,16 @@ async function run() {
     console.error('[results] performance error:', err.message);
   }
 
+  // After performance_summary, because both read the same settled rows and the
+  // band table is the one a public page renders. A failure here must not take
+  // down the run: the summary above is already written and the band table simply
+  // stays at its previous refresh.
+  try {
+    await refreshPerformanceBands(supabase);
+  } catch (err) {
+    console.error('[results] band refresh error:', err.message);
+  }
+
   console.log('[results] done');
 }
 
@@ -765,4 +801,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[results] unhandled:', err); process.exit(1); });
 }
 
-module.exports = { run, calculatePerformance, settlePendingSignals, settleFinishedMatches, reconcileSettledSignals, namesMatch, fixtureOutcome, settleSignal, resultFromGoals };
+module.exports = { run, calculatePerformance, refreshPerformanceBands, settlePendingSignals, settleFinishedMatches, reconcileSettledSignals, namesMatch, fixtureOutcome, settleSignal, resultFromGoals };
