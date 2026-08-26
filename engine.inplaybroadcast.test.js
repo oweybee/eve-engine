@@ -147,6 +147,45 @@ test('the workflow passes BOTH switches', () => {
   assert.ok(/INPLAY_BROADCAST_ENABLED/.test(wf), 'the flag must be in the job env');
   assert.ok(/TELEGRAM_INPLAY_CHAT_ID/.test(wf), 'and the channel id');
 });
+test('a SEPARATE in-play bot token travels with its own chat id', () => {
+  // A bot can only post to a channel it administers, so the token and the chat
+  // are a PAIR. Only one token was ever read, so an owner who made a second bot
+  // for the in-play channel had its token sitting unread while the code posted
+  // with the pre-match bot — a 403, with both secrets looking correctly set.
+  const { postTargetFor } = require('./postToX.js');
+  const two = { token: 'MAIN', chatId: 'C1', inplayChatId: 'C2', inplayToken: 'INPLAY' };
+  assert.deepStrictEqual(postTargetFor(two, { phase: 'inplay' }),   { token: 'INPLAY', chatId: 'C2' });
+  assert.deepStrictEqual(postTargetFor(two, { phase: 'prematch' }), { token: 'MAIN',   chatId: 'C1' });
+});
+test('and ONE bot with two channels still works with no second secret', () => {
+  const { postTargetFor } = require('./postToX.js');
+  const one = { token: 'MAIN', chatId: 'C1', inplayChatId: 'C2', inplayToken: 'MAIN' };
+  assert.deepStrictEqual(postTargetFor(one, { phase: 'inplay' }), { token: 'MAIN', chatId: 'C2' });
+});
+test('getTelegramConfig falls back to the main token when no in-play bot is set', () => {
+  const { getTelegramConfig } = require('./postToX.js');
+  const prev = { ...process.env };
+  try {
+    process.env.TELEGRAM_BOT_TOKEN = 'MAIN';
+    process.env.TELEGRAM_CHAT_ID = 'C1';
+    process.env.TELEGRAM_INPLAY_CHAT_ID = 'C2';
+    delete process.env.TELEGRAM_INPLAY_BOT_TOKEN;
+    assert.strictEqual(getTelegramConfig().inplayToken, 'MAIN');
+    process.env.TELEGRAM_INPLAY_BOT_TOKEN = 'INPLAY';
+    assert.strictEqual(getTelegramConfig().inplayToken, 'INPLAY');
+  } finally {
+    for (const k of ['TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID','TELEGRAM_INPLAY_CHAT_ID','TELEGRAM_INPLAY_BOT_TOKEN']) {
+      if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k];
+    }
+  }
+});
+test('the workflow passes the in-play bot token, or the secret is inert', () => {
+  // The secret existed in the repo for 14 minutes doing nothing because the
+  // workflow did not forward it. A secret nothing reads is indistinguishable
+  // from a secret that is wrong.
+  assert.ok(/TELEGRAM_INPLAY_BOT_TOKEN:\s*\$\{\{\s*secrets\.TELEGRAM_INPLAY_BOT_TOKEN\s*\}\}/.test(wf),
+    'run-inplay.yml must forward secrets.TELEGRAM_INPLAY_BOT_TOKEN');
+});
 test('an in-play post can never reach the PRE-MATCH channel', () => {
   // chatIdForSignal returns the in-play id or null; null skips. A regression
   // here leaks live picks into the main channel, which is the one outcome the

@@ -62,18 +62,47 @@ function getTelegramConfig() {
   const token        = process.env.TELEGRAM_BOT_TOKEN;
   const chatId       = process.env.TELEGRAM_CHAT_ID;
   const inplayChatId = process.env.TELEGRAM_INPLAY_CHAT_ID || null;
+  // THE IN-PLAY CHANNEL MAY HAVE ITS OWN BOT, and until now it could not.
+  // Only one token was ever read, so an owner who created a second bot for the
+  // in-play channel — the natural thing to do, and what the secret name
+  // TELEGRAM_INPLAY_BOT_TOKEN says they did — had its token sitting unread
+  // while the code tried to post with the pre-match bot, which is not an
+  // administrator of that channel. Telegram answers 403 and the channel stays
+  // empty with the secrets looking correctly set.
+  //
+  // Falls back to the main token, so the simpler arrangement (one bot, two
+  // channels) needs no second secret and keeps working untouched.
+  const inplayToken  = process.env.TELEGRAM_INPLAY_BOT_TOKEN || token;
   if (!token || !chatId) return null;
-  return { token, chatId, inplayChatId };
+  return { token, chatId, inplayChatId, inplayToken };
 }
 
 /**
- * Which chat a signal goes to. In-play signals route to the dedicated in-play
- * channel; if that channel isn't configured they are NOT posted (rather than
- * spamming the pre-match channel with live picks). Pre-match → main channel.
+ * Where a signal is posted — the TOKEN AND THE CHAT TOGETHER, deliberately.
+ *
+ * They are a pair: a bot can only post to a channel it administers, so a token
+ * from one bot and a chat id from another is a 403 every time. Returning them
+ * separately is what let the two drift apart in the first place, so there is
+ * one function and it returns both or neither.
+ *
+ * In-play routes to the dedicated channel; with that channel unconfigured the
+ * signal is NOT posted rather than leaking a live pick into the pre-match
+ * feed. Pre-match → the main channel, unchanged.
+ *
+ * @returns {{token:string, chatId:string}|null} null ⇒ do not post
  */
+function postTargetFor(telegram, signal) {
+  if (!telegram) return null;
+  if (signal.phase === 'inplay') {
+    if (!telegram.inplayChatId) return null;
+    return { token: telegram.inplayToken ?? telegram.token, chatId: telegram.inplayChatId };
+  }
+  return { token: telegram.token, chatId: telegram.chatId };
+}
+
+/** Back-compat shim — the chat half of `postTargetFor`. Prefer that. */
 function chatIdForSignal(telegram, signal) {
-  if (signal.phase === 'inplay') return telegram.inplayChatId; // null ⇒ skip
-  return telegram.chatId;
+  return postTargetFor(telegram, signal)?.chatId ?? null;
 }
 
 async function loadPostedIds(supabase) {
@@ -532,7 +561,8 @@ async function run() {
     const away    = signal.match?.away_team?.name ?? '?';
     const message     = buildMessage(signal);
     const messageHash = hashMessage(message);
-    const chatId      = telegram ? chatIdForSignal(telegram, signal) : telegram;
+    const target      = telegram ? postTargetFor(telegram, signal) : telegram;
+    const chatId      = target ? target.chatId : target;
 
     // Broadcast policy: pre-match, we only broadcast what the ladder suggests.
     // The wider edges and the longshots remain visible on the site but are
@@ -571,7 +601,11 @@ async function run() {
     }
 
     try {
-      const res = await telegramPost(telegram.token, chatId, message);
+      // The token that goes with THIS chat — see postTargetFor. Using
+      // telegram.token here would post the in-play channel's message with the
+      // pre-match bot's credentials, which is a 403 the run swallows as a
+      // failed send.
+      const res = await telegramPost(target.token, chatId, message);
       console.log(`[postToX] posted — message id: ${res.message_id}`);
       await markPosted(supabase, signal.id, messageHash, String(res.message_id));
       posted++;
@@ -592,4 +626,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[postToX] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal };
+module.exports = { run, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal, postTargetFor, getTelegramConfig };

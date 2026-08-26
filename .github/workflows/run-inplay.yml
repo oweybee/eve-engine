@@ -52,6 +52,13 @@ jobs:
       TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
       TELEGRAM_INPLAY_CHAT_ID:   ${{ secrets.TELEGRAM_INPLAY_CHAT_ID }}
+      # Optional: a SECOND bot dedicated to the in-play channel. A bot can only
+      # post to a channel it administers, so if that channel has its own bot its
+      # token must travel with its chat id — otherwise Telegram answers 403 and
+      # the channel stays empty while BOTH secrets look correctly set. Unset
+      # falls back to TELEGRAM_BOT_TOKEN, which is the one-bot-two-channels
+      # arrangement and needs nothing here.
+      TELEGRAM_INPLAY_BOT_TOKEN: ${{ secrets.TELEGRAM_INPLAY_BOT_TOKEN }}
       # The in-play channel. Two switches, on purpose: this flag admits in-play
       # rows past the publication gate in fetchRecentSignals (they are NOT in
       # PUBLICATION and never will be — see lib/publication.js), and the chat
