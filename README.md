@@ -377,6 +377,75 @@ covers nothing.
 The pre-match engine and the in-play engine are **separate pipelines that share
 one codebase**, kept apart so live picks never distort the headline CLV.
 
+### It had never written one, and the cause was a CHECK constraint (26 Aug 2026)
+
+`value_signals` held **ZERO** rows with `phase='inplay'` — not "insufficient",
+zero, since migration 030 added the column. The pipeline was not idle:
+`run-inplay.yml` had completed 1,290 times, recent runs green, with two of the
+four stages enabled in its own env. Its log:
+
+    [inplay] win-prob: 18/18 live match(es) have a baseline; 0 candidate(s)
+
+Candidates *were* being produced. Replayed over the 3,798 h2h selection-ticks in
+`inplay_market_series` carrying a model probability and a minute under
+`INPLAY_WINPROB_MINUTE_CAP`, re-priced against the same 24-hour window
+`fetchMatchesForComputation` hands `bestH2hOdds`: **355 (9.3%) land inside
+[2%, 20%] and would fire.** Every one was rejected by Postgres.
+
+**The enumeration was rewritten and three names fell out.** Every migration
+that touches `value_signals_model_architecture_check` drops it and re-adds the
+whole array, so a new architecture is added by copying the previous list — and
+039 copied 028's:
+
+    028   8 names                                    (no in-play)
+    030   + SUPERMODEL_HALFTIME                      9
+    038   + INPLAY_DIXON_COLES, SECOND_HALF_SNIPER  11   <- in-play storable
+    039   + LAMBDA_MC, rebuilt from 028's list       9   <- all three GONE
+    055   + MARKET_ANCHORED                         10   <- inherits the loss
+
+Nothing failed, because a CHECK is only felt by a WRITER — and the writers it
+silenced were not switched on yet. By the time they were, the reason they
+produced nothing had been in the schema for a month. 055 was reading this very
+list when it recorded a *different* latent bug in it and did not see three
+missing names beside them: reading a list for one absence does not find another.
+
+**And the failure reported success.** `insertModelSignals` swallows only
+`/duplicate key/`, so a check violation throws into `winProbStage`'s try/catch,
+which logs `[inplay] win-prob stage failed:` and lets the job exit 0 — the shape
+"BEING KILLED IS NOT STOPPING" describes from the other direction.
+
+**Migration 108 restores the three names** (`INPLAY_DIXON_COLES`,
+`SECOND_HALF_SNIPER`, `SUPERMODEL_HALFTIME`) and nothing else. It is numbered
+108 rather than 096 because the database already carried 096–107 from an
+unmerged branch; the file number follows the database, as migration 059's header
+records. Applied and verified in production 26 Aug 2026: the constraint carries
+13 names, its probes wrote nothing (`0` rows at `detected_odds=2.00`), and
+`'ELO'` is still refused — migration 088's ruling, re-asserted inside 108 so a
+widening cannot retire it silently.
+
+**Storable is not publishable**, and four gates were verified before it was
+applied: the RESTRICTIVE policy `pending_needs_a_publishing_architecture` denies
+a pending row whose architecture has no `publish = true` (none of the three has
+a `model_calibration` row at all, so every browser seat is denied);
+`trg_score_needs_measured_sigma` strips the score for want of a measured σ;
+`lib/publication.js` fails closed on the name; and `postToX.js` routes
+`phase='inplay'` to `TELEGRAM_INPLAY_CHAT_ID`, which is unset, so these are
+**recorded, not posted** — rollout step 2 of `scripts/inplay-vps/README.md`.
+
+**Volume.** `value_signals_selection_price_unique` includes `detected_odds`, so
+this is *not* one row per fixture whatever `insertModelSignals`' comment says.
+Counting distinct keys over the same replay: **341 rows across 16 days, ~21 a
+day** at the current `run-inplay.yml` cadence. The 30-second worker in
+`scripts/inplay-vps/` ticks ~100× more often; read
+`select count(*) from value_signals where phase='inplay'` for a week before
+enabling it rather than assuming this estimate survived the cadence change.
+
+**`engine.archconstraint.test.js` is the ratchet.** It asserts every
+`model_architecture: 'NAME'` the engine writes is admitted by the LAST migration
+to declare the constraint, and that `'ELO'` is not. Its first version could not
+go red — it read the revert quoted in 108's own header comment — and the note in
+the file records that, because a ratchet nobody has seen fail is not one.
+
 **Why they must be separate.** The pre-match headline metric is CLV
 (`ln(detected/closing)`), where "closing" is the price at kickoff. *In-play,
 the line has already closed* — CLV is undefined. So in-play signals are tagged
