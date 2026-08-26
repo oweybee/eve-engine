@@ -40,6 +40,7 @@ const { liveWinProb } = require('./lib/inplayWinProb');
 const { resolveTeamKey, initTeamKeyResolver } = require('./lib/teamKey');
 const { sniperCandidates } = require('./lib/secondHalfSniper');
 const liveStateLib = require('./lib/inplayState');
+const opportunity  = require('./lib/inplayOpportunity');
 const {
   fetchMatchesForComputation,
   computeMatch,
@@ -313,6 +314,7 @@ function winProbCandidates(match, baseline, opts = {}) {
   // went on passing the old argument list.
   const census      = opts.census ?? null;
   if (census && census.cardAdjusted == null) census.cardAdjusted = 0;
+  const now         = opts.now ?? new Date();
 
   if (!baseline) return [];
   const baseHome = Number(baseline.lambda_home);
@@ -322,6 +324,21 @@ function winProbCandidates(match, baseline, opts = {}) {
   const minute = Number(match.minute);
   if (!Number.isFinite(minute)) return [];      // no live clock yet — skip
   if (minute >= minuteCap) return [];           // chaotic closing minutes — skip
+
+  // THE CLOCK THE MODEL IS ABOUT TO PRICE AGAINST MUST BE THE REAL ONE.
+  // liveWinProb spends its whole budget on time remaining, which it takes from
+  // the feed's minute — and 75 ticks across 25 completed matches were priced
+  // more than 110 minutes after kickoff with the feed still reading under 88.
+  // The allowance already covers the half-time break plus twenty minutes of
+  // unexplained lag; see lib/inplayOpportunity for the distribution.
+  const clock = opportunity.clockIsBelievable({ minute, kickoffAt: match.kickoff_at }, now);
+  if (!clock.ok) {
+    if (census) census[clock.reason] = (census[clock.reason] ?? 0) + 1;
+    return [];
+  }
+  if (census && clock.reason === 'clock_unknown') {
+    census.clock_unknown = (census.clock_unknown ?? 0) + 1;
+  }
 
   // THE ONLY LIVE STATE THAT MOVES THE GOAL EXPECTATION IS A SENDING-OFF, and
   // lib/inplayState carries the measurement. Everything else the feed sends
@@ -347,6 +364,17 @@ function winProbCandidates(match, baseline, opts = {}) {
   for (const outcome of ['home', 'draw', 'away']) {
     const live = best[outcome];
     if (!live) continue;
+    // THE MODEL'S OWN RESOLUTION IS ASKED FIRST, before anything about the
+    // market. Above 0.85 it is measurably overconfident (claimed 93.05%,
+    // realised 81.54% over 65 matches, z -3.65) and below it is calibrated,
+    // so past the cap an "edge" is the bookmaker's margin wearing a
+    // probability's clothes. It is also what kills the 1.09 and 1.10 shots
+    // that prompted this, without a price floor — lib/inplayOpportunity
+    // carries the table and the reason a floor was the wrong axis.
+    if (!opportunity.isResolvableProbability(probs[outcome])) {
+      if (census) census.modelSaturated = (census.modelSaturated ?? 0) + 1;
+      continue;
+    }
     // The ceiling is tested BEFORE the edge, so a rejected longshot never
     // reaches the maxEdge branch and the two guards cannot be confused for
     // each other in a log line.
@@ -382,7 +410,8 @@ async function winProbStage(supabase, matches) {
 
   const baseByMatch = new Map((data ?? []).map(r => [r.match_id, r]));
   const stateByMatch = await fetchLiveStateByMatch(supabase, matches);
-  const census = { overPriceCeiling: 0, belowEv: 0, aboveMaxEdge: 0, cardAdjusted: 0 };
+  const census = { overPriceCeiling: 0, belowEv: 0, aboveMaxEdge: 0, cardAdjusted: 0,
+                   modelSaturated: 0, clock_stale: 0, clock_ahead: 0, clock_unknown: 0 };
   const candidates = [];
   for (const m of matches) {
     candidates.push(...winProbCandidates(m, baseByMatch.get(m.id), {
@@ -392,6 +421,11 @@ async function winProbStage(supabase, matches) {
   const withBaseline = matches.filter(m => baseByMatch.has(m.id)).length;
   console.log(`[inplay] win-prob: ${withBaseline}/${matches.length} live match(es) have a baseline; ${candidates.length} candidate(s)`);
   console.log(`[inplay] win-prob declined: ${census.overPriceCeiling} over ${maxOddsLabel()}, ${census.belowEv} under EV ${INPLAY_EV_THRESHOLD}, ${census.aboveMaxEdge} over max edge ${INPLAY_MAX_EDGE}`);
+  // The two guards added on 26 Aug 2026, counted separately so a quiet stage
+  // says WHICH question it failed rather than being one silence.
+  console.log(`[inplay] win-prob refused: ${census.modelSaturated} over model prob ${opportunity.INPLAY_MAX_MODEL_PROB}, ` +
+              `${census.clock_stale} on a stale clock (>${opportunity.INPLAY_MAX_CLOCK_EXCESS_MIN}m unexplained), ` +
+              `${census.clock_ahead} on a clock ahead of the wall; ${census.clock_unknown} match(es) had no kickoff to check against`);
   // The state the model actually priced, per match — so "the model ignored the
   // red card" is visible in the log rather than only in the number.
   console.log(`[inplay] live state: ${stateByMatch.size}/${matches.length} with stats, ${census.cardAdjusted} lambda adjusted for a man advantage`);

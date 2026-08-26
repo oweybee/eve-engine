@@ -550,13 +550,23 @@ GAP OF 34 MINUTES, minimum 17, never once 15"); **do not read a cron expression
 in this project as a statement about how often something happens.**
 
 **`runInplayLoop.js` is that file's fix applied where cadence IS the product.**
-One GitHub tick keeps a process alive for `INPLAY_LOOP_MINUTES` (50) running a
-pass every `INPLAY_PASS_INTERVAL_SECONDS` (60); the cron's only duty is to make
-sure a process is running at all. LOOP_MINUTES **must exceed the delivered
-gap** — at 50 against a median ~35 a fresh tick lands while a loop is still
-running, GitHub holds it as the single pending run (`cancel-in-progress:
-false`) and starts it the instant this one ends, so coverage closes up instead
-of gapping. Raise that, not the cron, if holes reappear.
+One GitHub tick keeps a process alive for `INPLAY_LOOP_MINUTES` running a pass
+every `INPLAY_PASS_INTERVAL_SECONDS` (60); the cron's only duty is to make sure
+a process is running at all. LOOP_MINUTES **must exceed the delivered gap** — a
+fresh tick lands while a loop is still running, GitHub holds it as the single
+pending run (`cancel-in-progress: false`) and starts it the instant this one
+ends, so coverage closes up instead of gapping.
+
+**IT SHIPPED AT 50 AND THAT WAS NOT ENOUGH — IT IS 170.** The median is not the
+thing to clear, because the delivered gaps are not spread around it: the tail
+lands in the evening, when the fixtures are. The last four scheduled runs of
+26 Aug were **100, 102 and 113 minutes** apart, so the 19:00 kickoffs got their
+first tick at 20:14 and seven matches carry that timestamp to the millisecond —
+it is the loop's first pass, not a coincidence. 170 clears the worst gap
+observed with margin. **The cost is deploy latency**: the run checks out `main`
+when it starts, so a merge can take up to LOOP_MINUTES to reach production, and
+a manual dispatch QUEUES behind the running loop rather than replacing it — to
+ship immediately, cancel the running job, then dispatch.
 
 It **spawns the six existing scripts unchanged**, in the workflow's own order,
 rather than requiring them in-process: each owns its Supabase client, its
@@ -568,7 +578,7 @@ and **a pass is skipped entirely when nothing is in the live window** — 47% of
 all hours — on one indexed count that **fails OPEN**, because a database blip
 must not become a silent in-play outage.
 
-`timeout-minutes` (55) exceeds LOOP_MINUTES and the loop stops itself before a
+`timeout-minutes` (175) exceeds LOOP_MINUTES and the loop stops itself before a
 pass would overrun its own budget: being killed is not stopping, and a killed
 run prints no summary. Health is reported on `always()`, because a job killed
 by a timeout ends **cancelled, not failed**, and `if: failure()` does not fire
@@ -819,8 +829,210 @@ row still says `scheduled`, closing the leak at the source.
 
 In-play-specific env vars: `INPLAY_MODEL_ENABLED` (default `false`),
 `INPLAY_EV_THRESHOLD` (default `0.02`), `INPLAY_MAX_EDGE` (default `0.20`),
+`INPLAY_MAX_MODEL_PROB` (default `0.85`),
+`INPLAY_MAX_CLOCK_EXCESS_MIN` (default `20`),
 `INPLAY_MIN_ELO_GAMES` (default `5`), `LIVE_WINDOW_MIN` (default `160`),
 `TELEGRAM_INPLAY_CHAT_ID`. ELO tuning: `ELO_K`, `ELO_HOME_ADV`, `ELO_DEFAULT`.
+
+---
+
+## A positive edge is not an opportunity
+
+Added 26 Aug 2026, after the in-play channel's first night. Ten signals were
+written and eight of them should not have been. The complaint that started it
+was exact: *"1.10 when a team's 4-0 isn't an opportunity."*
+
+All ten, with the model probability recovered as `(1 + edge) / odds`:
+
+    Celje       draw  2.050  +9.97%  p 0.5364   <- keeps
+    Lyon        away  1.615 +13.02%  p 0.6998   <- keeps
+    Lyon        away  1.181  +9.31%  p 0.9256
+    Viking      home  1.090  +3.88%  p 0.9530
+    Viking      home  1.083  +5.66%  p 0.9756
+    Viking      home  1.071  +5.06%  p 0.9810
+    Viking      home  1.062  +5.02%  p 0.9889
+    Viking      home  1.050  +4.39%  p 0.9942
+    Viking      home  1.045  +4.11%  p 0.9963
+    Preston     away  1.100  +8.35%  p 0.9850   <- the 0-4
+
+Five of the eight are the SAME BET, re-detected as the price shortened —
+`value_signals_selection_price_unique` includes `detected_odds`, so a shortening
+price is a new row. **Tightening what counts as a signal is what removes the
+duplicates**, and it does: two of the ten survive.
+
+### The certainty cap — the model past its own resolution
+
+`INPLAY_MAX_MODEL_PROB` is **0.85** and it is derived, not chosen. Replayed over
+`inplay_market_series` — every tick on a completed match, taken as the signal
+path would take it (backable price under 3.00, minute under 88, claimed EV
+between 2% and 20%), clustered to one observation per match:
+
+    cut     above the cut                    below the cut
+            n   claimed  realised    z       n   claimed  realised    z
+    0.80    84   90.51%   84.52%   -1.87    143   56.88%   52.10%   -1.15
+    0.85    65   93.05%   81.54%   -3.65    159   59.85%   57.39%   -0.63
+    0.90    46   95.49%   84.78%   -3.50    178   62.94%   59.69%   -0.90
+    0.95    27   97.74%   85.19%   -4.39    192   65.81%   62.11%   -1.08
+    0.97    18   98.72%   77.78%   -7.91    198   66.83%   63.51%   -0.99
+
+The model is **calibrated below every cut** (|z| under 1.2 in all five rows) and
+significantly **overconfident above 0.85**. 0.85 is the lowest cut at which the
+miss above it clears |z| >= 2, and it is where the remainder below is best
+calibrated. At 0.80 the miss is -1.87 and does not clear the bar.
+
+The unfiltered reliability curve says it with more rows: 119 ticks over 92
+matches at p >= 0.97 realise **92.4%**, and the 94 ticks over 67 matches where
+the model returns **exactly 1.0000** realise **84.0%**. A model that says
+"certain" and is wrong one time in six is not measuring anything at that end of
+its range; past there the "edge" is the bookmaker's margin wearing a
+probability's clothes.
+
+**AND IT ANSWERS THE PRICE COMPLAINT WITHOUT A PRICE FLOOR.** 1/0.85 is 1.176,
+so with the 2% EV floor nothing under about 1.20 can reach the channel. A LOWER
+BOUND ON THE ODDS was tried and measured in `lib/inplay.js` and does not work:
+under 2.00 the model claims 0.80x the market and produces 52 above-max ticks in
+993, so the floor would cut fires 258 -> 164 and the rejects only 175 -> 172 —
+all cost, no correction. **The price is the symptom; the model's resolution is
+the cause.**
+
+### The clock guard — the model prices time remaining
+
+`liveWinProb` prices remaining goals as Poisson(λ × time left), and time left
+comes from the FEED's minute. Time remaining is most of the model, so a stale
+clock is not a rounding error — it is the model believing there is another
+half-hour of football to come when the match is over. Over the 560 completed
+matches in the series, **75 ticks across 25 of them were priced more than 110
+minutes after kickoff with the feed still reading under 88 minutes.**
+
+The disagreement is measured as EXCESS — wall-clock elapsed, minus the feed's
+minute, minus the half-time break once the second half has started. Over 4,311
+completed-match ticks:
+
+    excess > 10 min   22.34%      <- ordinary second-half stoppage
+    excess > 15 min   11.34%
+    excess > 20 min    3.20%      <- INPLAY_MAX_CLOCK_EXCESS_MIN
+    excess > 25 min    1.32%
+    maximum           61.7 min
+
+Twenty minutes is on TOP of the fifteen the break is given, so a second-half
+tick may run 35 minutes behind the wall clock before it is refused. It catches
+48 of the 75 frozen ticks; the other 27 are matches that **kicked off late**,
+where the feed's minute is right and `kickoff_at` is wrong, and there the model
+prices correctly — refusing them would be the guard doing harm. The negative
+side (a clock AHEAD of the wall) has **never fired**: the minimum excess ever
+observed is -0.8 minutes.
+
+The certainty cap fails CLOSED — a probability that cannot be read is not one we
+may claim an edge against. The clock guard fails OPEN with no kickoff to measure
+against, and says `clock_unknown` rather than `clock_stale`, because a missing
+column is not a large disagreement.
+
+`lib/inplayOpportunity.js` owns both and returns a REASON, not a boolean; the
+stage prints a `win-prob refused:` line naming each. **Nothing here reads
+possession, shots or xG, and no threshold was moved.**
+
+---
+
+## `inplay_momentum` — the corpus a momentum model would have to be fitted on
+
+Migration 111. The obvious thing to do with possession, shots and xG is to move
+the goal expectation with them. There is no measurement in this database for
+what a possession share is worth in goals, and there **could not be one**:
+
+    match_stats           2,276 rows across 1,138 fixtures
+    rows per (fixture, side) with more than one          0
+
+It is upserted on `(fixture_id, team_side)`, so it holds one overwritten
+snapshot per fixture. **No record of what any match looked like at minute 60
+exists anywhere.** A momentum model could not be fitted and could not be
+measured, and anything shipped today would be numbers somebody made up wearing
+the clothes of evidence.
+
+So the record accumulates first. `captureInplaySeries.js` appends a row per
+genuine feed refresh beside the market series it already writes, on the same
+clock, so a momentum row and a price row from one tick share a minute and can
+be joined on it. It is the right file because `fetchLiveStats.js` runs
+immediately before it in the loop. **Nothing reads it and nothing may price off
+it** until it has been fitted and measured; it is service-role only, RLS on with
+no policy.
+
+**A NULL IS UNKNOWN, NEVER ZERO — with one measured exception.**
+`expected_goals` is absent on 41% of rows, and those rows average **12.9 shots**
+with 777 of 1,120 carrying shots on target, so a null xG is a competition that
+is not tracked rather than a side that has had no chances. `Red Cards` is the
+opposite: a value appears on 436 of 1,978 rows, about the rate at which matches
+produce one, so null there is a genuine none — and that is what lets the
+measured sending-off adjustment in `lib/inplayState.js` fire at all.
+
+**DEDUPE IS ON THE FEED'S STAMP, NOT OURS.** `captured_at` is the tick that
+wrote the row; `stats_fetched_at` is carried up from `match_stats.fetched_at`.
+`fetchLiveStats` gates each fixture behind 90 seconds while the loop passes
+every 60, so without it the corpus fills with consecutive identical rows and a
+fit counts one observation twice. A unique `(match_id, stats_fetched_at)` is the
+backstop under the writer's own skip.
+
+---
+
+## The API-Football usage tracker
+
+Added 26 Aug 2026. Until then the daily allowance had **never been measured**:
+twelve scripts call `v3.football.api-sports.io` and **not one read a response
+header**. The only number in the system was `DAILY_REQUEST_BUDGET`, which
+`planDay.js` spends against — a configured intention, not a reading, and three
+different ones (the workflows set 75000, the module default is 200,
+`.env.example` says 100). The Odds API has had `quotaFromHeaders` since it was
+wired, which is why "how many credits are left" had an answer for one vendor and
+not the other.
+
+`lib/apiFootballQuota.js` stores it in `engine_state.api_football_quota`,
+alongside `odds_api_quota`. Read it with **`npm run api-quota`**.
+
+**MEASURING MUST NOT COST A REQUEST.** API-Football's `/status` endpoint reports
+the counter and **spends one against the counter it reports** — a tracker whose
+own cost grows with how often you want the truth. So the four numbers are read
+off responses the engine was already going to receive, and the only change at a
+call site is to stop throwing the headers away:
+
+    x-ratelimit-requests-limit       the DAY's allowance
+    x-ratelimit-requests-remaining   what is left of it
+    x-ratelimit-limit                the per-MINUTE allowance
+    x-ratelimit-remaining            what is left of that
+
+The per-minute pair is worth carrying: the in-play loop issues ~1.5 calls per
+live fixture per pass and **71 concurrent fixtures have been observed**, so a
+daily quota with room in it says nothing about a minute that is already full.
+
+**THE SERVER HOLDS THE COUNTER, WHICH IS WHY THIS IS CHEAP.** `remaining` is a
+fact the vendor maintains, not a total we accumulate — so one report per run is
+enough, a missed report loses nothing, and `spent_today` is DERIVED
+(`limit − remaining`) rather than tallied. It persists on the **success path
+only**: a crashed run leaves its reading unwritten, which costs nothing because
+the next response carries the current truth, and doing otherwise would mean
+turning `process.exit(1)` into `process.exitCode` across six scripts — a real
+change to ingestion, to save a number that reappears sixty seconds later.
+
+Reporting is wired into `ingestLiveOdds`, `fetchLiveStats`, `ingestOdds`,
+`fetchMatchDetails`, `fetchLineups` and `fetchTeamStats`, which between them
+cover both loops. `engine.apiquota.test.js` asserts each one on its SOURCE,
+because a reporter that stops reporting looks exactly like a vendor that stopped
+sending the header.
+
+**IT IS A TRACKER, NOT A GUARD.** Nothing here refuses a request. `canSpend` on
+the Odds API side exists because that is a MONTHLY pool where overspending in
+week one darkens three weeks; this is a daily one that resets. Turning a reading
+into a throttle changes what the engine ingests and needs its own measurement —
+which cannot be made honestly until there IS a reading, which is what this
+produces. What it does do is make an exhausted quota **loud** (a `::error::`
+annotation under 10% remaining) instead of showing up as a feed that
+mysteriously went quiet.
+
+**THE HEADER NAMES ARE NOT VERIFIED AGAINST A LIVE RESPONSE.** No
+`API_FOOTBALL_KEY` was available where this was written, so they come from the
+v3 documentation — the same footing `lib/oddsApi.js` shipped on. Every one is
+optional and an unrecognised header yields nulls rather than zeros, so a wrong
+name records nothing and breaks nothing. **Run `npm run api-quota` after the
+first real run**: a stored `limitDay` of 75000 confirms the names, and
+`never recorded` means they are wrong.
 
 ---
 

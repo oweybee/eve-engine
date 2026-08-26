@@ -16,6 +16,20 @@
  * the current minute/score via lib/inplayWinProb — the same maths the in-play
  * signal stages use, so the chart and the signals can never disagree.
  *
+ * IT ALSO WRITES THE MOMENTUM CORPUS. Beside every price point it appends the
+ * match STATE the feed was showing at the same instant — shots, shots on
+ * target, shots inside the box, corners, possession, xG, saves and red cards —
+ * to `inplay_momentum`. That table exists because `match_stats` is upserted per
+ * (fixture, side) and therefore holds one overwritten snapshot per fixture: no
+ * record of what any match looked like at minute 60 exists anywhere. NOTHING
+ * READS IT YET AND NOTHING MAY PRICE OFF IT until it has been fitted and
+ * measured — see migrations/111 for the full ruling.
+ *
+ * This is the right file for it because `fetchLiveStats.js` runs immediately
+ * before it in the loop, so the statistics are as fresh as the prices, and
+ * because a momentum row and a price row written by one tick share a minute and
+ * can be joined on it.
+ *
  * Idempotent-ish by design: it appends a point per tick. Duplicate ticks within
  * MIN_GAP_SECONDS of the last stored point for a match are skipped so a fast
  * loop (or an overlapping run) can't inflate the series.
@@ -27,6 +41,7 @@
 const { getClient } = require('./lib/supabaseClient');
 const { liveWinProb, goalsOverProb } = require('./lib/inplayWinProb');
 const { INPLAY_ODDS_MAX_AGE_MIN } = require('./lib/inplay');
+const { momentumRow, describeMomentum } = require('./lib/momentum');
 
 const DRY = process.argv.includes('--dry-run');
 const MIN_GAP_SECONDS = parseInt(process.env.INPLAY_SERIES_MIN_GAP || '20', 10);
@@ -55,7 +70,7 @@ function best(rows) {
 async function fetchLiveMatches(supabase) {
   const { data, error } = await supabase
     .from('matches')
-    .select('id, kickoff_at, status, minute, goals_home, goals_away')
+    .select('id, external_id, kickoff_at, status, minute, goals_home, goals_away')
     .eq('status', 'live');
   if (error) throw new Error(`inplaySeries[matches]: ${error.message}`);
   return data ?? [];
@@ -94,6 +109,66 @@ async function fetchFreshOdds(supabase, matchIds) {
     byMatch.get(o.match_id).push(o);
   }
   return byMatch;
+}
+
+/**
+ * The two `match_stats` rows per live match, keyed by OUR match id.
+ *
+ * `match_stats.fixture_id` is API-Football's numeric id, which lives on
+ * `matches.external_id` — NOT on `matches.id`. Joining on the wrong one
+ * returns nothing and looks exactly like a feed that is not reporting.
+ *
+ * A read failure returns an empty map rather than throwing: the market series
+ * is this script's product and must not be lost to the corpus beside it.
+ */
+async function fetchLiveStats(supabase, matches) {
+  const byExternal = new Map();
+  for (const m of matches) if (m.external_id != null) byExternal.set(String(m.external_id), m.id);
+  if (!byExternal.size) return new Map();
+
+  const { data, error } = await supabase
+    .from('match_stats')
+    .select('fixture_id, team_side, stats, fetched_at')
+    .in('fixture_id', [...byExternal.keys()]);
+  if (error) { console.warn('[inplayMomentum] stats read failed:', error.message); return new Map(); }
+
+  const sides = new Map();
+  for (const r of data ?? []) {
+    const matchId = byExternal.get(String(r.fixture_id));
+    if (!matchId) continue;
+    let e = sides.get(matchId);
+    if (!e) { e = { home: null, away: null }; sides.set(matchId, e); }
+    if (r.team_side === 'home' || r.team_side === 'away') e[r.team_side] = r;
+  }
+  return sides;
+}
+
+/**
+ * The newest observation already recorded per match.
+ *
+ * The corpus is deduped on the FEED's stamp, not on ours: fetchLiveStats gates
+ * each fixture behind 90 seconds while the loop passes every 60, so a tick that
+ * re-reads an unchanged snapshot must write nothing. Counting one observation
+ * twice would bias any fit over it toward whatever the feed happened to be slow
+ * about.
+ */
+async function fetchLastMomentum(supabase, matchIds) {
+  if (!matchIds.length) return new Map();
+  const since = new Date(Date.now() - 6 * 60 * 60_000).toISOString();
+  const { data, error } = await supabase
+    .from('inplay_momentum')
+    .select('match_id, stats_fetched_at')
+    .in('match_id', matchIds)
+    .gte('captured_at', since)
+    .order('captured_at', { ascending: false });
+  if (error) { console.warn('[inplayMomentum] last-point read failed:', error.message); return new Map(); }
+  const last = new Map();
+  for (const r of data ?? []) {
+    if (!last.has(r.match_id) && r.stats_fetched_at) {
+      last.set(r.match_id, Date.parse(r.stats_fetched_at));
+    }
+  }
+  return last;
 }
 
 /** Most recent stored point per match, so we can rate-limit the series. */
@@ -182,6 +257,48 @@ function buildRows(match, oddsRows, baseline, now = new Date()) {
   return rows;
 }
 
+/**
+ * Append one momentum row per live match whose statistics have MOVED.
+ *
+ * Returns a summary rather than throwing. This corpus is not the product: the
+ * market series is, and a fit that has to wait a day is a smaller harm than a
+ * chart that goes dark. It is not silent either — every refusal is counted and
+ * printed, because "returns nothing" and "cannot return anything" being one
+ * state is the failure this repo keeps paying for.
+ */
+async function captureMomentum(supabase, live, now) {
+  const ids = live.map(m => m.id);
+  const [statsByMatch, lastByMatch] = await Promise.all([
+    fetchLiveStats(supabase, live),
+    fetchLastMomentum(supabase, ids),
+  ]);
+
+  const rows = [];
+  let noStats = 0, unchanged = 0;
+  for (const m of live) {
+    const sides = statsByMatch.get(m.id);
+    const row = sides ? momentumRow(m, sides.home, sides.away, now) : null;
+    if (!row) { noStats++; continue; }
+    const seen = lastByMatch.get(m.id);
+    const stamp = row.stats_fetched_at ? Date.parse(row.stats_fetched_at) : null;
+    if (seen != null && stamp != null && stamp <= seen) { unchanged++; continue; }
+    rows.push(row);
+    console.log(`[inplayMomentum]   ${m.id} ${row.minute ?? '?'}' — ${describeMomentum(row)}`);
+  }
+
+  console.log(`[inplayMomentum] live=${live.length} rows=${rows.length} ` +
+              `no_stats=${noStats} unchanged=${unchanged}`);
+  if (!rows.length || DRY) return rows.length;
+
+  // ignoreDuplicates, so two overlapping passes cannot collide on the
+  // observation key and lose the whole batch to one already-recorded row.
+  const { error } = await supabase
+    .from('inplay_momentum')
+    .upsert(rows, { onConflict: 'match_id,stats_fetched_at', ignoreDuplicates: true });
+  if (error) { console.error('[inplayMomentum] insert FAILED:', error.message); return 0; }
+  return rows.length;
+}
+
 async function run() {
   const supabase = getClient();
   const live = await fetchLiveMatches(supabase);
@@ -212,6 +329,14 @@ async function run() {
 
   console.log(`[inplaySeries] live=${live.length} rows=${all.length} ` +
               `skipped_gap=${skippedGap} skipped_no_odds=${skippedNoOdds} no_baseline=${noBaseline}`);
+
+  // The corpus is written whether or not anything was PRICED. A match with no
+  // fresh odds still has a state worth recording, and the gap between "the
+  // books went quiet" and "the game stopped" is exactly what a fit would want.
+  await captureMomentum(supabase, live, now).catch(
+    err => console.error('[inplayMomentum] FAILED:', err.message),
+  );
+
   if (!all.length) return 0;
   if (DRY) {
     console.log(JSON.stringify(all.slice(0, 4), null, 2));
@@ -228,4 +353,4 @@ if (require.main === module) {
     .catch(err => { console.error('[inplaySeries] FATAL:', err.message); process.exit(1); });
 }
 
-module.exports = { run, buildRows, median, best };
+module.exports = { run, buildRows, captureMomentum, median, best };

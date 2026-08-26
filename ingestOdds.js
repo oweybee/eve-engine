@@ -36,6 +36,7 @@
 const https            = require('https');
 const { getClient }    = require('./lib/supabaseClient');
 const { bookmakerKey } = require('./lib/bookmakers');
+const apiQuota = require('./lib/apiFootballQuota');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -74,6 +75,11 @@ function httpGetOnce(path) {
         let body = '';
         res.on('data', c => { body += c; });
         res.on('end', () => {
+          // The vendor reports the day's counter on EVERY response and calling its
+// /status endpoint spends one against the counter it reports, so the reading
+// is taken from a call we were making anyway. Never throws; see lib/apiFootballQuota.
+          apiQuota.report(res.headers);
+
           if (res.statusCode === 429) { reject(Object.assign(new Error('Rate limit hit'), { is429: true })); return; }
           if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`)); return; }
           try { resolve(JSON.parse(body)); }
@@ -824,10 +830,12 @@ async function withPool(items, fn, concurrency) {
 // ---------------------------------------------------------------------------
 
 if (require.main === module) {
-  ingest().catch(err => {
-    console.error('[ingest] fatal:', err.message);
-    process.exit(1);
-  });
+  ingest()
+    .then(() => apiQuota.persistQuota(getClient()))
+    .catch(err => {
+      console.error('[ingest] fatal:', err.message);
+      process.exit(1);
+    });
 }
 
 module.exports = {

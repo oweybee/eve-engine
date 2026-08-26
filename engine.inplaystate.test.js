@@ -123,8 +123,14 @@ test('but they ARE carried, so the reader and the model see one object', () => {
 });
 
 console.log('end to end — a sending-off changes the signal');
+// KICKOFF IS RELATIVE TO NOW. The win-prob stage refuses to price against a
+// clock that disagrees with the wall clock, so a fixture pinned to a date in
+// the past is a permanently stale one and every case below would be empty.
+// 77 minutes ago at the 60th is the half-time break plus two of delay.
 const liveH2h = odds => ({
-  id: 'm1', kickoff_at: '2026-08-26T16:45:00Z', minute: 60,
+  id: 'm1',
+  kickoff_at: new Date(Date.now() - 77 * 60_000).toISOString(),
+  minute: 60,
   goals_home: 0, goals_away: 0, home_team: { name: 'A' }, away_team: { name: 'B' },
   odds: [{ market: 'h2h', bookmaker: 'live', home_odds: odds[0], draw_odds: odds[1], away_odds: odds[2] }],
 });
