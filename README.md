@@ -446,6 +446,90 @@ to declare the constraint, and that `'ELO'` is not. Its first version could not
 go red — it read the revert quoted in 108's own header comment — and the note in
 the file records that, because a ratchet nobody has seen fail is not one.
 
+### The stages had no odds band, and a live price read 24 hours back (26 Aug 2026)
+
+Follow-on from the section above, and it is a different finding: 108 made an
+in-play signal STORABLE, and this is why so few were worth storing.
+**`INPLAY_MAX_EDGE` was rejecting 42% of everything the model produced**, and the
+first report of it named the 24-hour odds window as the cause. That was only ~30
+of those 78 points. **`INPLAY_MAX_EDGE` IS NOT MOVED** — it is the last guard,
+it is correctly catching a miscalibration, and lowering a threshold to make a
+signal appear is the move this repo forbids. Both fixes are on the INPUT.
+
+**THE CHART AND THE SIGNALS BESIDE IT HELD TWO BELIEFS ABOUT THE LIVE PRICE.**
+`captureInplaySeries.js` has read a 10-minute window since it was written;
+`computeInplayValues.fetchLiveMatches` called `fetchMatchesForComputation` with
+no window override and got the pre-match default, `ODDS_MAX_AGE_HOURS = 24`. So
+on a match that had moved, `bestH2hOdds` returned a PRE-MATCH price and the
+"edge" against it was mostly the game state. The chart was the correct one.
+`lib/inplay.INPLAY_ODDS_MAX_AGE_MIN` is the single constant now and both read
+it; the pre-match path is untouched and still reads 24 hours, which is right for
+a market that has not started moving. Replayed over the same 3,798 h2h ticks:
+**72.7% above `INPLAY_MAX_EDGE` at 24 hours, 42.4% at 10 minutes.**
+
+**It does not starve the book-lag stage**, which is the one thing a tighter
+window could break — Stage 1 needs a multi-book pack, not one price. Measured
+over 400 recent live captures: a 10-minute window holds a mean of **10.5
+distinct h2h books and never zero** (24 hours reads 23.17, and the difference is
+the pre-match panel). It is also tighter than `lib/dataQuality`'s own 15-minute
+`maxPriceAgeMinutes`, so nothing surviving the window can then fail that gate on
+age.
+
+**AND EVERY PRE-MATCH PATH HAS AN ODDS BAND WHILE THESE THREE HAD NONE.**
+`liveWinProb` advances a FROZEN pre-match λ by minute and score and never reads
+the live market, which is a textbook favourite–longshot bias — and it is
+monotonic in price. Median model probability over the market's own implied
+probability, same ticks:
+
+    price < 2.0    0.80        price 5-10     1.38
+    price 2-3      1.10        price 10-25    2.40
+    price 3-5      1.06        price 25+      2.47
+
+Above 3.00 the model claims one and a half to two and a half times the market's
+chance. Split by market:
+
+    market   band          ticks   med ratio   above max edge     fires
+    h2h      <= 3.00        1349       0.868      175 (13.0%)       258
+    h2h      >  3.00        2449       1.431     1434 (58.6%)       206
+    totals   <= 3.00         882       0.751      155 (17.6%)       156
+    totals   >  3.00         276       3.491      265 (96.0%)         0
+
+The totals row is the plainest form of it: above 3.00 the sniper has **never
+once** produced a candidate inside the band, only rejects. `lib/inplay`'s
+`INPLAY_MAX_ODDS` applies the ceiling to all three stages and **READS the
+pre-match box's own `PRIME_ODDS_MAX`** rather than declaring a second 3.00 —
+a constant typed twice in this repo drifted inside twenty-four hours once
+already. It removes **1,434 of the 1,609 above-max rejects (89%)** and keeps
+**258 of the 464 in-band candidates (56%)**.
+
+**NO LOWER BOUND, deliberately.** The box's 1.40 floor is a staking rule, not a
+calibration one: under 2.00 the model claims 0.80× the market and produces 52
+above-max ticks in 993. Adding it would cut fires 258 → 164 and the rejects only
+175 → 172 — all cost, no correction.
+
+**THE CEILING IS ON THE CANDIDATE, NEVER INSIDE `bestH2hOdds`.** That map also
+feeds `devigLiveH2h`, which needs all three legs to remove the margin, so
+dropping a leg there would silently de-vig a two-legged 1X2 vector and mis-state
+every `market_prob` on the row. `isBackablePrice` fails closed on an absent or
+non-numeric price, and `engine.inplay.test.js` asserts each surviving leg's
+de-vigged probability still sits BELOW its own `1/odds` — which is only possible
+if the vector was complete.
+
+**AND THE STAGE SAYS WHY IT IS EMPTY.** `winProbCandidates` takes a census
+out-parameter and `winProbStage` prints it, so "over the price ceiling" and
+"over the max edge" are separate counts rather than one silence — they are
+different findings, one saying the model is not calibrated at THIS PRICE and the
+other that it is not calibrated at all. The test suite asserts the CALL SITE
+passes it, because this repo has already shipped a census that was dead for a
+day while its own tests covered it.
+
+**STILL OPEN, AND IT IS THE MODEL'S.** The ceiling contains the bias; it does
+not remove it. `liveWinProb` reading 2.4× the market at 10–25 is a calibration
+defect in the model itself, and correcting it means letting the live market
+inform λ rather than freezing it at kickoff. That is its own change with its own
+measurement, and nothing in `lib/inplayWinProb.js` was touched here.
+
+
 **Why they must be separate.** The pre-match headline metric is CLV
 (`ln(detected/closing)`), where "closing" is the price at kickoff. *In-play,
 the line has already closed* — CLV is undefined. So in-play signals are tagged

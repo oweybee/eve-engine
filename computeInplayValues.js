@@ -55,6 +55,13 @@ const INPLAY_EV_THRESHOLD  = parseFloat(process.env.INPLAY_EV_THRESHOLD || proce
 // edges (mirrors MAX_PLAUSIBLE_EDGE in computeApiValues.js). An in-play model
 // "edge" above this is almost always a calibration artefact, not real value.
 const INPLAY_MAX_EDGE = parseFloat(process.env.INPLAY_MAX_EDGE || '0.20');
+// Longest price any in-play stage may back. lib/inplay owns it and the
+// measurement behind it; it reads the pre-match box's own 3.00 rather than
+// declaring a second ceiling. This is the guard that was MISSING — every
+// pre-match path has an odds band and these three had none — and it is why
+// INPLAY_MAX_EDGE was rejecting 42% of everything the model produced.
+const INPLAY_MAX_ODDS = inplay.INPLAY_MAX_ODDS;
+const maxOddsLabel = () => `price ${INPLAY_MAX_ODDS}`;
 
 /**
  * De-vigged 1X2 probabilities from the live best-price map `bestH2hOdds`
@@ -88,7 +95,14 @@ const INPLAY_WINPROB_MINUTE_CAP = parseInt(process.env.INPLAY_WINPROB_MINUTE_CAP
 
 /** Live matches = kicked off and inside the live window (status may lag). */
 async function fetchLiveMatches(supabase) {
-  const candidates = await fetchMatchesForComputation(supabase, ['scheduled', 'live']);
+  // A LIVE price, not a 24-hour bucket. This read used the pre-match default
+  // (ODDS_MAX_AGE_HOURS = 24), so on a match that had moved bestH2hOdds
+  // returned a PRE-MATCH price and the "edge" against it was mostly the game
+  // state. captureInplaySeries.js, drawing the chart beside these signals, has
+  // read INPLAY_ODDS_MAX_AGE_MIN since it was written; one constant now.
+  const candidates = await fetchMatchesForComputation(supabase, ['scheduled', 'live'], {
+    oddsMaxAgeMinutes: inplay.INPLAY_ODDS_MAX_AGE_MIN,
+  });
   const now = Date.now();
   return candidates.filter(m => {
     const ko = m.kickoff_at ? new Date(m.kickoff_at).getTime() : NaN;
@@ -193,6 +207,7 @@ async function modelVsMarket(match, ctx) {
   for (const outcome of ['home', 'draw', 'away']) {
     const live = best[outcome];
     if (!live) continue;
+    if (!inplay.isBackablePrice(live.odds, INPLAY_MAX_ODDS)) continue;
     const edge = inplay.inplayEdge(probs[outcome], live.odds);
     if (edge == null || edge < INPLAY_EV_THRESHOLD) continue;
     if (edge > INPLAY_MAX_EDGE) {
@@ -249,7 +264,13 @@ async function insertModelSignals(supabase, candidates) {
 function winProbCandidates(match, baseline, opts = {}) {
   const evThreshold = opts.evThreshold ?? INPLAY_EV_THRESHOLD;
   const maxEdge     = opts.maxEdge ?? INPLAY_MAX_EDGE;
+  const maxOdds     = opts.maxOdds ?? INPLAY_MAX_ODDS;
   const minuteCap   = opts.minuteCap ?? INPLAY_WINPROB_MINUTE_CAP;
+  // Optional out-parameter, so an empty win-prob stage separates its causes
+  // instead of being one silence. THE CALL SITE IS ASSERTED IN THE TEST SUITE:
+  // this repo has already shipped a census that was dead because the caller
+  // went on passing the old argument list.
+  const census      = opts.census ?? null;
 
   if (!baseline) return [];
   const lambdaHome = Number(baseline.lambda_home);
@@ -271,8 +292,14 @@ function winProbCandidates(match, baseline, opts = {}) {
   for (const outcome of ['home', 'draw', 'away']) {
     const live = best[outcome];
     if (!live) continue;
+    // The ceiling is tested BEFORE the edge, so a rejected longshot never
+    // reaches the maxEdge branch and the two guards cannot be confused for
+    // each other in a log line.
+    if (!inplay.isBackablePrice(live.odds, maxOdds)) { if (census) census.overPriceCeiling++; continue; }
     const edge = inplay.inplayEdge(probs[outcome], live.odds);
-    if (edge == null || edge < evThreshold || edge > maxEdge) continue;
+    if (edge == null) continue;
+    if (edge < evThreshold) { if (census) census.belowEv++; continue; }
+    if (edge > maxEdge)     { if (census) census.aboveMaxEdge++; continue; }
     candidates.push({
       match_id:           match.id,
       outcome,
@@ -299,12 +326,14 @@ async function winProbStage(supabase, matches) {
   if (error) { console.warn('[inplay] baseline read failed:', error.message); return 0; }
 
   const baseByMatch = new Map((data ?? []).map(r => [r.match_id, r]));
+  const census = { overPriceCeiling: 0, belowEv: 0, aboveMaxEdge: 0 };
   const candidates = [];
   for (const m of matches) {
-    candidates.push(...winProbCandidates(m, baseByMatch.get(m.id)));
+    candidates.push(...winProbCandidates(m, baseByMatch.get(m.id), { census }));
   }
   const withBaseline = matches.filter(m => baseByMatch.has(m.id)).length;
   console.log(`[inplay] win-prob: ${withBaseline}/${matches.length} live match(es) have a baseline; ${candidates.length} candidate(s)`);
+  console.log(`[inplay] win-prob declined: ${census.overPriceCeiling} over ${maxOddsLabel()}, ${census.belowEv} under EV ${INPLAY_EV_THRESHOLD}, ${census.aboveMaxEdge} over max edge ${INPLAY_MAX_EDGE}`);
   return insertModelSignals(supabase, candidates);
 }
 
@@ -333,6 +362,7 @@ async function sniperStage(supabase, matches) {
     candidates.push(...sniperCandidates(m, baseByMatch.get(m.id), {
       evThreshold: INPLAY_EV_THRESHOLD,
       maxEdge:     INPLAY_MAX_EDGE,
+      maxOdds:     INPLAY_MAX_ODDS,
     }));
   }
   console.log(`[inplay] second-half sniper: ${candidates.length} candidate(s) from ${matches.length} live match(es)`);
