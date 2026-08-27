@@ -21,8 +21,15 @@
 #     3. captureSnapshot.js — odds time-series for charts
 #   Once per job:
 #     5. postToX.js          — Telegram: VALUE / RUBY / ODDS MOVEMENT alerts
-#     6. fetchResults.js     — settle completed fixtures
-#     7. fetchMatchDetails.js — lineups + stats
+#     6. fetchMatchDetails.js — lineups + stats
+#
+#   SETTLEMENT IS NOT HERE ANY MORE. fetchResults.js moved to
+#   settle-results.yml on 27 Aug 2026, after this job ran at 11:12 UTC and then
+#   not again until 21:02 — a ten-hour gap on a quarter-hour cron — and took the
+#   evening's whole card with it: 39 fixtures finished, none graded, two winning
+#   PRIME picks missing from /performance. Settlement was hostage to the
+#   heaviest job in the repo for no reason; it makes one query and burns no odds
+#   quota. Same move lineups.yml and capture-closing-lines.yml already made.
 # ────────────────────────────────────────────────────────────────────────────
 
 name: MaxEdge EVE Engine
@@ -113,10 +120,6 @@ on:
         default: false
       skip_post:
         description: 'Skip postToX.js (suppress Telegram alerts)'
-        type: boolean
-        default: false
-      skip_results:
-        description: 'Skip fetchResults.js'
         type: boolean
         default: false
       loop_count:
@@ -332,11 +335,6 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_post != 'true' }}
         run: node postToX.js
 
-      - name: Settle results
-        id: results
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_results != 'true' }}
-        run: node fetchResults.js
-
       # ELO ladder feeds the in-play half-time supermodel (computeInplayValues
       # Stage 2). Self-gates on ELO_REFRESH_HOURS so it only fully recomputes a
       # few times a day, not every 5-minute tick.
@@ -444,7 +442,6 @@ jobs:
           add "odds-api breadth (ingestOddsApi.js)"                  "${{ steps.odds_api.outcome }}"
           add "integrity (verifyIntegrity.js)"                       "${{ steps.integrity.outcome }}"
           add "post-signals (postToX.js)"                            "${{ steps.post.outcome }}"
-          add "settle-results (fetchResults.js)"                     "${{ steps.results.outcome }}"
           add "elo ladder (computeElo.js)"                           "${{ steps.elo.outcome }}"
           add "in-play baselines (captureBaseline.js)"               "${{ steps.baseline.outcome }}"
           add "suggested accas (recordAccas.js)"                     "${{ steps.accas.outcome }}"

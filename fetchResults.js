@@ -14,15 +14,41 @@
  * 3. Recomputes performance_summary (win rate, yield, ROI, avg CLV, …) from the
  *    full settled history.
  *
- * Runs after computeValues.js in the GitHub Actions workflow. If API_FOOTBALL_KEY is
- * not set it skips settlement (no-op) but still refreshes the summary so the
- * pipeline never fails just because results aren't wired up yet.
+ * If API_FOOTBALL_KEY is not set it skips settlement (no-op) but still refreshes
+ * the summary so the pipeline never fails just because results aren't wired up yet.
+ *
+ * ── THE CADENCE COMES FROM THE LOOP, NOT FROM THE CRON ──────────────────────
+ *
+ * This was step 10 of engine.yml, so settlement could only happen as often as
+ * the heaviest job in the repo, and only if that job's schedule was delivered.
+ * On 27 Aug 2026 it was not: engine.yml ran at 11:12 UTC and then not again
+ * until 21:02 — a 9h50m gap on an every-15-minutes cron, with no failed run to show for
+ * it, because a schedule that never fires produces nothing to fail. Every
+ * fixture on the European evening card kicked off inside that window, so 39
+ * matches sat at status='live', `settle_match_signals()` refuses anything that
+ * is not 'completed', and every signal on them stayed pending. Two PRIME picks
+ * that had won were missing from /performance for three hours after full time.
+ *
+ * The same outage cost more than a delay. capture-closing-lines.yml went
+ * 05:07 -> 16:26, both kickoffs landed after its last run, and those two rows
+ * settled with a null CLV.
+ *
+ * So the job POLLS ITSELF, the pattern fetchLineups.js and runInplayLoop.js
+ * already use for the same reason. One GitHub tick keeps a process alive for
+ * RESULTS_LOOP_MINUTES, running a pass every RESULTS_PASS_INTERVAL_SECONDS.
+ * The cron's only duty is to make sure a process is running at all.
+ *
+ *   node fetchResults.js            poll for RESULTS_LOOP_MINUTES
+ *   node fetchResults.js --once     one pass, then exit (the old behaviour)
  */
 
 'use strict';
 
 const { createClient } = require('@supabase/supabase-js');
 const { classifyTier, dedupeConflicts } = require('./lib/signalTier');
+const { beginWatchdog } = require('./lib/watchdog');
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Clean-slate epoch: the SUMMARY below counts only signals detected on or after
 // this instant. Everything before it was generated under different selection
@@ -53,6 +79,52 @@ const API_FOOTBALL_KEY = process.env.API_FOOTBALL_KEY;
 
 const API_FOOTBALL_HOST = 'v3.football.api-sports.io';
 const SETTLE_DELAY_MS = 2 * 60 * 60 * 1000; // only settle signals 2h+ past kickoff
+
+const ONCE = process.argv.includes('--once');
+
+/**
+ * How long one tick stays alive. 50 minutes, matching fetchLineups.js: LONGER
+ * than the median gap GitHub actually delivers between ticks, so a fresh tick
+ * usually lands while a loop is still running and queues behind it, closing
+ * the seam instead of leaving one. Raise this, not the cron, if gaps reappear.
+ */
+const LOOP_MINUTES = parseFloat(process.env.RESULTS_LOOP_MINUTES || '50');
+
+/**
+ * How often to settle, inside that. THIS is the real cadence, and 15 minutes
+ * rather than the 5 fetchLineups uses is a COST decision with a number behind
+ * it. `settleFinishedMatches` selects every scheduled/live fixture past the
+ * cutoff with no lower bound on kickoff_at, and on 27 Aug 2026 that was 78
+ * rows across 45 DISTINCT DATES, oldest 23 Oct 2022 — the fixtures the feed
+ * never settled. One pass is therefore ~45 API-Football calls, 44 of them for
+ * dates that will never resolve. At a 5-minute interval that is ~13,000
+ * requests a day against a 75,000 budget, spent on nothing.
+ *
+ * A lineup expires; a result does not. Settling within 15 minutes instead of
+ * within ten hours is the whole win here, and the last five minutes of it are
+ * not worth a sixth of the daily allowance.
+ */
+const PASS_INTERVAL_SECONDS = parseFloat(process.env.RESULTS_PASS_INTERVAL_SECONDS || '900');
+
+/**
+ * How long a settleable signal may sit unsettled before the run says so out
+ * loud. This is the alarm the 27 Aug outage did not have: nothing anywhere
+ * measured "the settler has not run", so ten hours of silence looked exactly
+ * like a quiet afternoon.
+ */
+const STALE_AFTER_MINUTES = parseFloat(process.env.RESULTS_STALE_AFTER_MINUTES || '90');
+
+/**
+ * How far back a pending signal still counts as a BACKLOG rather than a fact
+ * about the feed. Measured on production the night this was written: of the 11
+ * signals pending past their settle window, NOT ONE was under a day old, none
+ * sat on a completed match, and the oldest kickoff was 8 Aug — every one of
+ * them on a fixture API-Football has never returned as finished. A count-based
+ * alarm would therefore read 11 for ever and be ignored within a week, which
+ * is worse than no alarm. So the horizon excludes them and they are reported
+ * as a plain line instead.
+ */
+const BACKLOG_HORIZON_HOURS = parseFloat(process.env.RESULTS_BACKLOG_HORIZON_HOURS || '24');
 
 function getClient() {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
@@ -752,13 +824,89 @@ async function refreshPerformanceBands(supabase) {
 // Main
 // ---------------------------------------------------------------------------
 
-async function run() {
+/**
+ * How far behind settlement is, and the only alarm that would have caught the
+ * 27 Aug outage.
+ *
+ * It reports AGE, NOT COUNT. A count is nonzero for perfectly ordinary reasons
+ * — a fixture that finished four minutes ago is eligible and not yet settled —
+ * and it is permanently nonzero because of the never-settling cohort above. An
+ * age is different: if the OLDEST settleable signal has been eligible for
+ * longer than STALE_AFTER_MINUTES, then no pass has completed in that time,
+ * which is a statement about the settler and not about football.
+ *
+ * It never throws. A failed reading must not take down the settlement it is
+ * reporting on — the whole point is to make silence loud, and a reporter that
+ * can turn a working run red would be the silence's second cause.
+ */
+async function reportBacklog(supabase) {
+  const now = Date.now();
+  const eligibleBefore = new Date(now - SETTLE_DELAY_MS).toISOString();
+  const horizon = new Date(now - BACKLOG_HORIZON_HOURS * 3_600_000).toISOString();
+
+  // Oldest eligible-but-unsettled signal inside the horizon, and how many.
+  const { data, count, error } = await supabase
+    .from('value_signals')
+    .select('kickoff_at', { count: 'exact' })
+    .eq('result', 'pending')
+    .lt('kickoff_at', eligibleBefore)
+    .gte('kickoff_at', horizon)
+    .order('kickoff_at', { ascending: true })
+    .limit(1);
+  if (error) throw new Error(error.message);
+
+  // The never-settling cohort, counted separately and deliberately NOT alarmed
+  // on: these are fixtures the feed has never returned as finished, so they are
+  // a fact about the source, not a backlog anyone can clear.
+  const { count: stale, error: staleErr } = await supabase
+    .from('value_signals')
+    .select('id', { count: 'exact', head: true })
+    .eq('result', 'pending')
+    .lt('kickoff_at', horizon);
+  if (staleErr) throw new Error(staleErr.message);
+
+  const oldest = data?.[0]?.kickoff_at ?? null;
+  // Minutes since the row became ELIGIBLE, not since kickoff — the settle delay
+  // is intended waiting and must not be counted as lateness.
+  const overdueMin = oldest
+    ? Math.max(0, (now - (Date.parse(oldest) + SETTLE_DELAY_MS)) / 60_000)
+    : 0;
+
+  console.log(
+    `[results] backlog: ${count ?? 0} settleable in the last ${BACKLOG_HORIZON_HOURS}h` +
+    (oldest ? ` (oldest eligible ${overdueMin.toFixed(0)}m ago)` : '') +
+    ` · ${stale ?? 0} older than that, never returned finished by the feed`);
+
+  if (overdueMin > STALE_AFTER_MINUTES) {
+    // A GitHub annotation, so a delivery outage leaves a mark on the first run
+    // that does happen rather than only in a table nobody is watching.
+    console.log(
+      `::error title=settlement is behind::${count} signal(s) have been settleable ` +
+      `for up to ${overdueMin.toFixed(0)} minutes (limit ${STALE_AFTER_MINUTES}). ` +
+      `Either no pass has completed in that time — check the schedule is being ` +
+      `delivered — or the feed is not returning those fixtures as finished.`);
+  }
+  return { count: count ?? 0, overdueMin, stale: stale ?? 0 };
+}
+
+/**
+ * Drop the dates whose fixture list can still change, keeping the rest.
+ *
+ * The cache exists so one API call per date covers both settlement passes. Held
+ * ACROSS passes it does much more than that: 44 of the 45 dates in the queue are
+ * years old and their results are immutable, so re-fetching them every pass buys
+ * nothing. Today's and yesterday's DO change — a match finishes mid-run, which is
+ * exactly the case this loop exists to catch — so those are evicted and re-read.
+ */
+function pruneVolatileDates(cache, volatileDays = 2) {
+  const cutoff = new Date(Date.now() - volatileDays * 86_400_000).toISOString().slice(0, 10);
+  for (const date of [...cache.keys()]) if (date >= cutoff) cache.delete(date);
+  return cache;
+}
+
+async function run(cache = new Map()) {
   console.log(`\n[results] ${new Date().toISOString()}`);
   const supabase = getClient();
-
-  // Shared fixtures-by-date cache across both settlement passes (one API call
-  // per date covers signal settlement AND match-status settlement).
-  const cache = new Map();
 
   try {
     await settleFinishedMatches(supabase, cache);
@@ -794,11 +942,61 @@ async function run() {
     console.error('[results] band refresh error:', err.message);
   }
 
+  // Last, so it reads the state this pass LEFT rather than the one it found.
+  try {
+    await reportBacklog(supabase);
+  } catch (err) {
+    console.error('[results] backlog reading failed:', err.message);
+  }
+
   console.log('[results] done');
 }
 
-if (require.main === module) {
-  run().catch(err => { console.error('[results] unhandled:', err); process.exit(1); });
+/**
+ * The self-poll loop. `--once` is the old single-pass behaviour and is what a
+ * one-off dispatch or another script should use.
+ */
+async function main() {
+  const started = Date.now();
+  const loopUntil = ONCE ? 0 : started + LOOP_MINUTES * 60_000;
+
+  // ONE cache for the whole run, pruned of the dates that can still move. See
+  // pruneVolatileDates: the 44 dead dates in the queue are fetched once per
+  // RUN rather than once per pass, which is what makes a tighter cadence
+  // affordable at all.
+  const cache = new Map();
+
+  let pass = 0;
+  const dog = beginWatchdog('fetchResults.js', {
+    onTerminate: ({ stage }) => console.error(
+      `[results] killed during ${stage} — any settlement already written stands, ` +
+      `the performance summary may be a pass behind`),
+  });
+
+  for (;;) {
+    pass++;
+    dog.stage(`pass ${pass}`);
+    await run(pruneVolatileDates(cache));
+
+    if (ONCE) break;
+    const nextAt = started + pass * PASS_INTERVAL_SECONDS * 1000;
+    if (nextAt >= loopUntil) break;
+    await sleep(Math.max(0, nextAt - Date.now()));
+  }
+
+  console.log(
+    `[results] ${pass} pass(es) over ${((Date.now() - started) / 1000 / 60).toFixed(1)}m ` +
+    `· pass interval ${PASS_INTERVAL_SECONDS}s`);
+  dog.finish();
 }
 
-module.exports = { run, calculatePerformance, refreshPerformanceBands, settlePendingSignals, settleFinishedMatches, reconcileSettledSignals, namesMatch, fixtureOutcome, settleSignal, resultFromGoals };
+if (require.main === module) {
+  main().catch(err => { console.error('[results] unhandled:', err); process.exit(1); });
+}
+
+module.exports = {
+  run, main, calculatePerformance, refreshPerformanceBands, settlePendingSignals,
+  settleFinishedMatches, reconcileSettledSignals, namesMatch, fixtureOutcome,
+  settleSignal, resultFromGoals, reportBacklog, pruneVolatileDates,
+  LOOP_MINUTES, PASS_INTERVAL_SECONDS, STALE_AFTER_MINUTES, BACKLOG_HORIZON_HOURS,
+};

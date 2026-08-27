@@ -1,0 +1,134 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — settle finished fixtures, on its own clock
+#
+# A RESULT IS THE ONLY THING THIS PRODUCT PUBLISHES THAT IT CANNOT LATER
+# INVENT. Prices, forecasts and reads are all statements about the future and
+# are allowed to be missing; the record is what /performance IS. A settled
+# fixture that has not been graded is not a stale figure on a board, it is the
+# product telling a paying member their winning pick did not happen.
+#
+# WHAT WENT WRONG. Settlement was step 10 of engine.yml, behind a ~9-minute
+# ingest job, so it could only run as often as the heaviest workflow in the repo
+# AND only if that workflow's schedule was delivered. On 27 Aug 2026 it was not:
+#
+#     engine.yml              11:12 UTC -> 21:02 UTC     9h50m gap
+#     capture-closing-lines   05:07 UTC -> 16:26 UTC    11h19m gap
+#     run-inplay              07:48 UTC -> 16:11 UTC     8h23m gap
+#
+# Both declare a quarter-hour cron. Every fixture on the European evening card
+# kicked off inside those gaps, so 39 matches sat at status='live' with 0
+# completed all day, `settle_match_signals()` refuses any status that is not
+# 'completed', and every signal on them stayed pending. Two PRIME picks that had
+# won — Plzen and Borac Banja Luka — were absent from the performance table for
+# three hours after full time, and the member who had backed both asked why.
+#
+# AND THERE WAS NOTHING TO NOTICE IT WITH. A schedule that never fires produces
+# no run, so no failed run, so no annotation and no alert. engine.yml's own
+# health step is `if: always()` — which is a statement about a run that HAPPENED.
+# The only trace was performance_summary.calculated_at, ten hours old, in a table
+# nobody watches. fetchResults.js now reads its own backlog and annotates when
+# settlement is more than RESULTS_STALE_AFTER_MINUTES behind.
+#
+# WHY A SEPARATE JOB AND NOT A TIGHTER PIPELINE. The engine runs ~9 minutes and
+# cannot go more often than ~15. This job makes one query and a handful of calls
+# and burns no odds quota. The precedent is lineups.yml, and before it
+# capture-closing-lines.yml, "whose second table became correct the moment it
+# stopped sharing a runner".
+#
+# WHAT THIS DOES NOT FIX. A fixture the feed never returns as finished still
+# never settles — 11 such signals are pending as at 27 Aug, none under a day old,
+# none on a completed match, oldest kickoff 8 Aug. Those are a fact about
+# API-Football, not a backlog, and the alarm deliberately excludes them.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Settle Results
+
+on:
+  schedule:
+    # THE CRON IS NOT THE CADENCE — the job polls itself, and this repo has the
+    # measurements to say why. engine.yml declares every 15 minutes and GitHub
+    # delivered a MEDIAN GAP OF 34 MINUTES over 25 consecutive runs, minimum 17,
+    # never once 15 — and on 27 Aug delivered nothing at all for ten hours. A
+    # schedule is a request, not a promise.
+    #
+    # So this asks often and the script decides the real interval. One tick
+    # keeps a process alive for 50 minutes taking a pass every 15; this
+    # schedule's only duty is to make sure a process is running at all, and
+    # asking every 5 minutes means a dropped tick costs minutes rather than an
+    # evening. Actions minutes are free on a public repo.
+    - cron: '3/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      once:
+        description: 'Run a single settlement pass and exit'
+        type: boolean
+        default: false
+
+# ONE LOOP AT A TIME, AND THE NEXT ONE WAITS. `cancel-in-progress: false` with
+# GitHub's one-pending-run-per-group rule turns a burst of ticks into a single
+# queued successor, so coverage is continuous and never doubled. Cancelling in
+# progress would be exactly wrong: it would kill a live 50-minute watch to start
+# another one on the same fixtures — and two settlers running at once would
+# duplicate every API-Football call for no benefit.
+concurrency:
+  group: settle-results-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  settle:
+    name: Settle finished fixtures
+    runs-on: ubuntu-latest
+    # 55 minutes against the script's own 50-minute loop. THE ORDER IS THE
+    # POINT — the script must stop itself before the step kills it, the cadence
+    # rule engine.yml learned the hard way on 6 Aug 2026. The job deliberately
+    # outlives its 5-minute schedule; the concurrency group above is what keeps
+    # that from piling up.
+    timeout-minutes: 55
+
+    env:
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Settle results
+        id: settle
+        shell: bash
+        run: |
+          set -o pipefail
+          if [ "${{ inputs.once }}" = "true" ]; then
+            node fetchResults.js --once | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            node fetchResults.js | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # `if: failure()` does NOT run on a cancelled job, and a job killed by
+      # `timeout-minutes` ends cancelled — the finding engine.yml's health step
+      # was rewritten for. `job.status` is the right primitive inside a `run:`
+      # block; a status-check function here makes the WHOLE FILE unparseable,
+      # which is itself how this repo lost ten hours on 22 Aug 2026.
+      # `npm run lint:workflows` is the ratchet.
+      - name: Report outcome
+        if: always()
+        shell: bash
+        run: |
+          case "${{ job.status }}" in
+            success)   echo "settle tick ok" ;;
+            cancelled) echo "::error title=settle killed::Cancelled — the step timeout fired before the script's own loop ended. Raise timeout-minutes or lower RESULTS_LOOP_MINUTES." ;;
+            *)         echo "::error title=settle failed::Step outcome '${{ steps.settle.outcome }}'. One failed tick is recoverable; a run of them means the record is not being written." ;;
+          esac

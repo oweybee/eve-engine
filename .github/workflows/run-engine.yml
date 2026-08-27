@@ -53,8 +53,14 @@ jobs:
       - name: Compute values
         run: node computeValues.js
 
+      # SUPERSEDED WORKFLOW — last scheduled run 25 Jun 2026, replaced by
+      # engine.yml. `--once` is pinned deliberately: fetchResults.js polls
+      # itself for 50 minutes by default (see settle-results.yml), and this job
+      # sets no timeout-minutes, so an un-pinned call here would hold a runner
+      # for the whole loop on a quarter-hour schedule if anyone re-enabled it.
+      # Settlement's real home is settle-results.yml.
       - name: Settle results & refresh performance summary
-        run: node fetchResults.js
+        run: node fetchResults.js --once
 
       - name: Restore signal post state
         uses: actions/cache@v4
