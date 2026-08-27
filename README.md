@@ -1026,13 +1026,18 @@ produces. What it does do is make an exhausted quota **loud** (a `::error::`
 annotation under 10% remaining) instead of showing up as a feed that
 mysteriously went quiet.
 
-**THE HEADER NAMES ARE NOT VERIFIED AGAINST A LIVE RESPONSE.** No
-`API_FOOTBALL_KEY` was available where this was written, so they come from the
-v3 documentation — the same footing `lib/oddsApi.js` shipped on. Every one is
-optional and an unrecognised header yields nulls rather than zeros, so a wrong
-name records nothing and breaks nothing. **Run `npm run api-quota` after the
-first real run**: a stored `limitDay` of 75000 confirms the names, and
-`never recorded` means they are wrong.
+**THE HEADER NAMES ARE VERIFIED (27 Aug 2026).** They were written from the v3
+documentation with no key available; the first real run confirmed all four:
+
+    limitDay 75000   remainingDay 74823   spent_today 177
+    limitMinute 450  remainingMinute 393
+
+So the day's allowance IS 75,000 — `DAILY_REQUEST_BUDGET` was right, and had
+been right by luck rather than by measurement, because nothing had ever read it
+back. **The per-minute number is the one worth watching**: that tick used 57 of
+450 in a single minute, and the in-play loop at 71 concurrent fixtures would
+want ~102 — comfortable, but it is the ceiling that binds first, and a daily
+quota with room in it says nothing about it.
 
 ---
 
