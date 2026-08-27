@@ -1041,6 +1041,30 @@ by review: an absent xG differenced against a real one gave **-0.4 instead of
 null**, which would have taught the study that untracked competitions create
 nothing; and an unplayed match read 0-0, which `didWin` counted as a **loss**.
 
+**IT RUNS ON A SCHEDULE, AND THE CADENCE IS PART OF THE DESIGN.**
+`.github/workflows/hit-zone.yml` fires daily at 07:19 UTC — late enough that the
+previous evening's fixtures have settled, since an unsettled match contributes
+nothing. But it runs two different things:
+
+    DAILY    npm run hit-zone:corpus    counts, growth, days-to-sample
+    MONDAY   npm run hit-zone           the control + the zone table
+
+**Re-reading a test every day is testing it seven times a week.** That is
+optional stopping, one of the most reliable ways to manufacture a significant
+result out of nothing — a study whose author checks it each morning and stops
+when it looks good has no false-positive rate at all, and it would undo the
+pre-registration, the Bonferroni bar and the holdout in one edit that looks like
+a simplification. So the zone table is weekly and **the daily line carries no
+inference whatsoever**: no z, no verdict, not one hypothesis. It is the same
+discipline the study applies inside itself, applied to WHEN it is read.
+`engine.hitzone.test.js` asserts both halves against the workflow and against
+`corpusReport`'s source, so a "tidy-up" that runs the study daily fails a test.
+
+A dispatch runs the full study whatever day it is — someone asking by hand has
+made the decision to look. It is the SCHEDULE that must not peek. The run never
+fails the build: a research readout that turns CI red is one people learn to
+ignore, and then it is running for nobody.
+
 **WHAT IT CANNOT DO YET, and the report says so rather than printing a small
 number as though it were an answer.** `inplay_momentum` starts empty. At full
 loop coverage the corpus grows ~65 matches a day, so a week is ~450 matches —

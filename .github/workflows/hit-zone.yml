@@ -1,0 +1,115 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — the in-play hit-zone study
+#
+# TWO QUESTIONS, TWO CADENCES, AND THE SPLIT IS THE POINT.
+#
+#   DAILY    is the capture working?      counts, growth, days-to-sample
+#   WEEKLY   is there an edge?            the calibration control + zone table
+#
+# "Is the capture working" is operational and wants answering every day. "Is
+# there an edge" is a statistical test, and RE-READING A TEST EVERY DAY IS
+# TESTING IT SEVEN TIMES A WEEK — optional stopping, one of the most reliable
+# ways to manufacture a significant result out of nothing. A study whose author
+# checks it each morning and stops when it looks good has no false-positive
+# rate at all. So the zone table fires on Mondays and the daily line carries no
+# inference whatsoever: no z, no verdict, not one hypothesis.
+#
+# The same discipline the study already applies inside itself — a pre-registered
+# list, a Bonferroni bar, a holdout split by kickoff — applied to WHEN it is
+# read rather than to what it tests.
+#
+# Read-only against Supabase. Burns no API quota — it touches neither vendor,
+# only tables the engine has already written. Never fails the run: this is a
+# reading, and a research readout that turns a build red teaches people to
+# ignore it.
+#
+# On demand:  Actions → MaxEdge Hit Zone → Run workflow
+# Locally:    npm run hit-zone   /   node scripts/inplayHitZone.js --corpus
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Hit Zone
+
+on:
+  schedule:
+    # 07:19 UTC daily. Late enough that the previous evening's fixtures have
+    # settled and `matches.status` has flipped to completed — an unsettled match
+    # contributes nothing, so running at midnight would just under-count.
+    - cron: '19 7 * * *'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: 'Run the full study rather than the daily corpus line'
+        type: boolean
+        default: true
+      days:
+        description: 'Window in days'
+        default: '30'
+
+concurrency:
+  group: hit-zone-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  study:
+    name: In-play hit zone
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      HIT_ZONE_DAYS:             ${{ github.event.inputs.days || '30' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      # `date -u +%u` is 1 on Monday. A dispatch with `full` left at its default
+      # runs the study whatever day it is, because someone asking by hand has
+      # made the decision to look — the schedule is what must not be allowed to
+      # peek.
+      - name: Decide what to run
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            [ "${{ github.event.inputs.full }}" = "false" ] && echo "full=0" >> "$GITHUB_OUTPUT" || echo "full=1" >> "$GITHUB_OUTPUT"
+          elif [ "$(date -u +%u)" = "1" ]; then
+            echo "full=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "full=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Corpus accumulation (no inference)
+        if: steps.mode.outputs.full != '1'
+        run: node scripts/inplayHitZone.js --corpus --days="$HIT_ZONE_DAYS"
+
+      # THE CONTROL IS PRINTED FIRST BY THE SCRIPT ITSELF and must be read
+      # before the zone table: a broken join and a real edge look identical in a
+      # zone table and completely different in a calibration curve.
+      - name: The study — control, then zones, explore then holdout
+        if: steps.mode.outputs.full == '1'
+        run: node scripts/inplayHitZone.js --days="$HIT_ZONE_DAYS"
+
+      # `if: failure()` does not run on a CANCELLED job and a timeout ends as
+      # cancelled — the finding engine.yml already carries. always() covers all
+      # three. It annotates and does not fail: a reading that turns the build
+      # red is a reading people learn to ignore.
+      - name: Report health
+        if: always()
+        run: |
+          if [ "${{ job.status }}" != "success" ]; then
+            echo "::warning::hit-zone run ended ${{ job.status }} — the study did not print"
+          fi

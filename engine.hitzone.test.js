@@ -281,5 +281,44 @@ test('an INVERTED join shows up loudly here, which is the whole point', () => {
   assert.ok(worst > 5, `a broken join must be unmissable, got |z| ${worst}`);
 });
 
+console.log('the schedule must not peek — optional stopping is the last trap');
+const fs = require('fs');
+const path = require('path');
+const wf = fs.readFileSync(path.join(__dirname, '.github/workflows/hit-zone.yml'), 'utf8');
+
+test('the workflow runs daily but the STUDY is gated to one day a week', () => {
+  // Re-reading a test every day is testing it seven times a week. A study whose
+  // author checks it each morning and stops when it looks good has no
+  // false-positive rate at all — which would undo the pre-registration, the
+  // Bonferroni bar and the holdout in one edit that looks like a simplification.
+  assert.ok(/--corpus/.test(wf), 'the daily line must be the corpus mode');
+  assert.ok(/date -u \+%u/.test(wf), 'the study must be gated on the day of week');
+  assert.ok(/steps\.mode\.outputs\.full == '1'/.test(wf),
+    'the zone table must run only when that gate says so');
+  assert.ok(/steps\.mode\.outputs\.full != '1'/.test(wf),
+    'and the corpus line only when it does not');
+});
+test('the daily mode carries no inference at all', () => {
+  // A z-score in the daily output is the same peek by another route.
+  const src = fs.readFileSync(path.join(__dirname, 'scripts/inplayHitZone.js'), 'utf8');
+  const corpus = src.slice(src.indexOf('function corpusReport'), src.indexOf('(async () =>'));
+  for (const banned of ['zoneStats', 'HYPOTHESES', 'bonferroniZ', 'calibrationCurve', 'firstEntryPerMatch']) {
+    assert.ok(!corpus.includes(banned), `corpusReport must not reach for ${banned}`);
+  }
+});
+test('a reading never fails the build', () => {
+  // A research readout that turns a build red is a readout people learn to
+  // ignore, and then the study is running for nobody.
+  assert.ok(!/exit 1/.test(wf), 'the workflow must not fail on a finding');
+  assert.ok(/::warning::/.test(wf) && !/::error::/.test(wf),
+    'health is a warning here, not an error');
+});
+test('it reads the tables the engine wrote and touches no vendor', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'scripts/inplayHitZone.js'), 'utf8');
+  assert.ok(!/api-sports\.io|the-odds-api/.test(src), 'the study must burn no API quota');
+  assert.ok(/PAGE = 1000/.test(src) && /pagedRead/.test(src),
+    'PostgREST caps a response at 1000 rows whatever .limit() says, silently');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

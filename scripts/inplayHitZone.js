@@ -17,7 +17,18 @@
  *   node scripts/inplayHitZone.js                    the last 30 days
  *   node scripts/inplayHitZone.js --days=7
  *   node scripts/inplayHitZone.js --explore=0.5      holdout split (default 0.5)
+ *   node scripts/inplayHitZone.js --corpus           accumulation only, no inference
  *   node scripts/inplayHitZone.js --json
+ *
+ * ── WHY --corpus EXISTS, AND WHY IT IS THE ONE THAT RUNS DAILY ──────────────
+ *
+ * "Is the capture working?" and "is there an edge?" are different questions and
+ * they want different cadences. The first is operational and wants answering
+ * every day. The second is a statistical test, and **re-reading a test every
+ * day is testing it seven times a week** — optional stopping, which is one of
+ * the most reliable ways to manufacture a significant result out of nothing.
+ * The zone table is therefore weekly, and the daily line carries no inference
+ * at all: counts, a growth rate and how far off a usable sample is.
  *
  * WHAT IT CANNOT DO YET, and it says so rather than printing a small number as
  * though it were an answer: `inplay_momentum` starts empty on 26 Aug 2026.
@@ -37,6 +48,7 @@ const arg = (name, dflt) => {
 const DAYS = parseFloat(arg('days', '30'));
 const EXPLORE = parseFloat(arg('explore', '0.5'));
 const JSON_OUT = process.argv.includes('--json');
+const CORPUS_ONLY = process.argv.includes('--corpus');
 const PAGE = 1000;
 
 /**
@@ -192,6 +204,39 @@ function report(built) {
   console.log('');
 }
 
+/**
+ * The daily line. Counts and a growth rate, and NOT ONE INFERENCE — no zone
+ * table, no z, no verdict. See the header for why that separation is the point
+ * rather than a simplification.
+ */
+function corpusReport(built) {
+  const obsMatches = new Set(built.observations.map(o => o.matchId)).size;
+  const featMatches = new Set(built.observations.filter(o => o.features).map(o => o.matchId)).size;
+  const perDay = DAYS > 0 ? featMatches / DAYS : 0;
+  console.log(`\nIN-PLAY CORPUS — last ${DAYS} days`);
+  console.log('-'.repeat(60));
+  console.log(`  completed matches priced   ${obsMatches}`);
+  console.log(`  ...with match state joined ${featMatches}`);
+  console.log(`  momentum rows              ${built.momentumRows}`);
+  console.log(`  priced ticks               ${built.ticks}`);
+  console.log(`  growth                     ${perDay.toFixed(1)} usable matches/day`);
+  // The bars are the ones the study's own header derives: ~450 matches detects
+  // a 5pp calibration miss, ~1100 a 3pp one, and the holdout halves whatever
+  // is in hand. Stated as DAYS AWAY so it is actionable rather than abstract.
+  for (const [label, need] of [['a 5pp miss', 450], ['a 3pp miss', 1100]]) {
+    if (featMatches >= need) { console.log(`  ${label.padEnd(26)} reached`); continue; }
+    const days = perDay > 0 ? Math.ceil((need - featMatches) / perDay) : null;
+    console.log(`  ${label.padEnd(26)} ${need - featMatches} more` +
+                (days == null ? ' (no growth measured)' : ` — about ${days} more day(s)`));
+  }
+  if (!featMatches) {
+    console.log('\n  NOTHING JOINED. Either no match has been live since the capture');
+    console.log('  landed, or the two tables are not pairing — check that');
+    console.log('  captureInplaySeries is logging [inplayMomentum] rows=N.');
+  }
+  console.log('');
+}
+
 (async () => {
   const built = await build(getClient());
   if (JSON_OUT) {
@@ -210,5 +255,6 @@ function report(built) {
     }, null, 2));
     return;
   }
+  if (CORPUS_ONLY) { corpusReport(built); return; }
   report(built);
 })().catch(err => { console.error('[hitzone] FATAL:', err.message); process.exit(1); });
