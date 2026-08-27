@@ -105,7 +105,7 @@ function untouchableSupabase() {
   };
 }
 
-function fakeTelegramBot({ failBan = false, failRevoke = false, failSend = false } = {}) {
+function fakeTelegramBot({ failBan = false, failUnban = false, failRevoke = false, failSend = false } = {}) {
   const calls = { ban: [], unban: [], revoke: [], send: [] };
   return {
     calls,
@@ -115,6 +115,7 @@ function fakeTelegramBot({ failBan = false, failRevoke = false, failSend = false
     },
     async unbanChatMember(token, chatId, userId, opts) {
       calls.unban.push({ token, chatId, userId, opts });
+      if (failUnban) throw new Error('unban failed (mock)');
     },
     async revokeChatInviteLink(token, chatId, inviteLink) {
       calls.revoke.push({ token, chatId, inviteLink });
@@ -289,6 +290,7 @@ await testAsync('enabled: a joined+unentitled row is kicked with the right chat 
     assert.strictEqual(upd.col, 'user_id');
 
     assert.strictEqual(result.kicked, 1);
+    assert.strictEqual(result.ownerNotify.length, 0, 'a clean kick has nothing to tell the owner');
   } finally { restoreEnv(snap); }
 });
 
@@ -335,7 +337,7 @@ await testAsync('a revoke API failure is non-fatal and STILL marks the row revok
   } finally { restoreEnv(snap); }
 });
 
-await testAsync('a kick API failure lands the row in the owner-notify list and does NOT flip status to kicked', async () => {
+await testAsync('a kick API failure (ban itself fails) lands the row in the owner-notify list and does NOT flip status to kicked', async () => {
   const snap = snapshotEnv();
   try {
     baseTelegramEnv();
@@ -345,14 +347,51 @@ await testAsync('a kick API failure lands the row in the owner-notify list and d
     const bot = fakeTelegramBot({ failBan: true });
     const result = await run({ supabase, telegramBot: bot });
 
+    assert.strictEqual(bot.calls.unban.length, 0, 'unban must never be attempted when the ban itself failed');
+
     assert.strictEqual(result.ownerNotify.length, 1);
     assert.strictEqual(result.ownerNotify[0].user_id, 'u1');
     assert.strictEqual(result.ownerNotify[0].channel, 'signals');
     assert.ok(/kick failed/.test(result.ownerNotify[0].reason));
+    assert.ok(!/permanently banned/i.test(result.ownerNotify[0].reason), 'a plain ban failure must not claim a permanent ban that never happened');
 
     const upd = supabase.updates.find(u => u.val === 'u1');
-    assert.strictEqual(upd, undefined, 'must not have written any status change when the kick failed');
+    assert.strictEqual(upd, undefined, 'must not have written any status change when the ban itself failed');
     assert.strictEqual(result.kicked, 0);
+  } finally { restoreEnv(snap); }
+});
+
+await testAsync('a ban that SUCCEEDS followed by an unban that FAILS still kicks, but tells the owner they are permanently banned', async () => {
+  const snap = snapshotEnv();
+  try {
+    baseTelegramEnv();
+    process.env.TELEGRAM_MEMBERSHIP_ENABLED = 'true';
+    const rows = [row({ user_id: 'u1', signals_status: 'joined', signals_telegram_user_id: 42 })];
+    const supabase = fakeSupabase({ rows, entitled: { u1: false } });
+    const bot = fakeTelegramBot({ failUnban: true });
+    const result = await run({ supabase, telegramBot: bot });
+
+    // The ban really happened — this is not "kick failed", it's a partial success.
+    assert.strictEqual(bot.calls.ban.length, 1);
+    assert.strictEqual(bot.calls.unban.length, 1, 'unban must still be attempted after a successful ban');
+
+    // The row IS out of the channel, so status must reflect that — this is
+    // the whole point of the fix: a stuck 'joined' row here is what leaves a
+    // resubscribed member permanently locked out, since planChannel() never
+    // revisits an entitled row.
+    const upd = supabase.updates.find(u => u.val === 'u1');
+    assert.ok(upd, 'the row must still be marked kicked even though the unban failed');
+    assert.strictEqual(upd.patch.signals_status, 'kicked');
+    assert.strictEqual(result.kicked, 1);
+
+    // The owner has to be told this is a PERMANENT ban needing manual
+    // intervention, not a generic failure — and the telegram_user_id has to
+    // be right there in the message, since that is what they will type into
+    // Telegram to fix it.
+    assert.strictEqual(result.ownerNotify.length, 1);
+    assert.strictEqual(result.ownerNotify[0].telegram_user_id, 42);
+    assert.ok(/permanently banned/i.test(result.ownerNotify[0].reason), 'must explicitly say permanently banned, not a generic failure message');
+    assert.ok(result.ownerNotify[0].reason.includes('42'), 'must name the telegram_user_id to unban by hand');
   } finally { restoreEnv(snap); }
 });
 
