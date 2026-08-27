@@ -16,11 +16,18 @@
  * channel and `invited`-but-never-joined on the other, and because a channel
  * whose chat id or bot isn't configured must not stop the other one working.
  *
- *   joined   + unentitled  -> kick (ban, then unban with only_if_banned) ->
- *                             status = 'kicked'. A Telegram failure leaves the
- *                             row `joined` and adds it to the owner-notify list
- *                             — it is still IN the channel, which the owner
- *                             needs to know.
+ *   joined   + unentitled  -> kick: ban, then unban with only_if_banned, as
+ *                             TWO SEPARATE steps (see below) -> status =
+ *                             'kicked'. A ban failure leaves the row `joined`
+ *                             and adds it to the owner-notify list — it is
+ *                             still IN the channel, which the owner needs to
+ *                             know. A ban SUCCESS followed by an unban
+ *                             FAILURE still marks the row 'kicked' (they are
+ *                             genuinely out) but the owner-notify reason
+ *                             explicitly says they are now permanently banned
+ *                             and names the telegram_user_id to unban by
+ *                             hand — see the note on the kick branch below
+ *                             for why this has to be a distinct message.
  *   invited  + unentitled  -> best-effort revokeChatInviteLink -> status =
  *                             'revoked' regardless of whether the revoke call
  *                             itself succeeded (nobody joined on this link, so
@@ -34,6 +41,22 @@
  * owner-notify list rather than being silently skipped. It most likely means
  * the member joined via a path that bypassed eve-frontend's webhook, and a
  * row this script cannot act on has to be surfaced, not swallowed.
+ *
+ * WHY BAN AND UNBAN ARE TWO TRY/CATCHES, NOT ONE. A Telegram channel ban is
+ * PERMANENT until explicitly lifted — it is not a timed kick. `unbanChatMember`
+ * with `only_if_banned: true` is what turns "removed" into "removed, and free
+ * to rejoin on a future invite link". If the two calls shared one try/catch,
+ * a ban that succeeds followed by an unban that merely fails (a network blip,
+ * a rate limit) left the row's status at 'joined' — which is not just wrong
+ * bookkeeping. `planChannel()` returns `{action:'none'}` for any entitled row,
+ * so if that member later resubscribed nothing in this product would ever
+ * call `unbanChatMember` for them again: a paying customer locked out of the
+ * channel forever by one transient API error, and an owner-notify message
+ * that read only "kick failed: <error>" — which undersold what had actually
+ * happened, since the ban itself had already landed. Splitting the two calls
+ * means a ban failure and an unban-after-successful-ban failure are reported
+ * as the different situations they are, and the status update always reflects
+ * what Telegram actually did, not what this script hoped it did.
  *
  * ENTITLEMENT comes from `public.is_plus_entitled(uuid)` (migration 112),
  * which mirrors `current_tier()`'s own trial/tier case logic rather than
@@ -232,22 +255,46 @@ async function run(deps = {}) {
           });
           continue;
         }
+
+        // Ban and unban are deliberately TWO try/catches, not one — see the
+        // file header. A ban failure means nothing happened; an unban
+        // failure AFTER a successful ban means the member is genuinely out
+        // of the channel but Telegram now considers them permanently
+        // banned, which is a materially different — and more urgent —
+        // thing to tell the owner than "kick failed".
         try {
           await telegramBot.banChatMember(target.token, target.chatId, action.telegramUserId);
-          await telegramBot.unbanChatMember(target.token, target.chatId, action.telegramUserId, { only_if_banned: true });
-          const { error: upErr } = await supabase
-            .from('telegram_links')
-            .update({ [`${channel}_status`]: 'kicked' })
-            .eq('user_id', row.user_id);
-          if (upErr) throw new Error(`status update: ${upErr.message}`);
-          kicked++;
-          console.log(`[telegram-membership] kicked user_id=${row.user_id} channel=${channel}`);
         } catch (err) {
-          console.error(`[telegram-membership] kick FAILED user_id=${row.user_id} channel=${channel}: ${err.message}`);
+          console.error(`[telegram-membership] kick FAILED (ban) user_id=${row.user_id} channel=${channel}: ${err.message}`);
           ownerNotify.push({
             user_id: row.user_id, channel, telegram_user_id: action.telegramUserId,
             reason: `kick failed: ${err.message}`,
           });
+          continue;
+        }
+
+        let unbanFailed = null;
+        try {
+          await telegramBot.unbanChatMember(target.token, target.chatId, action.telegramUserId, { only_if_banned: true });
+        } catch (err) {
+          unbanFailed = err;
+        }
+
+        const { error: upErr } = await supabase
+          .from('telegram_links')
+          .update({ [`${channel}_status`]: 'kicked' })
+          .eq('user_id', row.user_id);
+        if (upErr) throw new Error(`status update: ${upErr.message}`);
+        kicked++;
+
+        if (unbanFailed) {
+          console.error(`[telegram-membership] unban FAILED after a successful ban — user_id=${row.user_id} channel=${channel} telegram_user_id=${action.telegramUserId} is now PERMANENTLY BANNED until manually unbanned: ${unbanFailed.message}`);
+          ownerNotify.push({
+            user_id: row.user_id, channel, telegram_user_id: action.telegramUserId,
+            reason: `banned successfully but the unban call failed — they are PERMANENTLY BANNED from ${channel} and cannot rejoin on any future invite link until you manually unban telegram_user_id ${action.telegramUserId} in Telegram: ${unbanFailed.message}`,
+          });
+        } else {
+          console.log(`[telegram-membership] kicked user_id=${row.user_id} channel=${channel}`);
         }
         continue;
       }
