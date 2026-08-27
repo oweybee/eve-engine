@@ -12,7 +12,8 @@
     "lineups:report": "node fetchLineups.js --report",
     "audit:unmatched": "node scripts/auditUnmatchedEvents.js",
     "api-quota": "node scripts/apiQuota.js",
-    "hit-zone": "node scripts/inplayHitZone.js"
+    "hit-zone": "node scripts/inplayHitZone.js",
+    "hit-zone:corpus": "node scripts/inplayHitZone.js --corpus"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0"
