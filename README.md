@@ -973,6 +973,84 @@ backstop under the writer's own skip.
 
 ---
 
+## The hit-zone study — is there live match state the price gets wrong?
+
+`npm run hit-zone` (`scripts/inplayHitZone.js` over `lib/hitZone.js`). Written
+26 Aug 2026, **before there is data to run it on**, so the design is fixed
+before anyone has seen a result — which is the only arrangement in which a
+pre-registered hypothesis means anything.
+
+It joins `inplay_market_series` (the price and the clock) to `inplay_momentum`
+(the state at the same instant) to `matches` (what actually happened).
+
+**THE BASELINE IS THE PRICE, NOT OUR MODEL.** The question is not "does
+dominance predict goals" — it obviously does, and the bookmaker is watching the
+same match. It is *does dominance predict the result beyond what the price
+already knows*. So every observation is a residual against the **Shin**-de-vigged
+market. Measured against `model_prob` instead, the study would rediscover that
+INPLAY_DIXON_COLES is overconfident above 0.85, which is already known and is a
+fact about us rather than about football.
+
+**THE CONTROL IS THE MARKET'S OWN CALIBRATION, and the report prints it first.**
+The in-play market is the sharpest thing in this dataset, so if the de-vigged
+price comes out badly calibrated the JOIN is wrong — an inverted away leg, a
+mismatched tick, a `completed` flag that lied. **A broken pipeline and a real
+edge look identical in a zone table and completely different in a calibration
+curve.**
+
+A RED CARD IS NOT THE CONTROL, though it is the measured thing to hand
+(x0.6178 / x1.6018 in `lib/inplayState`). The market reprices a sending-off
+within seconds, so the correct residual there is ZERO — it would test whether
+bookmakers watch football, and pass whatever our code did.
+
+**ONE OBSERVATION PER MATCH.** The series writes 30–60 ticks per match and they
+share one result; 20,000 ticks is not 20,000 observations. Each zone takes the
+FIRST tick that enters it, which is also the only one a bettor could act on,
+since after that the price has moved.
+
+**FOUR HYPOTHESES, FIXED IN THE FILE, AND ONE OF THEM IS AN EXPECTED NULL.**
+Eight statistics crossed with five minute bands and three outcomes is 120 cells
+and **~5.5 clear |z| >= 2 by chance alone** — the trap `/leagues` leads against
+("not one club-season in 785") and `/models` leads against ("not one
+architecture clears |z| >= 2"). `bonferroniZ` states the corrected bar for
+however many are tested (**1.96 at k=1, 2.50 at k=4, 3.53 at k=120**), and
+`territory` is in the list precisely because possession without chances should
+price at zero: a study with no expected-null has no way to show its bar is
+honest.
+
+**THE HOLDOUT IS SPLIT BY KICKOFF, NOT AT RANDOM.** A random split leaks — two
+ticks from one match land on both sides, so the holdout contains matches the
+zone was chosen on. A time split is also the honest shape for a forward test:
+the holdout is literally the future. **A zone that clears the corrected bar on
+EXPLORE and fails on HOLDOUT is a description of the past.**
+
+**THE DRAW IS EXCLUDED.** Every feature is a differential from one side's
+perspective and the draw has no side; folding it in as "closeness" would be a
+different hypothesis wearing the same name. Its leg is still read, because
+de-vigging a 1X2 vector needs all three.
+
+**THE ORIENTATION IS THE DANGEROUS PART**, and it is pinned in both directions.
+Reading `xg_home` as "our xG" regardless of which side a selection backs
+inverts every away observation and looks completely ordinary in a results
+table — the failure `lib/headToHead` exists to warn about. The test fixture is
+a side dominating and losing (xG +2.0, one goal behind), and both sides must
+read as exact opposites.
+
+Writing it found two live `Number(null)` bugs, both caught by test rather than
+by review: an absent xG differenced against a real one gave **-0.4 instead of
+null**, which would have taught the study that untracked competitions create
+nothing; and an unplayed match read 0-0, which `didWin` counted as a **loss**.
+
+**WHAT IT CANNOT DO YET, and the report says so rather than printing a small
+number as though it were an answer.** `inplay_momentum` starts empty. At full
+loop coverage the corpus grows ~65 matches a day, so a week is ~450 matches —
+enough to detect a **5pp** miss, not a 3pp one — and the holdout halves it
+again. **The study does not measure the SIGNALS**: with the 0.85 certainty cap
+a week produces maybe 10–30 of those, far too few for anything. What has the
+sample size is the corpus: every tick on every match, signal or not.
+
+---
+
 ## The API-Football usage tracker
 
 Added 26 Aug 2026. Until then the daily allowance had **never been measured**:
