@@ -1,0 +1,13 @@
+[Unit]
+Description=MaxEdge GitHub Actions schedule watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/eve-engine
+EnvironmentFile=/opt/eve-engine/scripts/gh-watchdog/.env
+ExecStart=/usr/bin/node scripts/gh-watchdog/ghWatchdog.js
+# A transient Supabase/GitHub API blip must not mark the unit failed forever —
+# same reasoning as betfair-ingest.service.
+SuccessExitStatus=0 1
