@@ -748,7 +748,7 @@ function summarisePhase(rows, { includeClv }) {
 async function calculatePerformance(supabase) {
   const { data, error } = await supabase
     .from('value_signals')
-    .select('result, detected_odds, detected_edge, detected_mes, clv, no_vig_clv, phase, detected_at, match_id, market, market_line, model_architecture');
+    .select('result, detected_odds, detected_edge, detected_mes, clv, no_vig_clv, phase, detected_at, match_id, market, market_line, model_architecture, signal_category');
   if (error) throw new Error(`calculatePerformance(select): ${error.message}`);
 
   const rows = data ?? [];
@@ -756,13 +756,38 @@ async function calculatePerformance(supabase) {
   const prematchRows = rows.filter(r => (r.phase ?? 'prematch') !== 'inplay');
   const inplayRows   = rows.filter(r => r.phase === 'inplay');
 
-  // Headline performance reflects PRIME signals only — the sole tier we
-  // suggest — and only those detected on/after the clean-slate epoch. Value and
-  // longshot picks stay visible on the site as a tool but must never distort the
-  // tracked win-rate / yield / ROI. (see lib/signalTier)
+  // Headline performance reflects PRIME signals only — and only those detected
+  // on/after the clean-slate epoch. Value and longshot picks stay visible on the
+  // site as a tool but must never distort the tracked win-rate / yield / ROI.
+  //
+  // THE BUCKET IS READ, NOT RE-DERIVED, AND THAT IS THE FIX (27 Aug 2026).
+  // This asked `classifyTier(odds, edge)`, which answers with TODAY's
+  // thresholds — so every time the eligibility box moved, the settled record
+  // re-sorted itself underneath the headline. Measured over settled prematch
+  // rows since the epoch, deduped:
+  //
+  //     from the stored bucket    85 rows   42 wins   49.4%
+  //     re-derived with today's   34 rows   20 wins   58.8%
+  //
+  // Fifty-one signals this engine had published as prime, twenty-two of them
+  // winners, had dropped out of their own history because PRIME_EDGE_MIN moved
+  // to 5% on 26 Aug — and the number left behind was the FLATTERING one. A
+  // record that improves when a constant changes is not a record.
+  //
+  // `signal_category` is stamped at write time by categoryFor() in
+  // computeValues.js, so it is the bucket the product actually broadcast. The
+  // EDGE band needs no exception here: rows written since 26 Aug carry 'edge'
+  // and stay out of the headline exactly as lib/signalTier intends, while older
+  // rows carry the bucket they were published under. Nothing is rewritten and
+  // the asymmetry ages out on its own.
+  //
+  // Falls back to the live classification only where the column is absent —
+  // production has none, and dropping a settled signal is worse than dating it.
   const epochMs = new Date(PERFORMANCE_EPOCH).getTime();
+  const bucketOf = r =>
+    r.signal_category ?? classifyTier({ odds: r.detected_odds, edge: r.detected_edge }).tier;
   const isPrimeSinceEpoch = r =>
-    classifyTier({ odds: r.detected_odds, edge: r.detected_edge }).tier === 'prime' &&
+    bucketOf(r) === 'prime' &&
     r.detected_at != null && new Date(r.detected_at).getTime() >= epochMs;
 
   // The learning model is scored on its own, never in the headline (see above).
