@@ -1,0 +1,179 @@
+# ────────────────────────────────────────────────────────────────────────────
+# MaxEdge Engine Heartbeat — a dead-man's switch for engine.yml's cron
+#
+# WHY THIS EXISTS. On 28 Aug 2026, engine.yml's schedule (`*/20 * * * *`) went
+# dark for 8h41m (05:26 -> 14:07 UTC, 26 missed ticks) on a commit that had
+# just run cleanly seconds before the gap opened — no parse error, no killed
+# job, no queued run: GitHub simply stopped delivering the schedule event for
+# this one workflow. Every other cron in the repo, including run-inplay.yml,
+# kept firing throughout, so this was not a repo-wide outage. It was found
+# only because something outside GitHub Actions was watching
+# odds_snapshots.captured_at.
+#
+# THIS WORKFLOW MOVES THAT WATCH IN-REPO, on its OWN cron, offset from
+# engine.yml's and from run-inplay.yml's self-polling loop, so the two are
+# unlikely to be silently dropped by GitHub at the same moment for the same
+# reason. It is a floor, not a guarantee — a repo-wide scheduling outage could
+# still take both down together, and a genuinely independent watch (something
+# outside GitHub Actions entirely, e.g. a Supabase pg_cron job or an external
+# uptime service hitting `workflow_dispatch` via the REST API) is stronger.
+# See the incident note in engine.yml's `on.schedule` block for the full story.
+#
+# WHAT IT DOES, and nothing else:
+#   1. Reads odds_snapshots.captured_at (max) and the next matches.kickoff_at
+#      straight from Supabase over PostgREST — the same two numbers a human
+#      would check by hand, and the same table captureSnapshot.js writes every
+#      ingest cycle regardless of price movement (unlike `odds`, which only
+#      writes on a change — so a gap here means the loop did not run, not that
+#      nothing moved).
+#   2. Flags DOWN if the gap exceeds STALE_MINUTES (120, matching the general
+#      alert bar), OR a fixture is inside KICKOFF_WINDOW_MINUTES (120) and the
+#      gap exceeds CLOSING_FLOOR_MINUTES (45) — the same two-tier bar used to
+#      catch this incident by hand.
+#   3. On DOWN: posts to ENGINE_ALERT_WEBHOOK (the same webhook engine.yml's
+#      own health step uses) and attempts to dispatch engine.yml directly, so
+#      the pipeline can recover within one heartbeat tick instead of waiting
+#      on a human to notice and re-run it.
+#
+# WHAT IT CANNOT DO. It cannot tell "engine.yml never fired" apart from
+# "engine.yml fired and captureSnapshot.js specifically failed on every loop
+# iteration" — both look identical from here, which is fine, because both are
+# worth the same alert. It also cannot fully rule out a repo-wide GitHub
+# Actions incident, only reduce the odds both crons are hit by the same silent
+# drop. Step 3's self-dispatch needs the default GITHUB_TOKEN to carry
+# `actions: write`, granted below; if a future GitHub change revokes that for
+# workflow-triggered dispatches, the `curl` is `|| true` and step 2's alert
+# still fires — this is deliberately never allowed to be the only line of
+# defence.
+# ────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Engine Heartbeat
+
+on:
+  schedule:
+    # Offset from engine.yml's `*/20 * * * *` by 7 minutes, so a check lands
+    # a few minutes after each expected engine.yml tick rather than racing its
+    # start, and so the two schedules are extremely unlikely to share a single
+    # cron-minute slot that GitHub happens to drop.
+    - cron: '7,27,47 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: engine-heartbeat
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Required to call the workflow_dispatch REST endpoint with the default
+  # GITHUB_TOKEN in the self-heal step below.
+  actions: write
+
+jobs:
+  heartbeat:
+    name: Odds pipeline heartbeat
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ENGINE_ALERT_WEBHOOK:      ${{ secrets.ENGINE_ALERT_WEBHOOK }}
+      GH_TOKEN:                  ${{ secrets.GITHUB_TOKEN }}
+      # Matches the general/closing-floor bar this incident was caught on.
+      STALE_MINUTES:             '120'
+      KICKOFF_WINDOW_MINUTES:    '120'
+      CLOSING_FLOOR_MINUTES:     '45'
+    steps:
+      - name: Check odds_snapshots freshness and self-heal if stale
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "::warning::Heartbeat missing SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY — cannot check freshness this tick."
+            exit 0
+          fi
+
+          # No npm install for a 3-minute job — plain curl + PostgREST, same
+          # shape as the two queries a human would run by hand.
+          SNAP=$(curl -sS -G "$SUPABASE_URL/rest/v1/odds_snapshots" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            --data-urlencode "select=captured_at" \
+            --data-urlencode "order=captured_at.desc" \
+            --data-urlencode "limit=1") || SNAP=""
+
+          LAST=$(printf '%s' "$SNAP" | node -e '
+            let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{
+              try { const j = JSON.parse(d); console.log(j[0]?.captured_at || ""); }
+              catch { console.log(""); }
+            });')
+
+          if [ -z "$LAST" ]; then
+            echo "::warning::Heartbeat could not read odds_snapshots (empty/error response) — treating as unknown, not down, to avoid false alerts."
+            echo "Raw response was: $SNAP"
+            exit 0
+          fi
+
+          NOW_EPOCH=$(date -u +%s)
+          LAST_EPOCH=$(date -u -d "$LAST" +%s)
+          GAP_MIN=$(( (NOW_EPOCH - LAST_EPOCH) / 60 ))
+          echo "odds_snapshots last write: $LAST  (${GAP_MIN} min ago)"
+
+          NEXT=$(curl -sS -G "$SUPABASE_URL/rest/v1/matches" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            --data-urlencode "select=kickoff_at" \
+            --data-urlencode "status=eq.scheduled" \
+            --data-urlencode "kickoff_at=gt.now()" \
+            --data-urlencode "order=kickoff_at.asc" \
+            --data-urlencode "limit=1") || NEXT=""
+
+          NEXT_KICKOFF=$(printf '%s' "$NEXT" | node -e '
+            let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{
+              try { const j = JSON.parse(d); console.log(j[0]?.kickoff_at || ""); }
+              catch { console.log(""); }
+            });')
+
+          MINUTES_TO_KICKOFF=999999
+          if [ -n "$NEXT_KICKOFF" ]; then
+            KICKOFF_EPOCH=$(date -u -d "$NEXT_KICKOFF" +%s)
+            MINUTES_TO_KICKOFF=$(( (KICKOFF_EPOCH - NOW_EPOCH) / 60 ))
+            echo "next kickoff: $NEXT_KICKOFF  (${MINUTES_TO_KICKOFF} min away)"
+          else
+            echo "no upcoming scheduled fixture found"
+          fi
+
+          DOWN=0
+          REASON=""
+          if [ "$GAP_MIN" -ge "$STALE_MINUTES" ]; then
+            DOWN=1
+            REASON="odds_snapshots stale ${GAP_MIN}min (>= ${STALE_MINUTES}min general bar)"
+          elif [ "$MINUTES_TO_KICKOFF" -ge 0 ] && [ "$MINUTES_TO_KICKOFF" -le "$KICKOFF_WINDOW_MINUTES" ] && [ "$GAP_MIN" -ge "$CLOSING_FLOOR_MINUTES" ]; then
+            DOWN=1
+            REASON="closing-floor window: kickoff in ${MINUTES_TO_KICKOFF}min, odds_snapshots stale ${GAP_MIN}min (>= ${CLOSING_FLOOR_MINUTES}min bar)"
+          fi
+
+          if [ "$DOWN" -eq 0 ]; then
+            echo "Pipeline healthy."
+            exit 0
+          fi
+
+          echo "::error title=EVE Engine heartbeat down::${REASON}"
+
+          if [ -n "${ENGINE_ALERT_WEBHOOK:-}" ]; then
+            PAYLOAD=$(printf '{"content":"[HEARTBEAT] EVE Engine odds pipeline looks down.\\n%s\\nAttempting to dispatch engine.yml now."}' "$REASON")
+            curl -sS -X POST "$ENGINE_ALERT_WEBHOOK" -H 'Content-Type: application/json' -d "$PAYLOAD" || true
+          fi
+
+          # Best-effort self-heal. See the file header for why this is never
+          # the only line of defence.
+          curl -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/engine.yml/dispatches" \
+            -d '{"ref":"main"}' || echo "::warning::Could not dispatch engine.yml (token permissions?) — alert above still stands."
+
+          # DELIBERATELY DOES NOT FAIL THE JOB, same reasoning as engine.yml's
+          # own health step: this is a reporting job, and a red run here would
+          # just be one more thing to triage on top of the actual outage.
+          exit 0

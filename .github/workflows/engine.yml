@@ -100,9 +100,27 @@ on:
     # AND EDITING THIS BLOCK IS WHAT RE-REGISTERS THE SCHEDULE. engine.yml did
     # not fire for ten hours because an expression error made the file
     # unparseable, and it still had not fired 35 minutes after the fix while
-    # every other workflow in the repo ran on time. A change to `on.schedule`
+    # every other workflow in the repo ran normally. A change to `on.schedule`
     # on the default branch is the documented way to make GitHub pick a
     # schedule back up.
+    #
+    # SECOND OCCURRENCE, 28 Aug 2026, AND THIS TIME THE FILE WAS NOT BROKEN.
+    # The cron went dark from 05:26 to at least 14:07 UTC (8h41m, 26 missed
+    # ticks) on the exact commit (26fa789) that had just run cleanly at 05:26
+    # — so this was not a parse error, a code failure, or a killed job: no run
+    # of any kind (queued, in_progress, or completed) exists for that window.
+    # Found by an external heartbeat watching odds_snapshots.captured_at (that
+    # table is written every ingest cycle by captureSnapshot.js regardless of
+    # price movement, unlike `odds`, which only writes on a change — so a gap
+    # there means the loop did not run, not that nothing moved). GitHub
+    # Actions itself was not down: run-inplay.yml kept firing on its own
+    # schedule throughout the gap. This is the "GITHUB WAS NOT DELIVERING IT
+    # ANYWAY" failure mode above, but longer than either prior incident and
+    # with a provably valid file, which rules out cadence and parsing as the
+    # cause. Recovered by a manual workflow_dispatch plus this edit, per the
+    # remedy already on record two paragraphs up. See
+    # .github/workflows/engine-heartbeat.yml for the standing watch this
+    # incident added, and its header for what it can and cannot catch.
     - cron: '*/20 * * * *'
 
   workflow_dispatch:
@@ -426,6 +444,11 @@ jobs:
       #   degraded   — the job "succeeded" with continue-on-error steps down
       # Silence now means all of them are clear, which is what it was always
       # taken to mean.
+      #
+      # NONE OF THESE THREE STATES COVERS THE JOB NEVER STARTING AT ALL — the
+      # 28 Aug 2026 incident. This step cannot see that failure mode by
+      # construction: if the schedule never fires, this file never runs.
+      # engine-heartbeat.yml watches for exactly that gap from outside.
       - name: Report pipeline health
         if: always()
         shell: bash
