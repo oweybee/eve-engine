@@ -738,9 +738,18 @@ async function calculatePerformance(supabase) {
  * change meaning when the PRIME/EDGE boxes move. That is why it can be wired
  * ahead of the ladder release rather than with it.
  *
- * The argument is left to its default (`p_tracked_from = 2026-08-06`, the
- * tracked epoch) so the bar is stated in one place — the function — rather than
- * copied into a caller, which is how the sigma hand-copy failed twice.
+ * The argument is left to its default so the bar is stated in one place — the
+ * function — rather than copied into a caller, which is how the sigma hand-copy
+ * failed twice.
+ *
+ * THAT DEFAULT IS AN INSTANT, NOT A DATE, SINCE MIGRATION 110. It was
+ * `p_tracked_from date default '2026-08-06'`, so the join widened it to
+ * midnight and the band window opened sixteen hours before the tracked record
+ * does — admitting 31 signals chosen by the retired conviction ladder and
+ * understating Longshots by 18.15u. It is now
+ * `timestamptz default '2026-08-06T16:00:00Z'`, matching PERFORMANCE_EPOCH in
+ * eve-frontend/lib/epoch.js, which explains why the instant sits after both
+ * merges. Keep the two in step.
  */
 async function refreshPerformanceBands(supabase) {
   const { error } = await supabase.rpc('refresh_performance_by_band');
