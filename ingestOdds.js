@@ -35,6 +35,7 @@
 
 const https            = require('https');
 const { getClient }    = require('./lib/supabaseClient');
+const { inChunks }     = require('./lib/pagedRead');
 const { bookmakerKey } = require('./lib/bookmakers');
 
 // ---------------------------------------------------------------------------
@@ -183,37 +184,46 @@ async function prefetchMatchIds(supabase, externalIds) {
 }
 
 /**
- * Fetches the latest odds row per (match_id, bookmaker, market) for all
- * provided match UUIDs in ONE query. Deduplication to "latest per group"
- * is done in JavaScript by iterating the DESC-ordered result and taking
- * the first occurrence of each composite key.
+ * Fetches the latest odds row per (match_id, bookmaker, market, line) for all
+ * provided match UUIDs. Deduplication to "latest per group" is done in
+ * JavaScript by keeping the row with the greatest fetched_at per composite key.
  *
  * Replaces ~40 serial getLastOdds() calls with one bulk read.
  * Bounded to the last 48 hours to keep response size predictable.
  *
+ * PAGED AND CHUNKED past BOTH PostgREST caps via lib/pagedRead. A plain
+ * `.in('match_id', ids)` hit both: the .in() URL-length cap, and the 1000-row
+ * response cap that silently returned only the first 1000 odds rows across ALL
+ * matches — so matches beyond the cap lost their "last seen" prices and every
+ * book re-signalled as a fake price move. matchIds here is today's plan (a
+ * bounded slate, not the whole 'scheduled' season), so a targeted .in() chunked
+ * at IN_CHUNK is the right shape — unlike the compute engines, which read the
+ * whole freshness window because 'scheduled' is 9,500+ matches.
+ *
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string[]} matchIds
  * @returns {Promise<Map<string, {home_odds:number, draw_odds:number, away_odds:number}>>}
- *   Key: `${matchId}:${bookmaker}:${market}`
+ *   Key: `${matchId}:${bookmaker}:${market}:${market_line}`
  */
 async function prefetchLastOdds(supabase, matchIds) {
   if (!matchIds.length) return new Map();
 
   const since48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await supabase
-    .from('odds')
-    .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds)
-    .gte('fetched_at', since48h)
-    .order('fetched_at', { ascending: false });
-  if (error) throw new Error(`prefetchLastOdds: ${error.message}`);
+  const rows = await inChunks(matchIds, 'id', 'prefetchLastOdds', chunk =>
+    supabase
+      .from('odds')
+      .select('id, match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
+      .in('match_id', chunk)
+      .gte('fetched_at', since48h));
 
-  // DESC order: first occurrence of each key is the most recent row.
-  // Key includes market_line so different lines of the same market don't collide.
+  // pageAll walks id-ascending, so row order is NOT recency — keep the row with
+  // the greatest fetched_at per key rather than trusting first-seen. Key includes
+  // market_line so different lines of the same market don't collide.
   const map = new Map();
-  for (const row of data ?? []) {
+  for (const row of rows) {
     const key = `${row.match_id}:${row.bookmaker}:${row.market}:${row.market_line ?? ''}`;
-    if (!map.has(key)) map.set(key, row);
+    const prev = map.get(key);
+    if (!prev || new Date(row.fetched_at) > new Date(prev.fetched_at)) map.set(key, row);
   }
   return map;
 }
@@ -832,5 +842,5 @@ if (require.main === module) {
 
 module.exports = {
   ingest, extractH2hRows, extractTotalsRows, extractBttsRows, oddsHaveMoved,
-  insertOddsRows,
+  insertOddsRows, prefetchLastOdds,
 };

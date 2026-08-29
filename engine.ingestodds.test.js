@@ -23,7 +23,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { insertOddsRows } = require('./ingestOdds');
+const { insertOddsRows, prefetchLastOdds } = require('./ingestOdds');
 
 /** A supabase double recording every insert call and its payload shape. */
 function insertSpy({ failBatch = false, failRows = new Set() } = {}) {
@@ -113,4 +113,63 @@ test('THESE TESTS CAN ACTUALLY FAIL', async () => {
     async () => { await insertOddsRows(insertSpy(), 'm1', [entry('a')], () => {});
                   assert.strictEqual(1, 2); },
     /1 !== 2|Expected values/);
+});
+
+// ---------------------------------------------------------------------------
+// prefetchLastOdds — the price-movement baseline. A plain .in() capped the read
+// at 1,000 rows across ALL matches, so matches beyond the cap lost their "last
+// seen" price and every book re-signalled as a fake move. It is paged + chunked
+// via lib/pagedRead now, which walks id-ascending — so recency must come from
+// max(fetched_at), not from first-seen row order.
+// ---------------------------------------------------------------------------
+
+/** A supabase double for the odds table: honours .in()/.gte() filters, sorts on
+ *  .order(), enforces the 1,000-row cap on .range(), and rebuilds per page. */
+function oddsClient(rows, { cap = 1000 } = {}) {
+  const make = () => {
+    let f = rows;
+    const node = {
+      in: (col, ids) => { const s = new Set(ids); f = f.filter(r => s.has(r[col])); return node; },
+      gte: (col, v) => { f = f.filter(r => r[col] >= v); return node; },
+      order: (col, { ascending = true } = {}) => {
+        f = [...f].sort((a, b) => (a[col] < b[col] ? -1 : a[col] > b[col] ? 1 : 0) * (ascending ? 1 : -1));
+        return node;
+      },
+      range: async (from, to) => ({ data: f.slice(from, from + Math.min(to - from + 1, cap)), error: null }),
+    };
+    return node;
+  };
+  return { from: () => ({ select: () => make() }) };
+}
+
+const rid = (i) => `r${String(i).padStart(5, '0')}`;
+const ago = (min) => new Date(Date.now() - min * 60_000).toISOString();
+
+test('prefetchLastOdds pages past the cap and takes the latest by fetched_at', async () => {
+  const rows = [
+    // match z, book a: an OLD row early in id-order and a NEWER row late in it.
+    { id: rid(0), match_id: 'z', bookmaker: 'a', market: 'h2h', market_line: null, home_odds: 2.0, fetched_at: ago(90) },
+    // 1,000 rows for match x fill the whole first page (ids r00001..r01000)…
+    ...Array.from({ length: 1000 }, (_, i) => ({
+      id: rid(i + 1), match_id: 'x', bookmaker: `b${i}`, market: 'h2h', market_line: null, home_odds: 1.5, fetched_at: ago(30),
+    })),
+    // …so z's newer row is only reachable on page 2.
+    { id: rid(1500), match_id: 'z', bookmaker: 'a', market: 'h2h', market_line: null, home_odds: 3.3, fetched_at: ago(1) },
+  ];
+  const map = await prefetchLastOdds(oddsClient(rows), ['x', 'z']);
+
+  const z = map.get('z:a:h2h:');
+  assert.ok(z, 'match z beyond the first page was still read');
+  assert.strictEqual(z.home_odds, 3.3, 'the newer row won on fetched_at, not the id-first one');
+  assert.strictEqual(map.get('x:b0:h2h:').home_odds, 1.5, 'first-page rows are present too');
+});
+
+test('prefetchLastOdds honours the 48h window and empty input', async () => {
+  assert.strictEqual((await prefetchLastOdds(oddsClient([]), [])).size, 0);
+  const rows = [
+    { id: rid(1), match_id: 'm', bookmaker: 'a', market: 'h2h', market_line: null, home_odds: 2.0, fetched_at: ago(10) },
+    { id: rid(2), match_id: 'm', bookmaker: 'a', market: 'h2h', market_line: null, home_odds: 9.9, fetched_at: ago(60 * 72) }, // 3 days old
+  ];
+  const map = await prefetchLastOdds(oddsClient(rows), ['m']);
+  assert.strictEqual(map.get('m:a:h2h:').home_odds, 2.0, 'the stale 3-day row is filtered out by the .gte window');
 });

@@ -18,7 +18,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { checkComputedValues, checkSignals, isLive } = require('./verifyIntegrity');
+const { checkComputedValues, checkSignals, checkMarketCoverage, isLive } = require('./verifyIntegrity');
 
 /** A supabase double that enforces PostgREST's real 1,000-row response cap. */
 function cappedClient(rowsByTable, { cap = 1000 } = {}) {
@@ -112,6 +112,122 @@ test('pending signals are paged too, though they fit today', async () => {
     market: 'h2h', outcome: 'home', detected_edge: 0.05, detected_odds: 2.0,
   }));
   assert.strictEqual(await checkSignals(cappedClient({ value_signals: rows }), []), 1400);
+});
+
+// ---------------------------------------------------------------------------
+// checkMarketCoverage — the smoke alarm for the "awaiting prices" failure:
+// odds ingested but never priced. It must flag missing / stale / unpriced by
+// SYMPTOM, ignore legitimately single-book fixtures, and page past the cap so
+// it cannot itself be blinded by the truncation it watches for.
+// ---------------------------------------------------------------------------
+
+/** A supabase double covering both query shapes checkMarketCoverage issues:
+ *  the matches read (.eq/.gt/.lt/.order/.limit) and the odds/computed_values
+ *  reads (.in then .order/.range via lib/pagedRead), enforcing the 1,000-row cap. */
+function coverageClient({ matches = [], odds = [], computed_values = [] }, { cap = 1000 } = {}) {
+  const byTable = { matches, odds, computed_values };
+  const node = (rows) => {
+    const n = {
+      eq: () => n, gt: () => n, lt: () => n, in: () => n, order: () => n,
+      limit: async (k) => ({ data: rows.slice(0, k), error: null }),
+      range: async (from, to) => ({
+        data: rows.slice(from, from + Math.min(to - from + 1, cap)),
+        error: null,
+      }),
+    };
+    return n;
+  };
+  return { from: (t) => ({ select: () => node(byTable[t] ?? []) }) };
+}
+
+const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
+const soon = () => new Date(Date.now() + 6 * 3600_000).toISOString();
+const m = (id) => ({ id, external_id: id.toUpperCase(), status: 'scheduled', kickoff_at: soon() });
+const h2h = (mid, book, msAgo = 0) => ({ id: `${mid}-${book}`, match_id: mid, market: 'h2h', bookmaker: book, fetched_at: iso(msAgo) });
+const mkt = (mid, market, msAgo = 0) => ({ id: `${mid}-${market}`, match_id: mid, market, bookmaker: 'a', fetched_at: iso(msAgo) });
+
+test('coverage flags missing, stale and unpriced — and counts what it checked', async () => {
+  const matches = [m('h1'), m('m1'), m('s1'), m('u1'), m('k1')];
+  const odds = [
+    // h1 healthy: 2 h2h books + totals + btts, all fresh
+    h2h('h1', 'a'), h2h('h1', 'b'), mkt('h1', 'totals'), mkt('h1', 'btts'),
+    // m1 missing compute: 2 h2h books ingested
+    h2h('m1', 'a'), h2h('m1', 'b'),
+    // s1 stale compute: 2 h2h books, fresh odds
+    h2h('s1', 'a'), h2h('s1', 'b'),
+    // u1 unpriced totals: 2 h2h books + totals ingested
+    h2h('u1', 'a'), h2h('u1', 'b'), mkt('u1', 'totals'),
+    // k1 single-book: only one h2h book → below MIN_BOOKMAKERS, must be skipped
+    h2h('k1', 'a'),
+  ];
+  const computed_values = [
+    { id: 'cv-h1', match_id: 'h1', computed_at: iso(10 * 60_000), best_home_odds: 2.0, over_odds: 1.9, btts_yes_odds: 1.8 },
+    { id: 'cv-s1', match_id: 's1', computed_at: iso(120 * 60_000), best_home_odds: 2.0, over_odds: 1.9, btts_yes_odds: 1.8 },
+    { id: 'cv-u1', match_id: 'u1', computed_at: iso(5 * 60_000), best_home_odds: 2.0, over_odds: null, btts_yes_odds: null },
+  ];
+  const violations = [];
+  const checked = await checkMarketCoverage(coverageClient({ matches, odds, computed_values }), violations);
+
+  assert.strictEqual(checked, 4, 'k1 (single-book) is skipped; the other four are checked');
+  assert.strictEqual(violations.length, 3, 'exactly missing + stale + unpriced');
+  assert.ok(violations.some(v => /coverage M1: .*NO computed_values row/.test(v)), 'missing compute flagged');
+  assert.ok(violations.some(v => /coverage S1: computed_values stale/.test(v)), 'stale compute flagged');
+  assert.ok(violations.some(v => /coverage U1: totals odds ingested but over\/under not priced/.test(v)), 'unpriced totals flagged');
+  assert.ok(!violations.some(v => /K1/.test(v)), 'single-book fixture raises nothing');
+});
+
+test('coverage stays silent when every priced market is current', async () => {
+  const matches = [m('ok1')];
+  const odds = [h2h('ok1', 'a'), h2h('ok1', 'b'), mkt('ok1', 'totals'), mkt('ok1', 'btts')];
+  const computed_values = [{
+    id: 'cv-ok1', match_id: 'ok1', computed_at: iso(3 * 60_000),
+    best_home_odds: 2.0, over_odds: 1.9, btts_yes_odds: 1.8,
+  }];
+  const violations = [];
+  const checked = await checkMarketCoverage(coverageClient({ matches, odds, computed_values }), violations);
+  assert.strictEqual(checked, 1);
+  assert.deepStrictEqual(violations, []);
+});
+
+test('coverage cannot be blinded by the 1,000-row cap', async () => {
+  // The row proving the second h2h book, and the totals row, sit PAST the cap —
+  // the exact arrangement that made truncation invisible. Paged reads must see
+  // them, so this healthy match neither drops below MIN_BOOKMAKERS nor
+  // false-alarms on unpriced totals.
+  const filler = Array.from({ length: 1000 }, (_, i) => h2h('zzz', `book-${i}`));
+  const matches = [m('big')];
+  const odds = [
+    h2h('big', 'a'),
+    ...filler,               // 1,000 rows for another match, filling the first page
+    h2h('big', 'b'),         // second book for `big` — only reachable on page 2
+    mkt('big', 'totals'),    // totals for `big` — also on page 2
+  ];
+  const computed_values = [{
+    id: 'cv-big', match_id: 'big', computed_at: iso(2 * 60_000),
+    best_home_odds: 2.0, over_odds: 1.9, btts_yes_odds: null,
+  }];
+  const violations = [];
+  const checked = await checkMarketCoverage(coverageClient({ matches, odds, computed_values }), violations);
+  assert.strictEqual(checked, 1, 'both h2h books were seen despite the cap');
+  assert.deepStrictEqual(violations, [], 'totals row past the cap was seen, so no false unpriced alarm');
+});
+
+test('a failed coverage query becomes a violation, not a silent zero', async () => {
+  const boom = {
+    from: () => ({
+      select: () => ({
+        eq: function () { return this; }, gt: function () { return this; }, lt: function () { return this; },
+        in: function () { return this; }, order: function () { return this; },
+        limit: async () => ({ data: null, error: { message: 'matches boom' } }),
+        range: async () => ({ data: null, error: { message: 'matches boom' } }),
+      }),
+    }),
+  };
+  const violations = [];
+  const checked = await checkMarketCoverage(boom, violations);
+  assert.strictEqual(checked, 0);
+  assert.strictEqual(violations.length, 1);
+  assert.match(violations[0], /\[query\] coverage matches/);
 });
 
 test('isLive FAILS OPEN on a row with no match join', () => {

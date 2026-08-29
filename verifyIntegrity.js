@@ -37,12 +37,22 @@
  */
 
 const { getClient } = require('./lib/supabaseClient');
-const { pageAll } = require('./lib/pagedRead');
+const { pageAll, inChunks } = require('./lib/pagedRead');
 
 const EV_THRESHOLD = parseFloat(process.env.EV_THRESHOLD || '0.005');
 const EDGE_CAP     = parseFloat(process.env.INTEGRITY_EDGE_CAP || '0.30'); // 30%
 const PROB_TOL     = 1e-6;
 const EDGE_TOL     = 0.01; // 1pp tolerance on EV reconstruction
+// How far the newest odds may lead the newest compute before a match counts as
+// "compute is falling behind". The engine ticks every ~5 min, so a healthy lag
+// is single-digit minutes; 90 min clears CI queueing yet still catches the
+// hours/days-stale failure that hides secondary markets ("awaiting prices").
+const STALE_COMPUTE_MIN = parseFloat(process.env.INTEGRITY_STALE_COMPUTE_MIN || '90');
+// The consensus engine only prices a match with h2h odds from at least this
+// many bookmakers (matches computeValues' own gate). Single-book fixtures —
+// e.g. Betfair-exchange-only rows — are legitimately unpriced, so the coverage
+// guard ignores them to avoid false alarms.
+const MIN_BOOKMAKERS = parseInt(process.env.MIN_BOOKMAKERS || '2', 10);
 
 // Each priced selection: [edge col, odds col, value col, model-prob col|null, label]
 const SELECTIONS = [
@@ -146,6 +156,106 @@ async function checkComputedValues(supabase, violations) {
   return { fetched: data?.length ?? 0, checked };
 }
 
+/**
+ * Coverage / freshness guard — the smoke alarm for the exact failure that hid
+ * secondary markets on otherwise-priced fixtures (the "awaiting prices" bug):
+ * odds are in the DB but never reach computed_values, so the app shows Match
+ * Odds only. It catches the whole class by SYMPTOM regardless of cause (a
+ * future row-cap regression, a crashed/lagging compute, a plan gap) by
+ * comparing, per live upcoming match, the newest ingested odds against the
+ * newest computed price.
+ *
+ * Every multi-match read here is bounded both ways via lib/pagedRead, so the
+ * guard cannot itself be blinded by the truncation it exists to watch for.
+ */
+async function checkMarketCoverage(supabase, violations) {
+  const nowMs = Date.now();
+  // Nearest 500 upcoming scheduled fixtures — a single bounded, ordered read.
+  const { data: matches, error: mErr } = await supabase
+    .from('matches')
+    .select('id, external_id, status, kickoff_at')
+    .eq('status', 'scheduled')
+    .gt('kickoff_at', new Date(nowMs).toISOString())
+    .lt('kickoff_at', new Date(nowMs + 7 * 24 * 3600 * 1000).toISOString())
+    .order('kickoff_at', { ascending: true })
+    .limit(500);
+  if (mErr) { violations.push(`[query] coverage matches: ${mErr.message}`); return 0; }
+  const live = matches ?? [];
+  if (!live.length) return 0;
+  const ids = live.map(m => m.id);
+
+  // Odds presence + freshness per match. Chunked + paged: these ids are the
+  // nearest-500 slate, which still inlines to a ~20KB .in() URL, and the odds
+  // table holds many rows per match.
+  let oddsRows;
+  try {
+    oddsRows = await inChunks(ids, 'id', 'coverage odds', chunk =>
+      supabase.from('odds').select('id, match_id, market, bookmaker, fetched_at').in('match_id', chunk));
+  } catch (e) { violations.push(`[query] coverage odds: ${e.message}`); return 0; }
+  const oddsByMatch = new Map();
+  for (const o of oddsRows) {
+    let e = oddsByMatch.get(o.match_id);
+    if (!e) { e = { markets: new Set(), h2hBooks: new Set(), latest: 0 }; oddsByMatch.set(o.match_id, e); }
+    const market = o.market ?? 'h2h';
+    e.markets.add(market);
+    if (market === 'h2h' && o.bookmaker) e.h2hBooks.add(o.bookmaker);
+    const t = o.fetched_at ? new Date(o.fetched_at).getTime() : 0;
+    if (t > e.latest) e.latest = t;
+  }
+
+  // Latest compute + which markets are priced, per match. Chunked + paged for
+  // the same reasons.
+  let cvRows;
+  try {
+    cvRows = await inChunks(ids, 'id', 'coverage computed_values', chunk =>
+      supabase.from('computed_values')
+        .select('id, match_id, computed_at, best_home_odds, over_odds, btts_yes_odds')
+        .in('match_id', chunk));
+  } catch (e) { violations.push(`[query] coverage computed_values: ${e.message}`); return 0; }
+  const cvByMatch = new Map();
+  for (const r of cvRows) {
+    let e = cvByMatch.get(r.match_id);
+    if (!e) { e = { latest: 0, hasH2h: false, hasTotals: false, hasBtts: false }; cvByMatch.set(r.match_id, e); }
+    const t = r.computed_at ? new Date(r.computed_at).getTime() : 0;
+    if (t > e.latest) e.latest = t;
+    if (r.best_home_odds != null) e.hasH2h = true;
+    if (r.over_odds != null)      e.hasTotals = true;
+    if (r.btts_yes_odds != null)  e.hasBtts = true;
+  }
+
+  let checked = 0;
+  for (const m of live) {
+    const od = oddsByMatch.get(m.id);
+    if (!od || !od.latest) continue; // no odds ingested yet → nothing to price
+    // Only assert pricing for matches the consensus engine is meant to price.
+    if (od.h2hBooks.size < MIN_BOOKMAKERS) continue;
+    checked++;
+    const tag = `coverage ${m.external_id ?? m.id?.slice(0, 8)}`;
+    const cv = cvByMatch.get(m.id);
+
+    if (!cv) {
+      violations.push(`${tag}: ${od.markets.size} odds market(s) ingested but NO computed_values row`);
+      continue;
+    }
+    const lagMin = (od.latest - cv.latest) / 60000;
+    if (lagMin > STALE_COMPUTE_MIN) {
+      violations.push(`${tag}: computed_values stale — newest odds ${Math.round(lagMin)} min ahead of newest compute (last ${new Date(cv.latest).toISOString()})`);
+      continue; // staleness already explains any missing markets — one alert
+    }
+    // Compute is current, yet a market with ingested odds is unpriced. Gated on
+    // h2h being priced so we know the match was actually processed this cycle.
+    if (cv.hasH2h) {
+      if (od.markets.has('totals') && !cv.hasTotals) {
+        violations.push(`${tag}: totals odds ingested but over/under not priced`);
+      }
+      if (od.markets.has('btts') && !cv.hasBtts) {
+        violations.push(`${tag}: BTTS odds ingested but not priced`);
+      }
+    }
+  }
+  return checked;
+}
+
 async function checkSignals(supabase, violations) {
   // value_signals has no stored model_prob — it carries detected_edge +
   // detected_odds, from which the implied model probability is (edge+1)/odds.
@@ -201,8 +311,9 @@ async function run() {
 
   const cv = await checkComputedValues(supabase, violations);
   const sigN = await checkSignals(supabase, violations);
+  const covN = await checkMarketCoverage(supabase, violations);
 
-  const scope = `${cv.checked} live of ${cv.fetched} computed row(s), ${sigN} pending signal(s)`;
+  const scope = `${cv.checked} live of ${cv.fetched} computed row(s), ${sigN} pending signal(s), ${covN} live match(es) covered`;
   if (violations.length) {
     console.error(`[integrity] ${violations.length} VIOLATION(S) across ${scope}:`);
     for (const v of violations) console.error(`  ✗ ${v}`);
@@ -217,4 +328,4 @@ if (require.main === module) {
   run().then(n => process.exit(0)).catch(err => { console.error('[integrity] unhandled:', err); process.exit(0); });
 }
 
-module.exports = { run, checkComputedValues, checkSignals, isLive };
+module.exports = { run, checkComputedValues, checkSignals, checkMarketCoverage, isLive };
