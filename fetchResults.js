@@ -755,6 +755,52 @@ async function refreshPerformanceBands(supabase) {
   const { error } = await supabase.rpc('refresh_performance_by_band');
   if (error) throw new Error(`refreshPerformanceBands: ${error.message}`);
   console.log('[performance] band table refreshed');
+  await revalidatePerformancePage();
+}
+
+/**
+ * Tell the site to rebuild /performance, now that the figures have changed.
+ *
+ * WHY THIS EXISTS. /performance is a static prerender. It used to expire on a
+ * five-minute timer, which meant it both served stale figures AND raced this
+ * job: an acceptance run read 33.4% / +16.0u from `performance_band` while the
+ * page served +27.3% / +12.5u — each internally consistent, minutes apart. A
+ * record page that disagrees with the table it reports is worse than a slow one.
+ *
+ * The page now has no timer at all (`revalidate = false`). Recalculation is the
+ * only event that changes the answer, so it is the only thing that should
+ * invalidate the page — the same rule this function already follows for when
+ * the band table itself is refreshed.
+ *
+ * NON-FATAL BY DESIGN. A settled result reaching the database matters more than
+ * the page reflecting it a few minutes later, so a failure here is logged and
+ * swallowed rather than failing the settlement run. The next recalculation
+ * retries it for free.
+ *
+ * Needs SITE_URL and REVALIDATE_SECRET; unset, it says so once and skips.
+ */
+async function revalidatePerformancePage() {
+  const base = process.env.SITE_URL;
+  const secret = process.env.REVALIDATE_SECRET;
+  if (!base || !secret) {
+    console.warn('[performance] SITE_URL or REVALIDATE_SECRET unset - page not revalidated');
+    return;
+  }
+  const url = `${base.replace(/\/$/, '')}/api/revalidate-performance`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${secret}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      console.warn(`[performance] revalidate returned ${res.status} - page may be stale`);
+      return;
+    }
+    console.log('[performance] /performance revalidated');
+  } catch (err) {
+    console.warn(`[performance] revalidate failed (${err.message}) - page may be stale`);
+  }
 }
 
 // ---------------------------------------------------------------------------
