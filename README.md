@@ -550,13 +550,23 @@ GAP OF 34 MINUTES, minimum 17, never once 15"); **do not read a cron expression
 in this project as a statement about how often something happens.**
 
 **`runInplayLoop.js` is that file's fix applied where cadence IS the product.**
-One GitHub tick keeps a process alive for `INPLAY_LOOP_MINUTES` (50) running a
-pass every `INPLAY_PASS_INTERVAL_SECONDS` (60); the cron's only duty is to make
-sure a process is running at all. LOOP_MINUTES **must exceed the delivered
-gap** — at 50 against a median ~35 a fresh tick lands while a loop is still
-running, GitHub holds it as the single pending run (`cancel-in-progress:
-false`) and starts it the instant this one ends, so coverage closes up instead
-of gapping. Raise that, not the cron, if holes reappear.
+One GitHub tick keeps a process alive for `INPLAY_LOOP_MINUTES` running a pass
+every `INPLAY_PASS_INTERVAL_SECONDS` (60); the cron's only duty is to make sure
+a process is running at all. LOOP_MINUTES **must exceed the delivered gap** — a
+fresh tick lands while a loop is still running, GitHub holds it as the single
+pending run (`cancel-in-progress: false`) and starts it the instant this one
+ends, so coverage closes up instead of gapping.
+
+**IT SHIPPED AT 50 AND THAT WAS NOT ENOUGH — IT IS 170.** The median is not the
+thing to clear, because the delivered gaps are not spread around it: the tail
+lands in the evening, when the fixtures are. The last four scheduled runs of
+26 Aug were **100, 102 and 113 minutes** apart, so the 19:00 kickoffs got their
+first tick at 20:14 and seven matches carry that timestamp to the millisecond —
+it is the loop's first pass, not a coincidence. 170 clears the worst gap
+observed with margin. **The cost is deploy latency**: the run checks out `main`
+when it starts, so a merge can take up to LOOP_MINUTES to reach production, and
+a manual dispatch QUEUES behind the running loop rather than replacing it — to
+ship immediately, cancel the running job, then dispatch.
 
 It **spawns the six existing scripts unchanged**, in the workflow's own order,
 rather than requiring them in-process: each owns its Supabase client, its
@@ -568,7 +578,7 @@ and **a pass is skipped entirely when nothing is in the live window** — 47% of
 all hours — on one indexed count that **fails OPEN**, because a database blip
 must not become a silent in-play outage.
 
-`timeout-minutes` (55) exceeds LOOP_MINUTES and the loop stops itself before a
+`timeout-minutes` (175) exceeds LOOP_MINUTES and the loop stops itself before a
 pass would overrun its own budget: being killed is not stopping, and a killed
 run prints no summary. Health is reported on `always()`, because a job killed
 by a timeout ends **cancelled, not failed**, and `if: failure()` does not fire
@@ -658,6 +668,88 @@ book and Stage 1 (book-lag, multi-book) can never fire on one. And
 minute and a scoreline; several notes in eve-frontend's CLAUDE.md still say no
 row has ever carried it.
 
+### The in-play channel — a fourth gate, and it was the one that decided it
+
+26 Aug 2026, owner request. The `🔴 IN-PLAY` branch has sat in
+`postToX.buildMessage` since it was written and **had never once been
+reachable** — and would not have become reachable however
+`TELEGRAM_INPLAY_CHAT_ID` was set.
+
+**`fetchRecentSignals` filters every row through `isPublished` before anything
+else sees it**, and no in-play architecture is in `PUBLICATION`:
+
+    INPLAY_DIXON_COLES   not in the calibration set, so it has no measured error
+    SECOND_HALF_SNIPER   anchored on inplay_baseline, a recombined consensus
+
+So the row was gone at the door. Three gates on this feature were already
+documented — the RESTRICTIVE RLS policy, `trg_score_needs_measured_sigma`, and
+the browser's own `lib/publication` — and every one of them was described as
+the reason in-play stays "recorded, not posted". **This is the fourth and it is
+the one that actually decided it.** Counting gates is not the same as finding
+the binding one.
+
+**`INPLAY_BROADCAST` IS A SEPARATE SET, NOT AN ENTRY IN `PUBLICATION`.** Those
+answer different questions. `PUBLICATION` decides whether output may be
+presented as a BACKED SELECTION — it governs the site, the pre-match channel
+and the published record — and for these two the answer is still no: no
+`model_calibration` row, no measured error bar, and `performance_summary` keyed
+'inplay' has sat at **zero settled** since it was created. What the new set
+decides is narrower: may a live alert reach a DEDICATED, OPT-IN channel that
+states on every post what it is.
+
+**TWO SWITCHES, BOTH FAILING CLOSED.** `INPLAY_BROADCAST_ENABLED` admits
+in-play rows past the gate and is unset by default; the chat id decides where
+they go. With the flag on and the id UNSET nothing posts and the run says so,
+which is the safe order to arrive in — the format can be watched in the log
+before a channel exists. A new in-play architecture does not inherit the
+channel: the set is by name.
+
+**AND THE DISCLOSURE IS THE CONDITION IT IS ADMITTED ON.** Every message states
+that the model has no measured error bar and no settled record, and that the
+price is live and may be gone. If that is ever removed from `buildMessage`,
+`INPLAY_BROADCAST` should go with it.
+
+**RED IS THE IN-PLAY MARK AND NOTHING ELSE USES IT.** The pre-match channel
+runs `>>` for its backed rungs and 🎯 / ⚡ for the rest; nothing there is red.
+A reader scanning two channels on a phone can tell which one they are in from
+the first glyph, so the header, the rule and the live clock carry it and
+nothing else does.
+
+**A MAN ADVANTAGE IS PRINTED ABOVE THE PRICE**, because it is *why* the price
+moved and a reader should not have to infer it from a number that looks wrong.
+It comes from `lib/inplayState` through `match_stats` — the same read the model
+now uses — and an absent line means **not reported**, never "no cards".
+
+**THE BOOKMAKER WAS BEING PRINTED RAW, AND THAT IS A MARKDOWN BUG WITH THE
+CHANNEL'S ONLY BOOK IN IT.** `value_signals.bookmaker` holds The Odds API's
+keys verbatim — `unibet_uk`, `betfair_sb_uk`, `apifootball_live` — and an
+underscore is Telegram's italic delimiter: two silently italicise everything
+between them, one leaves a stray `_`. The file already knew this about
+OUTCOMES ("Underscores in outcomes are Markdown italic delimiters") and printed
+the bookmaker beside it unescaped. It goes through `bookmakerLabel` now, which
+fixes the pre-match channel too.
+
+`apifootball_live` had no entry in `BOOKMAKER_LABEL`, so it slugified to
+**`apifootballlive`** — a bookmaker nobody has heard of, on the ONE source that
+prices every in-play row. It is `Live feed (aggregated)`, which is what it
+actually is. **That needed an `ALIASES` entry as well**:
+`engine.bookmakers.test.js` pins that a label round-trips back to its own key,
+and no display name slugifies to a string containing an underscore — without
+it, a bet recorded from an in-play alert would store a bookmaker nothing can
+resolve. The first fix keyed only the slug and still failed, because
+`bookmakerKey` tries the raw lowercase first.
+
+`engine.inplaybroadcast.test.js` is the ratchet: both switches, the named-only
+admission, the pre-match gate held unmoved, the disclosure present in every
+message, the paired-underscore check over the real keys, and that an in-play
+post can never reach the pre-match channel.
+
+**WHAT IS STILL THE OWNER'S.** Creating the Telegram channel and setting
+`TELEGRAM_INPLAY_CHAT_ID` — a channel cannot be created from here. Until it is
+set, in-play signals are computed, stored, and logged with their message body,
+and posted nowhere.
+
+
 
 
 **Why they must be separate.** The pre-match headline metric is CLV
@@ -737,8 +829,317 @@ row still says `scheduled`, closing the leak at the source.
 
 In-play-specific env vars: `INPLAY_MODEL_ENABLED` (default `false`),
 `INPLAY_EV_THRESHOLD` (default `0.02`), `INPLAY_MAX_EDGE` (default `0.20`),
+`INPLAY_MAX_MODEL_PROB` (default `0.85`),
+`INPLAY_MAX_CLOCK_EXCESS_MIN` (default `20`),
 `INPLAY_MIN_ELO_GAMES` (default `5`), `LIVE_WINDOW_MIN` (default `160`),
 `TELEGRAM_INPLAY_CHAT_ID`. ELO tuning: `ELO_K`, `ELO_HOME_ADV`, `ELO_DEFAULT`.
+
+---
+
+## A positive edge is not an opportunity
+
+Added 26 Aug 2026, after the in-play channel's first night. Ten signals were
+written and eight of them should not have been. The complaint that started it
+was exact: *"1.10 when a team's 4-0 isn't an opportunity."*
+
+All ten, with the model probability recovered as `(1 + edge) / odds`:
+
+    Celje       draw  2.050  +9.97%  p 0.5364   <- keeps
+    Lyon        away  1.615 +13.02%  p 0.6998   <- keeps
+    Lyon        away  1.181  +9.31%  p 0.9256
+    Viking      home  1.090  +3.88%  p 0.9530
+    Viking      home  1.083  +5.66%  p 0.9756
+    Viking      home  1.071  +5.06%  p 0.9810
+    Viking      home  1.062  +5.02%  p 0.9889
+    Viking      home  1.050  +4.39%  p 0.9942
+    Viking      home  1.045  +4.11%  p 0.9963
+    Preston     away  1.100  +8.35%  p 0.9850   <- the 0-4
+
+Five of the eight are the SAME BET, re-detected as the price shortened —
+`value_signals_selection_price_unique` includes `detected_odds`, so a shortening
+price is a new row. **Tightening what counts as a signal is what removes the
+duplicates**, and it does: two of the ten survive.
+
+### The certainty cap — the model past its own resolution
+
+`INPLAY_MAX_MODEL_PROB` is **0.85** and it is derived, not chosen. Replayed over
+`inplay_market_series` — every tick on a completed match, taken as the signal
+path would take it (backable price under 3.00, minute under 88, claimed EV
+between 2% and 20%), clustered to one observation per match:
+
+    cut     above the cut                    below the cut
+            n   claimed  realised    z       n   claimed  realised    z
+    0.80    84   90.51%   84.52%   -1.87    143   56.88%   52.10%   -1.15
+    0.85    65   93.05%   81.54%   -3.65    159   59.85%   57.39%   -0.63
+    0.90    46   95.49%   84.78%   -3.50    178   62.94%   59.69%   -0.90
+    0.95    27   97.74%   85.19%   -4.39    192   65.81%   62.11%   -1.08
+    0.97    18   98.72%   77.78%   -7.91    198   66.83%   63.51%   -0.99
+
+The model is **calibrated below every cut** (|z| under 1.2 in all five rows) and
+significantly **overconfident above 0.85**. 0.85 is the lowest cut at which the
+miss above it clears |z| >= 2, and it is where the remainder below is best
+calibrated. At 0.80 the miss is -1.87 and does not clear the bar.
+
+The unfiltered reliability curve says it with more rows: 119 ticks over 92
+matches at p >= 0.97 realise **92.4%**, and the 94 ticks over 67 matches where
+the model returns **exactly 1.0000** realise **84.0%**. A model that says
+"certain" and is wrong one time in six is not measuring anything at that end of
+its range; past there the "edge" is the bookmaker's margin wearing a
+probability's clothes.
+
+**AND IT ANSWERS THE PRICE COMPLAINT WITHOUT A PRICE FLOOR.** 1/0.85 is 1.176,
+so with the 2% EV floor nothing under about 1.20 can reach the channel. A LOWER
+BOUND ON THE ODDS was tried and measured in `lib/inplay.js` and does not work:
+under 2.00 the model claims 0.80x the market and produces 52 above-max ticks in
+993, so the floor would cut fires 258 -> 164 and the rejects only 175 -> 172 —
+all cost, no correction. **The price is the symptom; the model's resolution is
+the cause.**
+
+### The clock guard — the model prices time remaining
+
+`liveWinProb` prices remaining goals as Poisson(λ × time left), and time left
+comes from the FEED's minute. Time remaining is most of the model, so a stale
+clock is not a rounding error — it is the model believing there is another
+half-hour of football to come when the match is over. Over the 560 completed
+matches in the series, **75 ticks across 25 of them were priced more than 110
+minutes after kickoff with the feed still reading under 88 minutes.**
+
+The disagreement is measured as EXCESS — wall-clock elapsed, minus the feed's
+minute, minus the half-time break once the second half has started. Over 4,311
+completed-match ticks:
+
+    excess > 10 min   22.34%      <- ordinary second-half stoppage
+    excess > 15 min   11.34%
+    excess > 20 min    3.20%      <- INPLAY_MAX_CLOCK_EXCESS_MIN
+    excess > 25 min    1.32%
+    maximum           61.7 min
+
+Twenty minutes is on TOP of the fifteen the break is given, so a second-half
+tick may run 35 minutes behind the wall clock before it is refused. It catches
+48 of the 75 frozen ticks; the other 27 are matches that **kicked off late**,
+where the feed's minute is right and `kickoff_at` is wrong, and there the model
+prices correctly — refusing them would be the guard doing harm. The negative
+side (a clock AHEAD of the wall) has **never fired**: the minimum excess ever
+observed is -0.8 minutes.
+
+The certainty cap fails CLOSED — a probability that cannot be read is not one we
+may claim an edge against. The clock guard fails OPEN with no kickoff to measure
+against, and says `clock_unknown` rather than `clock_stale`, because a missing
+column is not a large disagreement.
+
+`lib/inplayOpportunity.js` owns both and returns a REASON, not a boolean; the
+stage prints a `win-prob refused:` line naming each. **Nothing here reads
+possession, shots or xG, and no threshold was moved.**
+
+---
+
+## `inplay_momentum` — the corpus a momentum model would have to be fitted on
+
+Migration 111. The obvious thing to do with possession, shots and xG is to move
+the goal expectation with them. There is no measurement in this database for
+what a possession share is worth in goals, and there **could not be one**:
+
+    match_stats           2,276 rows across 1,138 fixtures
+    rows per (fixture, side) with more than one          0
+
+It is upserted on `(fixture_id, team_side)`, so it holds one overwritten
+snapshot per fixture. **No record of what any match looked like at minute 60
+exists anywhere.** A momentum model could not be fitted and could not be
+measured, and anything shipped today would be numbers somebody made up wearing
+the clothes of evidence.
+
+So the record accumulates first. `captureInplaySeries.js` appends a row per
+genuine feed refresh beside the market series it already writes, on the same
+clock, so a momentum row and a price row from one tick share a minute and can
+be joined on it. It is the right file because `fetchLiveStats.js` runs
+immediately before it in the loop. **Nothing reads it and nothing may price off
+it** until it has been fitted and measured; it is service-role only, RLS on with
+no policy.
+
+**A NULL IS UNKNOWN, NEVER ZERO — with one measured exception.**
+`expected_goals` is absent on 41% of rows, and those rows average **12.9 shots**
+with 777 of 1,120 carrying shots on target, so a null xG is a competition that
+is not tracked rather than a side that has had no chances. `Red Cards` is the
+opposite: a value appears on 436 of 1,978 rows, about the rate at which matches
+produce one, so null there is a genuine none — and that is what lets the
+measured sending-off adjustment in `lib/inplayState.js` fire at all.
+
+**DEDUPE IS ON THE FEED'S STAMP, NOT OURS.** `captured_at` is the tick that
+wrote the row; `stats_fetched_at` is carried up from `match_stats.fetched_at`.
+`fetchLiveStats` gates each fixture behind 90 seconds while the loop passes
+every 60, so without it the corpus fills with consecutive identical rows and a
+fit counts one observation twice. A unique `(match_id, stats_fetched_at)` is the
+backstop under the writer's own skip.
+
+---
+
+## The hit-zone study — is there live match state the price gets wrong?
+
+`npm run hit-zone` (`scripts/inplayHitZone.js` over `lib/hitZone.js`). Written
+26 Aug 2026, **before there is data to run it on**, so the design is fixed
+before anyone has seen a result — which is the only arrangement in which a
+pre-registered hypothesis means anything.
+
+It joins `inplay_market_series` (the price and the clock) to `inplay_momentum`
+(the state at the same instant) to `matches` (what actually happened).
+
+**THE BASELINE IS THE PRICE, NOT OUR MODEL.** The question is not "does
+dominance predict goals" — it obviously does, and the bookmaker is watching the
+same match. It is *does dominance predict the result beyond what the price
+already knows*. So every observation is a residual against the **Shin**-de-vigged
+market. Measured against `model_prob` instead, the study would rediscover that
+INPLAY_DIXON_COLES is overconfident above 0.85, which is already known and is a
+fact about us rather than about football.
+
+**THE CONTROL IS THE MARKET'S OWN CALIBRATION, and the report prints it first.**
+The in-play market is the sharpest thing in this dataset, so if the de-vigged
+price comes out badly calibrated the JOIN is wrong — an inverted away leg, a
+mismatched tick, a `completed` flag that lied. **A broken pipeline and a real
+edge look identical in a zone table and completely different in a calibration
+curve.**
+
+A RED CARD IS NOT THE CONTROL, though it is the measured thing to hand
+(x0.6178 / x1.6018 in `lib/inplayState`). The market reprices a sending-off
+within seconds, so the correct residual there is ZERO — it would test whether
+bookmakers watch football, and pass whatever our code did.
+
+**ONE OBSERVATION PER MATCH.** The series writes 30–60 ticks per match and they
+share one result; 20,000 ticks is not 20,000 observations. Each zone takes the
+FIRST tick that enters it, which is also the only one a bettor could act on,
+since after that the price has moved.
+
+**FOUR HYPOTHESES, FIXED IN THE FILE, AND ONE OF THEM IS AN EXPECTED NULL.**
+Eight statistics crossed with five minute bands and three outcomes is 120 cells
+and **~5.5 clear |z| >= 2 by chance alone** — the trap `/leagues` leads against
+("not one club-season in 785") and `/models` leads against ("not one
+architecture clears |z| >= 2"). `bonferroniZ` states the corrected bar for
+however many are tested (**1.96 at k=1, 2.50 at k=4, 3.53 at k=120**), and
+`territory` is in the list precisely because possession without chances should
+price at zero: a study with no expected-null has no way to show its bar is
+honest.
+
+**THE HOLDOUT IS SPLIT BY KICKOFF, NOT AT RANDOM.** A random split leaks — two
+ticks from one match land on both sides, so the holdout contains matches the
+zone was chosen on. A time split is also the honest shape for a forward test:
+the holdout is literally the future. **A zone that clears the corrected bar on
+EXPLORE and fails on HOLDOUT is a description of the past.**
+
+**THE DRAW IS EXCLUDED.** Every feature is a differential from one side's
+perspective and the draw has no side; folding it in as "closeness" would be a
+different hypothesis wearing the same name. Its leg is still read, because
+de-vigging a 1X2 vector needs all three.
+
+**THE ORIENTATION IS THE DANGEROUS PART**, and it is pinned in both directions.
+Reading `xg_home` as "our xG" regardless of which side a selection backs
+inverts every away observation and looks completely ordinary in a results
+table — the failure `lib/headToHead` exists to warn about. The test fixture is
+a side dominating and losing (xG +2.0, one goal behind), and both sides must
+read as exact opposites.
+
+Writing it found two live `Number(null)` bugs, both caught by test rather than
+by review: an absent xG differenced against a real one gave **-0.4 instead of
+null**, which would have taught the study that untracked competitions create
+nothing; and an unplayed match read 0-0, which `didWin` counted as a **loss**.
+
+**IT RUNS ON A SCHEDULE, AND THE CADENCE IS PART OF THE DESIGN.**
+`.github/workflows/hit-zone.yml` fires daily at 07:19 UTC — late enough that the
+previous evening's fixtures have settled, since an unsettled match contributes
+nothing. But it runs two different things:
+
+    DAILY    npm run hit-zone:corpus    counts, growth, days-to-sample
+    MONDAY   npm run hit-zone           the control + the zone table
+
+**Re-reading a test every day is testing it seven times a week.** That is
+optional stopping, one of the most reliable ways to manufacture a significant
+result out of nothing — a study whose author checks it each morning and stops
+when it looks good has no false-positive rate at all, and it would undo the
+pre-registration, the Bonferroni bar and the holdout in one edit that looks like
+a simplification. So the zone table is weekly and **the daily line carries no
+inference whatsoever**: no z, no verdict, not one hypothesis. It is the same
+discipline the study applies inside itself, applied to WHEN it is read.
+`engine.hitzone.test.js` asserts both halves against the workflow and against
+`corpusReport`'s source, so a "tidy-up" that runs the study daily fails a test.
+
+A dispatch runs the full study whatever day it is — someone asking by hand has
+made the decision to look. It is the SCHEDULE that must not peek. The run never
+fails the build: a research readout that turns CI red is one people learn to
+ignore, and then it is running for nobody.
+
+**WHAT IT CANNOT DO YET, and the report says so rather than printing a small
+number as though it were an answer.** `inplay_momentum` starts empty. At full
+loop coverage the corpus grows ~65 matches a day, so a week is ~450 matches —
+enough to detect a **5pp** miss, not a 3pp one — and the holdout halves it
+again. **The study does not measure the SIGNALS**: with the 0.85 certainty cap
+a week produces maybe 10–30 of those, far too few for anything. What has the
+sample size is the corpus: every tick on every match, signal or not.
+
+---
+
+## The API-Football usage tracker
+
+Added 26 Aug 2026. Until then the daily allowance had **never been measured**:
+twelve scripts call `v3.football.api-sports.io` and **not one read a response
+header**. The only number in the system was `DAILY_REQUEST_BUDGET`, which
+`planDay.js` spends against — a configured intention, not a reading, and three
+different ones (the workflows set 75000, the module default is 200,
+`.env.example` says 100). The Odds API has had `quotaFromHeaders` since it was
+wired, which is why "how many credits are left" had an answer for one vendor and
+not the other.
+
+`lib/apiFootballQuota.js` stores it in `engine_state.api_football_quota`,
+alongside `odds_api_quota`. Read it with **`npm run api-quota`**.
+
+**MEASURING MUST NOT COST A REQUEST.** API-Football's `/status` endpoint reports
+the counter and **spends one against the counter it reports** — a tracker whose
+own cost grows with how often you want the truth. So the four numbers are read
+off responses the engine was already going to receive, and the only change at a
+call site is to stop throwing the headers away:
+
+    x-ratelimit-requests-limit       the DAY's allowance
+    x-ratelimit-requests-remaining   what is left of it
+    x-ratelimit-limit                the per-MINUTE allowance
+    x-ratelimit-remaining            what is left of that
+
+The per-minute pair is worth carrying: the in-play loop issues ~1.5 calls per
+live fixture per pass and **71 concurrent fixtures have been observed**, so a
+daily quota with room in it says nothing about a minute that is already full.
+
+**THE SERVER HOLDS THE COUNTER, WHICH IS WHY THIS IS CHEAP.** `remaining` is a
+fact the vendor maintains, not a total we accumulate — so one report per run is
+enough, a missed report loses nothing, and `spent_today` is DERIVED
+(`limit − remaining`) rather than tallied. It persists on the **success path
+only**: a crashed run leaves its reading unwritten, which costs nothing because
+the next response carries the current truth, and doing otherwise would mean
+turning `process.exit(1)` into `process.exitCode` across six scripts — a real
+change to ingestion, to save a number that reappears sixty seconds later.
+
+Reporting is wired into `ingestLiveOdds`, `fetchLiveStats`, `ingestOdds`,
+`fetchMatchDetails`, `fetchLineups` and `fetchTeamStats`, which between them
+cover both loops. `engine.apiquota.test.js` asserts each one on its SOURCE,
+because a reporter that stops reporting looks exactly like a vendor that stopped
+sending the header.
+
+**IT IS A TRACKER, NOT A GUARD.** Nothing here refuses a request. `canSpend` on
+the Odds API side exists because that is a MONTHLY pool where overspending in
+week one darkens three weeks; this is a daily one that resets. Turning a reading
+into a throttle changes what the engine ingests and needs its own measurement —
+which cannot be made honestly until there IS a reading, which is what this
+produces. What it does do is make an exhausted quota **loud** (a `::error::`
+annotation under 10% remaining) instead of showing up as a feed that
+mysteriously went quiet.
+
+**THE HEADER NAMES ARE VERIFIED (27 Aug 2026).** They were written from the v3
+documentation with no key available; the first real run confirmed all four:
+
+    limitDay 75000   remainingDay 74823   spent_today 177
+    limitMinute 450  remainingMinute 393
+
+So the day's allowance IS 75,000 — `DAILY_REQUEST_BUDGET` was right, and had
+been right by luck rather than by measurement, because nothing had ever read it
+back. **The per-minute number is the one worth watching**: that tick used 57 of
+450 in a single minute, and the in-play loop at 71 concurrent fixtures would
+want ~102 — comfortable, but it is the ceiling that binds first, and a daily
+quota with room in it says nothing about it.
 
 ---
 

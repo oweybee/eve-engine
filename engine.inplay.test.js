@@ -98,9 +98,15 @@ const prematchSignal = {
 };
 test('isInplay true for inplay phase', () => assert.ok(isInplay(inplaySignal)));
 test('in-play message has live header + score', () => {
+  // The header gained the MODEL NAME on 26 Aug — the channel now carries two
+  // architectures (live win-probability and second-half goals) and a reader
+  // scanning it should not have to work out which one a post came from. The
+  // score line lost its "Live:" prefix and gained the red mark instead, so the
+  // first glyph of every line says which channel this is.
   const m = buildMessage(inplaySignal);
-  assert.ok(m.includes('IN-PLAY VALUE'), 'header');
-  assert.ok(m.includes('Live: 0-1 40\''), 'live score');
+  assert.ok(m.includes('IN-PLAY'), 'header');
+  assert.ok(m.startsWith('🔴'), 'red is the in-play mark');
+  assert.ok(m.includes("0-1 40'"), 'live score');
   assert.ok(m.includes('#InPlay'), 'hashtag');
 });
 test('prematch unbacked edge (odds 2.5 / edge 2.5%) → info-only header, not suggested', () => {
@@ -457,10 +463,18 @@ test('pre-match: unsupported league / cold ELO → dormant', () => {
 // produced above INPLAY_MAX_EDGE. lib/inplay.js carries the measurement.
 console.log('in-play price ceiling + live odds window');
 const { winProbCandidates } = require('./computeInplayValues');
-const liveH2h = (odds) => ({
-  id: 'm1', kickoff_at: '2026-07-01T16:00:00Z', minute: 60,
+// KICKOFF IS RELATIVE TO NOW, and it has to be: the stage refuses to price
+// against a clock that disagrees with the wall clock, so a fixture with a
+// hard-coded kickoff months in the past is a permanently stale one and every
+// case below would come back empty. 75 minutes ago at the 60th minute is 15
+// of lag, all of it the half-time break — the ordinary shape.
+const liveH2h = (odds, over = {}) => ({
+  id: 'm1',
+  kickoff_at: new Date(Date.now() - 75 * 60_000).toISOString(),
+  minute: 60,
   goals_home: 0, goals_away: 0, home_team: { name: 'A' }, away_team: { name: 'B' },
   odds: [{ market: 'h2h', bookmaker: 'live', home_odds: odds[0], draw_odds: odds[1], away_odds: odds[2] }],
+  ...over,
 });
 const lam = { lambda_home: 1.5, lambda_away: 1.2 };
 
@@ -528,6 +542,72 @@ test('captureInplaySeries reads the SAME window the signal stages do', () => {
   assert.ok(/require\('\.\/lib\/inplay'\)/.test(src), 'must read the shared constant');
   assert.ok(!/process\.env\.INPLAY_ODDS_MAX_AGE_MIN\s*\|\|\s*'10'/.test(src),
     'must not re-declare its own copy of the window');
+});
+
+// THE TWO REFUSALS THAT COME BEFORE THE EDGE (26 Aug 2026). The channel had
+// published a 1.090 on a 3-1 and a 1.10 on a decided match; lib/inplayOpportunity
+// carries the reliability table that says why those are not opportunities.
+console.log('in-play: the model must be able to resolve, and the clock must be real');
+
+test('a saturated model is refused, and the census names it', () => {
+  // 4-0 at the 60th minute with the frozen lambda: the home win is a certainty
+  // the model cannot resolve, and any price over 1.00 then shows an "edge"
+  // that is the bookmaker's margin. Measured: above 0.85 the model claims
+  // 93.05% and realises 81.54% over 65 matches, z -3.65.
+  const m = liveH2h([1.06, 13.0, 29.0], { goals_home: 4, goals_away: 0 });
+  const census = {};
+  const out = winProbCandidates(m, lam, { census, maxOdds: 99 });
+  assert.ok(!out.some(c => c.outcome === 'home'),
+    'a home win the model calls all but certain must not be offered');
+  assert.ok(census.modelSaturated >= 1, 'and the refusal must be counted');
+});
+
+test('the calibrated range is untouched — this is a cap, not a new threshold', () => {
+  // The same fixture the ceiling cases use: 0-0 at 60', nothing saturated.
+  const before = winProbCandidates(liveH2h([2.60, 2.10, 5.00]), lam, { maxOdds: 99 });
+  assert.strictEqual(before.length, 2, 'both in-range legs still come through');
+  assert.ok(before.every(c => c.detected_edge > 0));
+});
+
+test('a stale clock refuses the WHOLE match and says which guard', () => {
+  // The measured failure: 75 ticks across 25 completed matches were priced
+  // more than 110 minutes after kickoff with the feed still under 88'.
+  const m = liveH2h([2.60, 2.10, 5.00], {
+    kickoff_at: new Date(Date.now() - 120 * 60_000).toISOString(),
+  });
+  const census = {};
+  assert.deepStrictEqual(winProbCandidates(m, lam, { census, maxOdds: 99 }), []);
+  assert.strictEqual(census.clock_stale, 1);
+});
+
+test('no kickoff FAILS OPEN — a missing column is not a stale clock', () => {
+  const m = liveH2h([2.60, 2.10, 5.00], { kickoff_at: null });
+  const census = {};
+  const out = winProbCandidates(m, lam, { census, maxOdds: 99 });
+  assert.ok(out.length > 0, 'refusing these would lose real signals to a data gap');
+  assert.strictEqual(census.clock_unknown, 1, 'and it must still be visible in the log');
+});
+
+test('`now` is injectable, so the guard is testable without waiting', () => {
+  const ko = '2026-08-26T19:00:00Z';
+  const m = liveH2h([2.60, 2.10, 5.00], { kickoff_at: ko });
+  const ok = winProbCandidates(m, lam,
+    { maxOdds: 99, now: new Date(Date.parse(ko) + 79 * 60_000) });
+  const stale = winProbCandidates(m, lam,
+    { maxOdds: 99, now: new Date(Date.parse(ko) + 120 * 60_000) });
+  assert.ok(ok.length > 0);
+  assert.deepStrictEqual(stale, []);
+});
+
+test('winProbStage counts and PRINTS both refusals — a quiet stage must say why', () => {
+  // The census that shipped dead is why this is a source assertion.
+  const src = require('fs').readFileSync(require('path').join(__dirname, 'computeInplayValues.js'), 'utf8');
+  assert.ok(/require\('\.\/lib\/inplayOpportunity'\)/.test(src),
+    'the refusals must come from the one module that owns them');
+  assert.ok(/win-prob refused:/.test(src), 'and the stage must print the count');
+  for (const key of ['modelSaturated', 'clock_stale', 'clock_ahead', 'clock_unknown']) {
+    assert.ok(new RegExp(`census\.${key}`).test(src), `${key} must be counted`);
+  }
 });
 
 test('winProbStage actually PASSES the census — a dead out-parameter is the trap', () => {

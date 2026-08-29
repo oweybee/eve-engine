@@ -144,12 +144,26 @@ console.log('winProbCandidates (Stage 3 candidate builder)');
 // market's own probability at prices of 10-25, and 58.6% of everything it
 // produced above 3.00 was already being thrown away by INPLAY_MAX_EDGE.
 const baseline = { lambda_home: 2.2, lambda_away: 0.6 };
-const liveMatch = (over = {}) => ({
-  id: 'm1', kickoff_at: '2026-07-01T16:00:00Z', goals_home: 0, goals_away: 0, minute: 40,
-  home_team: { name: 'England' }, away_team: { name: 'Congo DR' },
-  odds: [{ bookmaker: 'x', market: 'h2h', home_odds: 1.85, draw_odds: 3.20, away_odds: 6.50 }],
-  ...over,
-});
+// KICKOFF IS DERIVED FROM THE MINUTE, and it has to be. The stage refuses to
+// price against a clock that disagrees with the wall clock by more than the
+// half-time break plus twenty minutes, so a hard-coded kickoff in the past is a
+// permanently stale one and every case here would come back empty. This puts
+// the fixture two minutes of ordinary delay behind, whatever minute a case asks
+// for — including the past-the-cap case, which is refused on the minute before
+// the clock is ever consulted.
+const liveMatch = (over = {}) => {
+  const base = {
+    id: 'm1', goals_home: 0, goals_away: 0, minute: 40,
+    home_team: { name: 'England' }, away_team: { name: 'Congo DR' },
+    odds: [{ bookmaker: 'x', market: 'h2h', home_odds: 1.85, draw_odds: 3.20, away_odds: 6.50 }],
+    ...over,
+  };
+  if (base.kickoff_at === undefined) {
+    const elapsed = (Number(base.minute) || 0) + 2 + (base.minute > 45 ? 15 : 0);
+    base.kickoff_at = new Date(Date.now() - elapsed * 60_000).toISOString();
+  }
+  return base;
+};
 const opts = { evThreshold: 0.02, maxEdge: 0.20, minuteCap: 85 };
 
 test('emits an INPLAY_DIXON_COLES home candidate when the live price beats the model', () => {
