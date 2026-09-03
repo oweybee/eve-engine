@@ -137,3 +137,76 @@ assert.ok(!/if\s+new\.score_withheld_reason\s+is\s+null\s+then/i.test(OLD_BRANCH
 
 console.log(`engine.scorereason: ${FN} explains an arriving null (${latest.file}); ` +
   "a caller's reason survives; 086's bucket substring intact; no reason-CHECK anywhere.");
+
+// ── 6. THE CENSUS BUCKETS ON WORDING THE GUARD ACTUALLY EMITS ──────────────
+// Migration 121 gave the guard a fourth sentence and migration 086's census
+// went on bucketing three, so 'other' became the LARGEST family for
+// MARKET_ANCHORED - 55 of its 71 withheld rows, on a model with a page. 122
+// added the arms. This is what stops the pair drifting again: a reworded guard
+// sentence silently returns its rows to 'other', and nothing renders that
+// census, so nobody would see it happen.
+//
+// The DIVISION OF LABOUR is the one engine.archconstraint describes. 122
+// asserts the invariant against the TABLE (every distinct reason matches
+// exactly one arm, nothing lands in 'other'); this asserts it against the
+// repo's own latest declarations, which is where the intention goes wrong
+// first.
+function latestDeclaration(fnName) {
+  const files = fs.readdirSync(DIR).filter(f => f.endsWith('.sql')).sort();
+  let latest = null;
+  for (const f of files) {
+    const src = stripSqlComments(fs.readFileSync(path.join(DIR, f), 'utf8'));
+    const i = src.search(new RegExp(`create\\s+or\\s+replace\\s+function\\s+public\\.${fnName}\\s*\\(`, 'i'));
+    if (i === -1) continue;
+    const rest = src.slice(i);
+    const close = rest.search(/\$function\$\s*;/);
+    if (close === -1) continue;
+    latest = { file: f, body: rest.slice(0, close) };
+  }
+  return latest;
+}
+
+const census = latestDeclaration('model_detail');
+assert.ok(census, 'no migration declares public.model_detail()');
+
+// The patterns the census buckets on, with their LIKE wildcards stripped.
+const patterns = [...census.body.matchAll(/like\s+'%([^']+)%'/g)].map(m => m[1]);
+assert.ok(patterns.length >= 5,
+  `${census.file}: model_detail's census reads ${patterns.length} patterns, expected the five families`);
+
+// The guard's own sentences, with format()'s %s placeholders filled so the
+// rendered string is what gets tested - a pattern is matched against what a
+// reader sees in the column, not against the template.
+// Split on the quote rather than regex-matching pairs: a length-filtered
+// pair regex silently mis-pairs, because it skips the SHORT literals
+// ('public', 'pg_temp') and then treats a closing quote as an opening one,
+// capturing the code between two sentences instead of a sentence. Alternate
+// segments of a split are the literals, counted from the start.
+const rendered = latest.body.split("'")
+  .filter((_, i) => i % 2 === 1)
+  .map(x => x.replace(/%s/g, 'X'))
+  .filter(x => x.length >= 25);
+assert.ok(rendered.length >= 4,
+  `only ${rendered.length} reason sentences read out of ${latest.file}; the scanner is not finding them`);
+
+// (a) The two families 122 added must bucket wording the guard emits.
+for (const needed of ['declined to score it', 'no model_architecture']) {
+  assert.ok(patterns.includes(needed),
+    `${census.file}: model_detail's census has no arm matching '${needed}' — ` +
+    "rows the guard explains would fall into 'other' (migration 122)");
+  assert.ok(rendered.some(s => s.includes(needed)),
+    `${latest.file}: no reason the guard emits contains '${needed}', but ` +
+    `${census.file} buckets on it — the census and the guard have drifted apart`);
+}
+
+// (b) No sentence the guard emits may match two arms, or the ORDER of the
+//     CASE silently decides its family.
+for (const s of rendered) {
+  const hit = patterns.filter(p => s.includes(p));
+  assert.ok(hit.length <= 1,
+    `a guard reason matches ${hit.length} census arms (${hit.join(' | ')}) — ` +
+    `the CASE order would decide its family: "${s.slice(0, 60)}…"`);
+}
+
+console.log(`engine.scorereason: ${census.file} buckets on ${patterns.length} patterns; ` +
+  'every guard sentence matches at most one, and 121\'s two new causes are named.');
