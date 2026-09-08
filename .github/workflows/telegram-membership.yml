@@ -1,0 +1,97 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Telegram channel membership reconciliation
+#
+# Owner request, 27 Aug 2026: every trialling or paying member gets offered
+# both Telegram channels on signup (eve-frontend's half, over the
+# `telegram_links` table — migration 112); when a subscription lapses this
+# removes them from a channel or tells the owner who to remove by hand.
+#
+# CADENCE: every 30 minutes. A lapsed subscriber sitting in a paid channel for
+# up to half an hour after their entitlement ends is a fine trade against
+# hammering the Telegram API on a tighter loop — this is membership hygiene,
+# not a live price feed, and nothing here is time-critical the way
+# run-inplay.yml's odds loop is. GitHub's schedule is best-effort (see
+# run-inplay.yml's own measured-gap note); a member staying in a day or two
+# past a genuinely fast lapse is still an acceptable failure mode for a run
+# that is this cheap to repeat.
+#
+# GATED, NOT JUST SCHEDULED. TELEGRAM_MEMBERSHIP_ENABLED must be the literal
+# string 'true' for this to kick or revoke anything for real — see
+# reconcileTelegramMembership.js's own header. It defaults to unset here on
+# purpose: this workflow ships DRY-RUN ONLY until an operator flips the repo
+# variable below, after confirming the bot is an admin in both channels (see
+# the PR that introduced this file for the exact manual steps).
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: Telegram Channel Membership
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: telegram-membership
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    name: Reconcile channel membership against entitlement
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_INPLAY_CHAT_ID:   ${{ secrets.TELEGRAM_INPLAY_CHAT_ID }}
+      # Same optional second-bot shape run-inplay.yml already forwards: a bot
+      # can only act on a channel it administers, so if the in-play channel
+      # has its own bot its token has to travel with its chat id. Unset falls
+      # back to TELEGRAM_BOT_TOKEN (postToX.js's postTargetFor, reused here).
+      TELEGRAM_INPLAY_BOT_TOKEN: ${{ secrets.TELEGRAM_INPLAY_BOT_TOKEN }}
+      # Where the "these need manual removal" summary goes. Unset -> the run
+      # logs the list loudly instead of throwing; see reconcileTelegramMembership.js.
+      TELEGRAM_OWNER_CHAT_ID:    ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
+      # THE REAL SWITCH. Defaults to unset/dry-run. Set the repository
+      # variable TELEGRAM_MEMBERSHIP_ENABLED to 'true' (Settings -> Secrets
+      # and variables -> Actions -> Variables) only after: the bot is an admin
+      # in BOTH channels with "Invite users via link" and "Ban users"
+      # permissions, migration 112 is applied, and eve-frontend's companion
+      # migration/PR is merged and issuing invites.
+      TELEGRAM_MEMBERSHIP_ENABLED: ${{ vars.TELEGRAM_MEMBERSHIP_ENABLED || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Reconcile Telegram membership
+        run: node reconcileTelegramMembership.js
+
+      # `if: failure()` does not run on a cancelled job — engine.yml and
+      # run-inplay.yml both carry this finding already. always() covers all
+      # three outcomes so a killed run is not silently indistinguishable from
+      # one that never ran.
+      - name: Report run health
+        if: always()
+        run: |
+          OUTCOME='${{ job.status }}'
+          if [ "$OUTCOME" = "success" ]; then
+            echo "[telegram-membership] job succeeded"
+            exit 0
+          fi
+          echo "::error::telegram-membership run ended $OUTCOME"
