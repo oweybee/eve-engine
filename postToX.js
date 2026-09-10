@@ -105,15 +105,41 @@ function chatIdForSignal(telegram, signal) {
   return postTargetFor(telegram, signal)?.chatId ?? null;
 }
 
+/**
+ * The rows already spoken for on this channel — a cheap PRE-FILTER, and NOT
+ * the guard. `deliver` is the guard.
+ *
+ * IT IS PAGED, AND THAT IS THE FAULT THAT LET THE RESENDS RUN. PostgREST caps a
+ * response at 1000 rows whatever the client asks for, and this window held
+ * 1,113. It dedupes by id rather than trusting the page length, because
+ * `.range()` travels as a Range HEADER and any layer that answers the URL and
+ * ignores headers returns the same page for ever. The ORDER BY is not
+ * decoration: without one, `.range()` offsets index into an unspecified order
+ * and pages can overlap or skip.
+ */
 async function loadPostedIds(supabase) {
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await supabase
-    .from('posted_signals')
-    .select('signal_id')
-    .eq('channel', CHANNEL)
-    .gte('posted_at', since);
-  if (error) throw new Error(`loadPostedIds: ${error.message}`);
-  return new Set((data ?? []).map(r => r.signal_id));
+  const PAGE = 1000, MAX_PAGES = 50;
+  const ids = new Set();
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const from = page * PAGE;
+    const { data, error } = await supabase
+      .from('posted_signals')
+      .select('signal_id')
+      .eq('channel', CHANNEL)
+      .gte('posted_at', since)
+      .order('posted_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`loadPostedIds: ${error.message}`);
+    const rows = data ?? [];
+    if (!rows.length) break;
+    const before = ids.size;
+    for (const r of rows) ids.add(r.signal_id);
+    if (ids.size === before) break;   // no new ids — a layer ignoring Range
+    if (rows.length < PAGE) break;
+  }
+  return ids;
 }
 
 /**
@@ -163,16 +189,125 @@ async function loadPostedSelectionsFor(supabase, matchIds) {
   return new Set((data ?? []).map(selectionKey));
 }
 
-async function markPosted(supabase, signalId, messageHash, externalMsgId) {
-  const { error } = await supabase
-    .from('posted_signals')
-    .upsert(
-      { signal_id: signalId, channel: CHANNEL, posted_at: new Date().toISOString(),
-        message_hash: messageHash, external_msg_id: externalMsgId ? String(externalMsgId) : null,
-        run_id: RUN_ID },
-      { onConflict: 'signal_id,channel' },
-    );
-  if (error) throw new Error(`markPosted: ${error.message}`);
+/**
+ * THE CLAIM IS TAKEN BEFORE THE SEND, AND IT IS TAKEN ON THE SELECTION.
+ *
+ * 10 Sep 2026. The channel re-sent the same fixtures for most of a day, and it
+ * took THREE findings to account for it. Each of the first two was real, and
+ * neither was sufficient on its own:
+ *
+ *  1. `markPosted` upserted with ON CONFLICT DO UPDATE. An upsert always
+ *     succeeds, so UNIQUE (signal_id, channel) — the whole idempotency
+ *     guarantee migration 015 exists for — could never refuse anything. The
+ *     only dedupe was a READ, and that read was unordered and unpaged against
+ *     1,113 rows behind PostgREST's 1000-row ceiling. Worse, an UPDATE writes a
+ *     new tuple at the end of the heap, so every row the upsert touched
+ *     relocated into the truncated tail: all ten re-sent rows sat at physical
+ *     ranks 1096-1113 of 1113. Re-sending a signal is what guaranteed it would
+ *     be re-sent again.
+ *  2. `value_signals_selection_price_unique` includes `detected_odds`, so a
+ *     re-detection at a moved price writes a BRAND NEW row with a new id. A
+ *     ledger keyed on signal_id cannot recognise it as the same bet. (#116)
+ *  3. THREE workflows run this file concurrently — `engine.yml`,
+ *     `run-engine.yml`, and `runInplayLoop.js` inside `run-inplay.yml`, the
+ *     last on a loop of up to 175 minutes that re-posts on every pass. A run
+ *     that began at 14:19 was still broadcasting from a two-hour-old checkout
+ *     at 16:46.
+ *
+ * (3) IS WHY A READ CANNOT BE THE GUARD, however well it is written. #116's
+ * selection dedupe is correct about WHAT identifies a duplicate and is kept
+ * below — but three processes reading before they write will all read "not
+ * posted" and all post. Only the database can arbitrate that, and only at the
+ * moment of writing.
+ *
+ * So `claim_selection_post` (migration 125) is one INSERT ... ON CONFLICT DO
+ * NOTHING RETURNING id, with NO conflict target — which makes it atomic
+ * against BOTH unique constraints at once: the row-level (signal_id, channel)
+ * and the selection-level (selection_key, channel). Two runs racing the same
+ * bet, by the same row or by two different re-detections of it, collide in
+ * Postgres and exactly one wins.
+ *
+ * THE SELECTION KEY IS COMPUTED IN SQL AND NEVER HERE. `market_line` is
+ * unconstrained `numeric`, so 2.5 and 2.50 are both storable and render
+ * differently as text; a key built in JavaScript and a key built in SQL would
+ * agree until the day they did not. `selectionKey` below is still the
+ * IN-MEMORY, same-run guard #116 added, and is deliberately not the thing the
+ * constraint uses.
+ *
+ * NEVER REINTRODUCE AN UPSERT OR AN ON CONFLICT DO UPDATE AGAINST
+ * posted_signals, and never write `posted_at` from here — it defaults to now()
+ * and is the record of FIRST publication. `engine.postledger.test.js` is the
+ * ratchet.
+ */
+
+/** Claim id if this caller won; null if the row OR the selection is published. */
+async function claimPost(supabase, signalId, messageHash, dedupeSelection) {
+  const { data, error } = await supabase.rpc('claim_selection_post', {
+    p_signal_id:        signalId,
+    p_channel:          CHANNEL,
+    p_message_hash:     messageHash,
+    p_dedupe_selection: dedupeSelection,
+    p_run_id:           RUN_ID,
+  });
+  if (error) throw new Error(`claim_selection_post: ${error.message}`);
+  return data ?? null;
+}
+
+async function confirmPost(supabase, claimId, externalMsgId) {
+  const { error } = await supabase.rpc('confirm_signal_post', {
+    p_claim_id: claimId, p_external_msg_id: String(externalMsgId),
+  });
+  // A sent message whose confirm write failed is not a reason to fail the run:
+  // the claim stands, so it cannot go out twice. Only the message id is lost.
+  if (error) console.warn(`[postToX] confirm_signal_post failed (message ${externalMsgId} WAS sent): ${error.message}`);
+}
+
+async function releasePost(supabase, claimId) {
+  const { error } = await supabase.rpc('release_signal_post', { p_claim_id: claimId });
+  // Never throw over the send error this is unwinding. A failed release leaves
+  // the claim standing, which suppresses one post — the safe direction.
+  if (error) console.warn(`[postToX] release_signal_post failed, claim ${claimId} stands: ${error.message}`);
+}
+
+/**
+ * Claim, send, confirm — releasing only on PROOF that nothing was delivered.
+ *
+ * `send` is null for a signal being suppressed rather than broadcast (not
+ * backed, a conflict loser, already alerted, no channel). Those take the claim
+ * and never confirm it, which is what stops them being reconsidered on every
+ * tick — the job `markPosted(…, null)` used to do, without the upsert that
+ * made the constraint unenforceable.
+ *
+ * `dedupeSelection` is false for a MOVER, preserving #116's exemption: "the
+ * price on an existing signal moved" is a deliberate re-alert, not the repeat
+ * this guard exists to stop. A mover writes a NULL selection_key, and the
+ * partial unique index ignores NULLs, so it is bound only by its own row id.
+ *
+ * THE RELEASE IS NARROWER THAN "on any error", on purpose. A Telegram
+ * rejection (a well-formed ok:false — 400, 403, a 429) is proof nothing was
+ * sent, so the claim is released and the signal retries next run. A TRANSPORT
+ * failure — a timeout, a dropped socket — is proof of nothing: the message may
+ * have landed and only the answer was lost. Releasing there hands back the
+ * duplicate this whole change exists to remove. One withheld post is a smaller
+ * harm than one duplicate post, on a channel whose readers cannot tell them
+ * apart.
+ */
+async function deliver(supabase, signal, messageHash, send, dedupeSelection = true) {
+  const claimId = await claimPost(supabase, signal.id, messageHash, dedupeSelection);
+  if (!claimId) return { outcome: 'already_published' };
+  if (!send)    return { outcome: 'claimed', claimId };
+
+  try {
+    const res = await send();
+    await confirmPost(supabase, claimId, res.message_id);
+    return { outcome: 'sent', claimId, messageId: res.message_id };
+  } catch (err) {
+    if (err && err.telegramRejected) {
+      await releasePost(supabase, claimId);
+      return { outcome: 'refused', claimId, error: err };
+    }
+    return { outcome: 'uncertain', claimId, error: err };
+  }
 }
 
 async function fetchRecentSignals(supabase) {
@@ -543,6 +678,10 @@ function telegramPost(token, chatId, text) {
         } else {
           const err = new Error(`Telegram error ${json.error_code}: ${json.description}`);
           err.retryAfterSec = json.parameters?.retry_after ?? null;
+          // Telegram answered, and it answered no. That is PROOF the message
+          // was not delivered, which is what lets `deliver` release the claim.
+          // A timeout carries no such proof and is deliberately left untagged.
+          err.telegramRejected = true;
           reject(err);
         }
       });
@@ -575,9 +714,13 @@ async function run() {
     return true;
   });
 
+  // A PRE-FILTER, NOT THE GUARD — `deliver`'s claim is the guard. This read
+  // only saves a claim round trip on rows already visibly spoken for; whatever
+  // it misses, the claim refuses. Treating it as the guard is what shipped the
+  // 10 Sep resends, and the paging in `loadPostedIds` is why it missed them.
   const toPost      = validSignals.filter(s => !postedIds.has(s.id));
   const alreadySeen = signals.length - toPost.length;
-  console.log(`[postToX] ${toPost.length} new | ${alreadySeen} already posted`);
+  console.log(`[postToX] ${toPost.length} candidate(s) | ${alreadySeen} already in the ledger`);
 
   // SELECTION-LEVEL DEDUP. `toPost` is deduped by ROW id, and a price
   // re-detection writes a new row every time — see the note on
@@ -602,10 +745,11 @@ async function run() {
     return { posted: 0, failed: toPost.length, skipped: alreadySeen };
   }
 
-  let posted = 0, failed = 0;
+  let posted = 0, failed = 0, uncertain = 0;
 
   let skippedNoChannel = 0;
   let skippedInfo      = 0;
+  let alreadyClaimed   = 0;
 
   for (let i = 0; i < toPost.length; i++) {
     const signal  = toPost[i];
@@ -620,61 +764,60 @@ async function run() {
     const target      = telegram ? postTargetFor(telegram, signal) : telegram;
     const chatId      = target ? target.chatId : target;
 
-    // Broadcast policy: pre-match, we only broadcast a BACKED signal — suggested
-    // by the eligibility ladder (the price+edge box) AND scored at or above the
+    // WHY THIS SIGNAL IS NOT BEING BROADCAST, decided before the claim so that
+    // taking the claim has ONE shape for every road out. Each reason still
+    // takes the claim and never confirms it, which is what stops the row being
+    // reconsidered on every tick — the job `markPosted(…, null)` used to do,
+    // without the upsert that made the constraint unenforceable.
+    let suppressed = null;
+
+    // Pre-match, we only broadcast a BACKED signal — suggested by the
+    // eligibility ladder (the price+edge box) AND scored at or above the
     // backing line, which is exactly what `isBroadcastable` (isBacked, reading
-    // BOTH ladders — see its note above) already means. The wider edges and the
-    // longshots remain visible on the site but are never pushed to the channel.
-    // Mark them posted so they aren't reconsidered every run. In-play signals
-    // and odds-movement alerts bypass this — they have their own logic.
+    // BOTH ladders) means. The wider edges and the longshots stay visible on
+    // the site and are never pushed. In-play and odds-movement alerts bypass
+    // this; they have their own logic.
     //
     // THIS USED TO READ `tier !== 'prime'` — the ELIGIBILITY tier alone, from
     // `classifyTier` — and it silently diverged from the definition above the
     // day the eligibility ladder split into two suggested tiers, 'prime' and
-    // 'edge' (26 Aug 2026, lib/signalTier.js). Two live failures, both found by
-    // a live report of "bug signals still coming through on telegram": every
-    // genuinely backed EDGE-tier signal was dropped HERE, before ever reaching
-    // `buildMessage`'s dedicated "EDGE SIGNAL" branch — and a PRIME-eligibility
-    // signal whose actual score fell below the backing line (SLIGHT/TRACE/NIL)
-    // sailed straight through, undetected, and was posted labelled
-    // "⚡ UNBACKED EDGE" by `buildMessage`'s catch-all branch, whose own comment
-    // claimed that exact case "does not reach the channel". It did — nothing
-    // upstream of it had ever checked whether the row was actually BACKED, only
-    // whether its (odds, edge) fell in the old single 'prime' box. `isBroadcastable`
-    // is the one predicate this file already defines for "suggested AND backed"
-    // (`broadcastableIds` above was built from it correctly); reading it here
-    // instead of re-deriving the ladder from a tier string is the whole fix. No
-    // test exercised `run()`'s loop body, which is how this went unnoticed.
+    // 'edge' (26 Aug 2026, lib/signalTier.js). Two live failures: every
+    // genuinely backed EDGE-tier signal was dropped here before reaching
+    // `buildMessage`'s "EDGE SIGNAL" branch, and a PRIME-eligibility signal
+    // scoring below the backing line sailed through and was posted labelled
+    // "⚡ UNBACKED EDGE" by a branch whose own comment claimed that case "does
+    // not reach the channel". Reading the one predicate this file already
+    // defines, instead of re-deriving the ladder from a tier string, is the fix.
     if (!isInplay(signal) && !isMover(signal) && !isBroadcastable(signal)) {
-      console.log(`\n[postToX] skip (${label}, not backed) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
-      await markPosted(supabase, signal.id, messageHash, null);
-      skippedInfo++;
-      continue;
+      suppressed = `${label}, not backed`;
     }
 
     // ALREADY TOLD A SUBSCRIBER ABOUT THIS SELECTION. A mover is exempt on
     // purpose — "the price on an existing signal moved" is its own deliberate
     // re-alert, not the repeat this guard exists to stop. Everything else,
-    // in-play included, gets exactly one message per (match, market, line,
-    // outcome): the row's own id says nothing about whether a subscriber has
-    // already heard this, and re-detections at a new price share no id at
-    // all. Checked AFTER the backed gate so an unbacked row is still marked
-    // posted for the reason above it, not this one.
-    if (!isMover(signal) && postedSelections.has(selectionKey(signal))) {
-      console.log(`\n[postToX] skip (${label}, already alerted this selection) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
-      await markPosted(supabase, signal.id, messageHash, null);
-      skippedInfo++;
-      continue;
+    // in-play included, gets one message per (match, market, line, outcome):
+    // the row's own id says nothing about whether a subscriber has heard this,
+    // and re-detections at a new price share no id at all.
+    //
+    // THIS IS A PRE-FILTER NOW, NOT THE GUARD — `deliver`'s claim is the
+    // guard, because THREE workflows run this file concurrently and all three
+    // would read "not posted" before any of them wrote. Kept because it saves
+    // a round trip and because it is the in-run half of the same rule.
+    else if (!isMover(signal) && postedSelections.has(selectionKey(signal))) {
+      suppressed = `${label}, already alerted this selection`;
     }
 
     // Conflict guard: a suggested selection that lost the per-match/market
-    // tie-break to a higher-edge opposing pick is suppressed so the two can't
+    // tie-break to a higher-edge opposing pick, suppressed so the two cannot
     // cancel out.
-    if (!isInplay(signal) && !isMover(signal) && isBroadcastable(signal) && !broadcastableIds.has(signal.id)) {
-      console.log(`\n[postToX] skip (backed conflict, lower edge) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
-      await markPosted(supabase, signal.id, messageHash, null);
-      skippedInfo++;
-      continue;
+    else if (!isInplay(signal) && !isMover(signal) && isBroadcastable(signal) && !broadcastableIds.has(signal.id)) {
+      suppressed = 'backed conflict, lower edge';
+    }
+
+    // In-play signal with no in-play channel configured → silence, rather than
+    // leaking a live pick into the pre-match channel.
+    else if (!DRY_RUN && !chatId) {
+      suppressed = `no channel for phase=${signal.phase}`;
     }
 
     // Claim the selection NOW, in-memory, for the rest of THIS run — not just
@@ -682,47 +825,80 @@ async function run() {
     // line, outcome) can both land in `toPost` in a single run (a re-detection
     // arriving between the fetch above and this loop), and without this a
     // second one would sail through the check above unopposed.
-    if (!isMover(signal)) postedSelections.add(selectionKey(signal));
+    if (!isMover(signal) && !suppressed) postedSelections.add(selectionKey(signal));
+
+    // A DRY RUN WRITES NOTHING AT ALL, and it used to write real ledger rows.
+    // `markPosted` ran on the DRY_RUN branch, so rehearsing the broadcast
+    // permanently suppressed every signal it rehearsed: the next real run found
+    // them already recorded and never sent them. A rehearsal must be able to be
+    // wrong without costing a broadcast.
+    if (DRY_RUN) {
+      if (suppressed) { console.log(`\n[postToX] would skip (${suppressed}) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`); skippedInfo++; continue; }
+      console.log(`\n[postToX] would post ${label} — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
+      console.log(message);
+      posted++;
+      continue;
+    }
+
+    // CLAIM BEFORE SEND. A mover is claimed WITHOUT a selection key so its
+    // deliberate re-alert is not blocked by its own earlier post; everything
+    // else is claimed on the selection, which is the only key a re-detection
+    // at a moved price shares with the row it repeats.
+    const send = suppressed ? null : () => telegramPost(target.token, chatId, message);
+
+    let result;
+    try {
+      result = await deliver(supabase, signal, messageHash, send, !isMover(signal));
+    } catch (err) {
+      // The claim RPC itself failed — the database is unreachable or the grant
+      // is gone. Nothing was sent and nothing was recorded.
+      console.error(`[postToX] claim failed for ${signal.id}: ${err.message}`);
+      failed++;
+      continue;
+    }
+
+    // A null claim is the ORDINARY case on a channel three workflows tick:
+    // somebody else already published this bet. Not an error, not a failure.
+    if (result.outcome === 'already_published') { alreadyClaimed++; continue; }
+
+    if (suppressed) {
+      console.log(`\n[postToX] skip (${suppressed}) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
+      if (suppressed.startsWith('no channel')) skippedNoChannel++; else skippedInfo++;
+      continue;
+    }
 
     console.log(`\n[postToX] ${label} — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
     console.log(message);
 
-    if (DRY_RUN) { await markPosted(supabase, signal.id, messageHash, null); posted++; continue; }
-
-    // In-play signal with no in-play channel configured → skip silently (don't
-    // leak live picks into the pre-match channel). Mark posted so it isn't
-    // retried every run.
-    if (!chatId) {
-      console.log(`[postToX] no channel for phase=${signal.phase} — skipping`);
-      await markPosted(supabase, signal.id, messageHash, null);
-      skippedNoChannel++;
-      continue;
-    }
-
-    try {
-      // The token that goes with THIS chat — see postTargetFor. Using
-      // telegram.token here would post the in-play channel's message with the
-      // pre-match bot's credentials, which is a 403 the run swallows as a
-      // failed send.
-      const res = await telegramPost(target.token, chatId, message);
-      console.log(`[postToX] posted — message id: ${res.message_id}`);
-      await markPosted(supabase, signal.id, messageHash, String(res.message_id));
+    if (result.outcome === 'sent') {
+      console.log(`[postToX] posted — message id: ${result.messageId}`);
       posted++;
-    } catch (err) {
-      console.error(`[postToX] failed: ${err.message}`);
-      if (err.retryAfterSec) await new Promise(r => setTimeout(r, (err.retryAfterSec + 1) * 1000));
+    } else if (result.outcome === 'refused') {
+      // Telegram said no, so nothing went out and the claim has been released.
+      // This signal is eligible again on the next tick.
+      console.error(`[postToX] refused: ${result.error.message}`);
+      if (result.error.retryAfterSec) await new Promise(r => setTimeout(r, (result.error.retryAfterSec + 1) * 1000));
+      failed++;
+    } else {
+      // Transport failure. The message MAY have landed, so the claim stands and
+      // this signal will not be retried. Under-posting once beats posting twice.
+      console.error(`[postToX] send outcome unknown, claim retained (will not retry): ${result.error.message}`);
+      uncertain++;
       failed++;
     }
 
     if (i < toPost.length - 1) await new Promise(r => setTimeout(r, 1000));
   }
 
-  console.log(`\n[postToX] done —`, { posted, failed, skipped: alreadySeen, no_channel: skippedNoChannel, info_only: skippedInfo });
-  return { posted, failed, skipped: alreadySeen, no_channel: skippedNoChannel, info_only: skippedInfo };
+  const summary = { posted, failed, skipped: alreadySeen + alreadyClaimed,
+                    no_channel: skippedNoChannel, info_only: skippedInfo,
+                    already_claimed: alreadyClaimed, uncertain };
+  console.log(`\n[postToX] done —`, summary);
+  return summary;
 }
 
 if (require.main === module) {
   run().catch(err => { console.error('[postToX] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal, postTargetFor, getTelegramConfig, selectionKey, loadPostedSelectionsFor };
+module.exports = { run, deliver, claimPost, confirmPost, releasePost, loadPostedIds, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal, postTargetFor, getTelegramConfig, selectionKey, loadPostedSelectionsFor };
