@@ -564,12 +564,33 @@ async function run() {
     const target      = telegram ? postTargetFor(telegram, signal) : telegram;
     const chatId      = target ? target.chatId : target;
 
-    // Broadcast policy: pre-match, we only broadcast what the ladder suggests.
-    // The wider edges and the longshots remain visible on the site but are
-    // never pushed to the channel. Mark them posted so they aren't reconsidered every run. In-play
-    // signals and odds-movement alerts bypass this — they have their own logic.
-    if (!isInplay(signal) && !isMover(signal) && tier !== 'prime') {
-      console.log(`\n[postToX] skip (${label}, not suggested) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
+    // Broadcast policy: pre-match, we only broadcast a BACKED signal — suggested
+    // by the eligibility ladder (the price+edge box) AND scored at or above the
+    // backing line, which is exactly what `isBroadcastable` (isBacked, reading
+    // BOTH ladders — see its note above) already means. The wider edges and the
+    // longshots remain visible on the site but are never pushed to the channel.
+    // Mark them posted so they aren't reconsidered every run. In-play signals
+    // and odds-movement alerts bypass this — they have their own logic.
+    //
+    // THIS USED TO READ `tier !== 'prime'` — the ELIGIBILITY tier alone, from
+    // `classifyTier` — and it silently diverged from the definition above the
+    // day the eligibility ladder split into two suggested tiers, 'prime' and
+    // 'edge' (26 Aug 2026, lib/signalTier.js). Two live failures, both found by
+    // a live report of "bug signals still coming through on telegram": every
+    // genuinely backed EDGE-tier signal was dropped HERE, before ever reaching
+    // `buildMessage`'s dedicated "EDGE SIGNAL" branch — and a PRIME-eligibility
+    // signal whose actual score fell below the backing line (SLIGHT/TRACE/NIL)
+    // sailed straight through, undetected, and was posted labelled
+    // "⚡ UNBACKED EDGE" by `buildMessage`'s catch-all branch, whose own comment
+    // claimed that exact case "does not reach the channel". It did — nothing
+    // upstream of it had ever checked whether the row was actually BACKED, only
+    // whether its (odds, edge) fell in the old single 'prime' box. `isBroadcastable`
+    // is the one predicate this file already defines for "suggested AND backed"
+    // (`broadcastableIds` above was built from it correctly); reading it here
+    // instead of re-deriving the ladder from a tier string is the whole fix. No
+    // test exercised `run()`'s loop body, which is how this went unnoticed.
+    if (!isInplay(signal) && !isMover(signal) && !isBroadcastable(signal)) {
+      console.log(`\n[postToX] skip (${label}, not backed) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
       await markPosted(supabase, signal.id, messageHash, null);
       skippedInfo++;
       continue;
