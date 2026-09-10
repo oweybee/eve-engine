@@ -116,6 +116,53 @@ async function loadPostedIds(supabase) {
   return new Set((data ?? []).map(r => r.signal_id));
 }
 
+/**
+ * A SUBSCRIBER'S identity for a signal — match + market + line + outcome —
+ * which is NOT the row's own id.
+ *
+ * `value_signals_selection_price_unique` includes `detected_odds` (CLAUDE.md:
+ * "and is therefore NOT one row per fixture"), so every re-detection at a
+ * moved price — pre-match on a re-poll, or in-play on the next tick — writes
+ * a BRAND NEW row with a brand new id. `loadPostedIds` dedupes by that row
+ * id, which two re-detections of the exact same claim never share.
+ *
+ * Confirmed live, 10 Sep 2026: one in-play match (Portland Timbers v
+ * St. Louis City) posted "away to win" FOUR times in eighteen minutes, each
+ * a fresh id at a shrinking price, and a pre-match PRIME signal (Mariehamn v
+ * Turku PS) repeated the same way. Nothing was wrong with either signal —
+ * each was honestly scored at detection — the failure is that a subscriber
+ * was told the same thing four times and had no way to know the row behind
+ * the fourth message was not the row behind the first.
+ */
+function selectionKey(r) {
+  return `${r.match_id}|${r.market ?? 'h2h'}|${r.market_line ?? ''}|${r.outcome}`;
+}
+
+/**
+ * Which SELECTIONS (not row ids) have already reached this channel, for a
+ * given set of matches.
+ *
+ * Scoped to `matchIds` rather than a full `posted_signals` scan: this run's
+ * candidates already name the handful of matches in play, and re-reading
+ * every post of the last 30 days (1,100+ rows and growing daily) to answer a
+ * question about a dozen matches is the wrong shape — the same lesson this
+ * file already carries about oversized `.in()` lists.
+ *
+ * The embed is INNER on purpose (`posted_signals!inner`): a `value_signals`
+ * row with no matching posted row drops out entirely, so what comes back is
+ * exactly "already told a subscriber about this", nothing else.
+ */
+async function loadPostedSelectionsFor(supabase, matchIds) {
+  if (!matchIds.length) return new Set();
+  const { data, error } = await supabase
+    .from('value_signals')
+    .select('match_id, market, market_line, outcome, posted_signals!inner(channel)')
+    .eq('posted_signals.channel', CHANNEL)
+    .in('match_id', matchIds);
+  if (error) throw new Error(`loadPostedSelectionsFor: ${error.message}`);
+  return new Set((data ?? []).map(selectionKey));
+}
+
 async function markPosted(supabase, signalId, messageHash, externalMsgId) {
   const { error } = await supabase
     .from('posted_signals')
@@ -532,6 +579,15 @@ async function run() {
   const alreadySeen = signals.length - toPost.length;
   console.log(`[postToX] ${toPost.length} new | ${alreadySeen} already posted`);
 
+  // SELECTION-LEVEL DEDUP. `toPost` is deduped by ROW id, and a price
+  // re-detection writes a new row every time — see the note on
+  // `selectionKey`/`loadPostedSelectionsFor` above. Loaded AFTER the row-level
+  // filter and scoped to the matches still in play, so this is one small read
+  // rather than a second scan of the whole 30-day window.
+  const postedSelections = await loadPostedSelectionsFor(
+    supabase, [...new Set(toPost.filter(s => !isMover(s)).map(s => s.match_id))]
+  );
+
   // Conflict guard: among the pre-match selections we'd broadcast this run, keep
   // only the highest-edge pick per (match, market, line) so we never push two
   // opposing outcomes on the same match. The rest are suppressed below.
@@ -564,12 +620,48 @@ async function run() {
     const target      = telegram ? postTargetFor(telegram, signal) : telegram;
     const chatId      = target ? target.chatId : target;
 
-    // Broadcast policy: pre-match, we only broadcast what the ladder suggests.
-    // The wider edges and the longshots remain visible on the site but are
-    // never pushed to the channel. Mark them posted so they aren't reconsidered every run. In-play
-    // signals and odds-movement alerts bypass this — they have their own logic.
-    if (!isInplay(signal) && !isMover(signal) && tier !== 'prime') {
-      console.log(`\n[postToX] skip (${label}, not suggested) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
+    // Broadcast policy: pre-match, we only broadcast a BACKED signal — suggested
+    // by the eligibility ladder (the price+edge box) AND scored at or above the
+    // backing line, which is exactly what `isBroadcastable` (isBacked, reading
+    // BOTH ladders — see its note above) already means. The wider edges and the
+    // longshots remain visible on the site but are never pushed to the channel.
+    // Mark them posted so they aren't reconsidered every run. In-play signals
+    // and odds-movement alerts bypass this — they have their own logic.
+    //
+    // THIS USED TO READ `tier !== 'prime'` — the ELIGIBILITY tier alone, from
+    // `classifyTier` — and it silently diverged from the definition above the
+    // day the eligibility ladder split into two suggested tiers, 'prime' and
+    // 'edge' (26 Aug 2026, lib/signalTier.js). Two live failures, both found by
+    // a live report of "bug signals still coming through on telegram": every
+    // genuinely backed EDGE-tier signal was dropped HERE, before ever reaching
+    // `buildMessage`'s dedicated "EDGE SIGNAL" branch — and a PRIME-eligibility
+    // signal whose actual score fell below the backing line (SLIGHT/TRACE/NIL)
+    // sailed straight through, undetected, and was posted labelled
+    // "⚡ UNBACKED EDGE" by `buildMessage`'s catch-all branch, whose own comment
+    // claimed that exact case "does not reach the channel". It did — nothing
+    // upstream of it had ever checked whether the row was actually BACKED, only
+    // whether its (odds, edge) fell in the old single 'prime' box. `isBroadcastable`
+    // is the one predicate this file already defines for "suggested AND backed"
+    // (`broadcastableIds` above was built from it correctly); reading it here
+    // instead of re-deriving the ladder from a tier string is the whole fix. No
+    // test exercised `run()`'s loop body, which is how this went unnoticed.
+    if (!isInplay(signal) && !isMover(signal) && !isBroadcastable(signal)) {
+      console.log(`\n[postToX] skip (${label}, not backed) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
+      await markPosted(supabase, signal.id, messageHash, null);
+      skippedInfo++;
+      continue;
+    }
+
+    // ALREADY TOLD A SUBSCRIBER ABOUT THIS SELECTION. A mover is exempt on
+    // purpose — "the price on an existing signal moved" is its own deliberate
+    // re-alert, not the repeat this guard exists to stop. Everything else,
+    // in-play included, gets exactly one message per (match, market, line,
+    // outcome): the row's own id says nothing about whether a subscriber has
+    // already heard this, and re-detections at a new price share no id at
+    // all. Checked AFTER the backed gate so an unbacked row is still marked
+    // posted for the reason above it, not this one.
+    if (!isMover(signal) && postedSelections.has(selectionKey(signal))) {
+      console.log(`\n[postToX] skip (${label}, already alerted this selection) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
       await markPosted(supabase, signal.id, messageHash, null);
       skippedInfo++;
       continue;
@@ -584,6 +676,13 @@ async function run() {
       skippedInfo++;
       continue;
     }
+
+    // Claim the selection NOW, in-memory, for the rest of THIS run — not just
+    // in the database for the next one. Two rows for the same (match, market,
+    // line, outcome) can both land in `toPost` in a single run (a re-detection
+    // arriving between the fetch above and this loop), and without this a
+    // second one would sail through the check above unopposed.
+    if (!isMover(signal)) postedSelections.add(selectionKey(signal));
 
     console.log(`\n[postToX] ${label} — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
     console.log(message);
@@ -626,4 +725,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[postToX] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal, postTargetFor, getTelegramConfig };
+module.exports = { run, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal, postTargetFor, getTelegramConfig, selectionKey, loadPostedSelectionsFor };
