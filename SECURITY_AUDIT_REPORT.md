@@ -1,5 +1,38 @@
 # Security Audit Report — Database Schema, Migrations & Compute Layer
 
+> **RE-CHECKED AGAINST PRODUCTION, 6 Sep 2026.** Scope: every migration added
+> since the 24 Aug re-check (095–120), the three tables/views they created
+> (`band_calibration`, `performance_band`, `inplay_momentum`, plus the
+> `performance_signals`/`performance_signals_pending` views), the `ML_ENSEMBLE`
+> / `Dixon-Coles` config rows, and `computeValues.js` / `lib/supabaseClient.js`
+> again. Checked against the live database via the Supabase advisors and
+> `information_schema`/`pg_catalog`, not only against migration text.
+>
+> **1 new issue found: `performance_band` is TRUNCATE-able by `anon` and
+> `authenticated`.** Fixed below by migration 121. Everything else re-checked
+> clean — see "6 Sep 2026 re-check" for the detail, and the table below for
+> what carried over unchanged from 24 Aug.
+>
+> | Finding | Verdict on live production, 6 Sep 2026 |
+> |---|---|
+> | New — `performance_band` writable/truncatable | **REAL.** `anon`/`authenticated` hold INSERT/UPDATE/DELETE/TRUNCATE. RLS blocks the first three; TRUNCATE bypasses RLS entirely. | **FIXED** — migration 121 |
+> | `band_calibration`, `inplay_momentum` (new since 24 Aug) | Both revoke all client privileges at creation (096, 111). Confirmed live: zero grants to `anon`/`authenticated`. | Clean |
+> | `performance_signals` / `performance_signals_pending` views (new, 119/120) | `security_invoker=false` on the settled view is a deliberate, documented choice — mirrors `performance_summary`'s "public record" pattern and only ever exposes **settled** (non-actionable) rows; `_pending` keeps `security_invoker=true` so the paywall still applies to open picks. Both carry stray INSERT/UPDATE/DELETE/TRUNCATE grants inherited from Supabase's table defaults, but neither view is auto-updatable (`DISTINCT ON` + joins) and neither carries an `INSTEAD OF` trigger — confirmed live: `insert into performance_signals` raises `cannot insert into view`. Inert, not exploitable. | No action needed |
+> | Findings 1–2 (23 Aug): `scoring_anchor`, `model_selection_anchor`, `league_strength` | Still RLS-on / zero-policy / write-revoked in production, exactly as migration 095 left them. | Still fixed |
+> | Finding 3 (23 Aug): 7 tables with no RLS in tracked history | Still RLS-on with zero client write grants in production (an audit-trail gap, not a live exposure) — re-confirmed for all seven plus `performance_summary`. | Still no live issue |
+> | `ML_ENSEMBLE` / `Dixon-Coles` rows | `ML_ENSEMBLE` only ever appears as a `model_architecture` value inside `value_signals`/`computed_values`, governed by the same tiered read policy as every other row in those tables (034/047/059) — no separate exposure. `Dixon-Coles`/`DIXON_COLES` lives in `model_selection_anchor`, which stays fail-closed (no client read, as migration 095's note explains: nothing client-side reads it, so a read policy would be a widening, not a hardening). | Confirmed clean |
+> | Compute layer (`computeValues.js`, `lib/supabaseClient.js`) | Unchanged since 24 Aug; re-read in full. Still fail-fast at startup, still catches every query error, still fails closed. | Confirmed clean |
+>
+> One housekeeping note, not a security finding: the migrations directory has
+> two files each numbered `038` and `110` (`038_completed_matches_require_
+> score.sql`/`038_second_half_sniper.sql`, `110_band_window_opens_at_the_epoch_
+> not_midnight.sql`/`110_the_dedupe_trigger_discards_every_inplay_signal.sql`).
+> Both pairs are already applied and neither pair conflicts, so nothing to
+> replay-fix — flagging only so a future contributor doesn't reuse a taken
+> number a third time.
+>
+> ---
+>
 > **RE-CHECKED AGAINST PRODUCTION, 24 Aug 2026 — read this before acting on
 > anything below.** Every finding was re-measured against the live database
 > rather than against the migration history, on the standing rule that a
@@ -231,9 +264,58 @@ risk masking real data-integrity failures rather than fixing anything.
 
 ---
 
+## Finding 5 (High) — `performance_band` is TRUNCATE-able by `anon` and `authenticated`
+
+**Found:** 6 Sep 2026 re-check. **Location:** `migrations/103_performance_by_band.sql`
+(table created, lines 24–63) — no revoke statement anywhere in the file or
+in 104/119/120, which only touch the refresh function and the two ledger
+views built on top of this table.
+
+`performance_band` is the table `/performance` and every published PRIME/EDGE/
+Longshots yield figure is rendered from (see migration 103's own comment: "the
+performance record is kept PER BAND"). It enables RLS and grants `SELECT` to
+`anon`/`authenticated`, but — unlike its siblings `band_calibration` (096) and
+`inplay_momentum` (111), which both `revoke all ... from anon, authenticated`
+in the same migration that creates them — it never revokes the write
+privileges Supabase's default privileges hand to those roles on every new
+table in `public`. Measured live via `information_schema.role_table_grants`:
+
+```
+ table_name        | grantee       | privileges
+--------------------+---------------+----------------------------------------------
+ performance_band   | anon          | DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE
+ performance_band   | authenticated | DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE
+```
+
+RLS on the table carries only two permissive policies —
+`performance_band_anon_read` (`for select using (published)`) and
+`performance_band_service` (`for all to service_role`) — so INSERT/UPDATE/
+DELETE from `anon`/`authenticated` are already denied by RLS (no matching
+policy means no rows pass `WITH CHECK`/`USING`). **TRUNCATE is not governed by
+RLS at all**, which is exactly Finding 1 from the 23 Aug audit re-check
+("What was genuinely exposed is TRUNCATE ... the same grant on
+`league_strength`", fixed by migration 095) — the same class of gap,
+recurring on the table this session's public track record depends on. Anyone
+holding the `anon` or `authenticated` key can currently empty
+`performance_band`, wiping every published PRIME/EDGE/Longshots figure with no
+RLS check able to stop it.
+
+**Remediation:** the same revoke its siblings already carry:
+
+```sql
+revoke insert, update, delete, truncate on public.performance_band from anon, authenticated;
+```
+
+**Status: FIXED** — see `migrations/121_performance_band_revoke_public_write.sql`,
+added by this audit. Not yet applied to production; apply it the same way 095
+was applied.
+
+---
+
 ## Remediation priority
 
-1. **High** — Finding 1: lock down `scoring_anchor` / `model_selection_anchor` (public write currently open on model-gating data).
-2. **High** — Finding 2: add the missing `league_strength` RLS-enable statement to the tracked history and verify production state.
-3. **Medium-High** — Finding 3: enable RLS (with appropriate read policy) on the seven tables listed with no protection at all.
-4. **Medium** — Finding 4: backfill migrations recording RLS-enable for the core product tables already protected in production, to close the recurring drift pattern.
+0. **High** — Finding 5 (6 Sep 2026): apply `migrations/121_performance_band_revoke_public_write.sql` to production — `anon`/`authenticated` can currently `TRUNCATE` the public performance record.
+1. **High** — Finding 1: lock down `scoring_anchor` / `model_selection_anchor` (public write currently open on model-gating data). **Applied 23 Aug via migration 095** — re-confirmed live 6 Sep 2026.
+2. **High** — Finding 2: add the missing `league_strength` RLS-enable statement to the tracked history and verify production state. **Applied 23 Aug via migration 095** — re-confirmed live 6 Sep 2026.
+3. **Medium-High** — Finding 3: enable RLS (with appropriate read policy) on the seven tables listed with no protection at all. **Does not reproduce on production** (all seven are RLS-protected live) — re-confirmed 6 Sep 2026; remains an audit-trail gap only.
+4. **Medium** — Finding 4: backfill migrations recording RLS-enable for the core product tables already protected in production, to close the recurring drift pattern. Still open.
