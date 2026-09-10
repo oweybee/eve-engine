@@ -116,6 +116,53 @@ async function loadPostedIds(supabase) {
   return new Set((data ?? []).map(r => r.signal_id));
 }
 
+/**
+ * A SUBSCRIBER'S identity for a signal — match + market + line + outcome —
+ * which is NOT the row's own id.
+ *
+ * `value_signals_selection_price_unique` includes `detected_odds` (CLAUDE.md:
+ * "and is therefore NOT one row per fixture"), so every re-detection at a
+ * moved price — pre-match on a re-poll, or in-play on the next tick — writes
+ * a BRAND NEW row with a brand new id. `loadPostedIds` dedupes by that row
+ * id, which two re-detections of the exact same claim never share.
+ *
+ * Confirmed live, 10 Sep 2026: one in-play match (Portland Timbers v
+ * St. Louis City) posted "away to win" FOUR times in eighteen minutes, each
+ * a fresh id at a shrinking price, and a pre-match PRIME signal (Mariehamn v
+ * Turku PS) repeated the same way. Nothing was wrong with either signal —
+ * each was honestly scored at detection — the failure is that a subscriber
+ * was told the same thing four times and had no way to know the row behind
+ * the fourth message was not the row behind the first.
+ */
+function selectionKey(r) {
+  return `${r.match_id}|${r.market ?? 'h2h'}|${r.market_line ?? ''}|${r.outcome}`;
+}
+
+/**
+ * Which SELECTIONS (not row ids) have already reached this channel, for a
+ * given set of matches.
+ *
+ * Scoped to `matchIds` rather than a full `posted_signals` scan: this run's
+ * candidates already name the handful of matches in play, and re-reading
+ * every post of the last 30 days (1,100+ rows and growing daily) to answer a
+ * question about a dozen matches is the wrong shape — the same lesson this
+ * file already carries about oversized `.in()` lists.
+ *
+ * The embed is INNER on purpose (`posted_signals!inner`): a `value_signals`
+ * row with no matching posted row drops out entirely, so what comes back is
+ * exactly "already told a subscriber about this", nothing else.
+ */
+async function loadPostedSelectionsFor(supabase, matchIds) {
+  if (!matchIds.length) return new Set();
+  const { data, error } = await supabase
+    .from('value_signals')
+    .select('match_id, market, market_line, outcome, posted_signals!inner(channel)')
+    .eq('posted_signals.channel', CHANNEL)
+    .in('match_id', matchIds);
+  if (error) throw new Error(`loadPostedSelectionsFor: ${error.message}`);
+  return new Set((data ?? []).map(selectionKey));
+}
+
 async function markPosted(supabase, signalId, messageHash, externalMsgId) {
   const { error } = await supabase
     .from('posted_signals')
@@ -532,6 +579,15 @@ async function run() {
   const alreadySeen = signals.length - toPost.length;
   console.log(`[postToX] ${toPost.length} new | ${alreadySeen} already posted`);
 
+  // SELECTION-LEVEL DEDUP. `toPost` is deduped by ROW id, and a price
+  // re-detection writes a new row every time — see the note on
+  // `selectionKey`/`loadPostedSelectionsFor` above. Loaded AFTER the row-level
+  // filter and scoped to the matches still in play, so this is one small read
+  // rather than a second scan of the whole 30-day window.
+  const postedSelections = await loadPostedSelectionsFor(
+    supabase, [...new Set(toPost.filter(s => !isMover(s)).map(s => s.match_id))]
+  );
+
   // Conflict guard: among the pre-match selections we'd broadcast this run, keep
   // only the highest-edge pick per (match, market, line) so we never push two
   // opposing outcomes on the same match. The rest are suppressed below.
@@ -596,6 +652,21 @@ async function run() {
       continue;
     }
 
+    // ALREADY TOLD A SUBSCRIBER ABOUT THIS SELECTION. A mover is exempt on
+    // purpose — "the price on an existing signal moved" is its own deliberate
+    // re-alert, not the repeat this guard exists to stop. Everything else,
+    // in-play included, gets exactly one message per (match, market, line,
+    // outcome): the row's own id says nothing about whether a subscriber has
+    // already heard this, and re-detections at a new price share no id at
+    // all. Checked AFTER the backed gate so an unbacked row is still marked
+    // posted for the reason above it, not this one.
+    if (!isMover(signal) && postedSelections.has(selectionKey(signal))) {
+      console.log(`\n[postToX] skip (${label}, already alerted this selection) — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
+      await markPosted(supabase, signal.id, messageHash, null);
+      skippedInfo++;
+      continue;
+    }
+
     // Conflict guard: a suggested selection that lost the per-match/market
     // tie-break to a higher-edge opposing pick is suppressed so the two can't
     // cancel out.
@@ -605,6 +676,13 @@ async function run() {
       skippedInfo++;
       continue;
     }
+
+    // Claim the selection NOW, in-memory, for the rest of THIS run — not just
+    // in the database for the next one. Two rows for the same (match, market,
+    // line, outcome) can both land in `toPost` in a single run (a re-detection
+    // arriving between the fetch above and this loop), and without this a
+    // second one would sail through the check above unopposed.
+    if (!isMover(signal)) postedSelections.add(selectionKey(signal));
 
     console.log(`\n[postToX] ${label} — ${home} vs ${away} (${signal.outcome.toUpperCase()})`);
     console.log(message);
@@ -647,4 +725,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[postToX] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal, postTargetFor, getTelegramConfig };
+module.exports = { run, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal, postTargetFor, getTelegramConfig, selectionKey, loadPostedSelectionsFor };
