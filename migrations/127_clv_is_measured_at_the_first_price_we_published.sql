@@ -56,12 +56,40 @@
 -- below uses the record's operators so it matches the table it is checking.
 --
 -- THE MEASUREMENT RUNS AT APPLY TIME, printed as NOTICEs: both bases per
--- band, their gap, and both counts. It could not be run from the environment
--- this was written in (no database credential of any kind, and no SQL runner
--- in either repo), so the numbers land in the SQL editor's output when this
--- is applied rather than in this header. Read them there and carry them into
--- CLAUDE.md; a number typed here in advance would be a guess wearing a
--- measurement's clothes.
+-- band, their gap, and both counts.
+--
+-- APPLIED AND VERIFIED IN PRODUCTION, 15 Sep 2026 17:26 UTC (schema_migrations
+-- version 20260915172630). Rehearsed first as the whole file with `commit`
+-- replaced by `rollback`; the NOTICEs below are the apply's own, read back off
+-- the postgres server log (`set log_min_messages = 'notice'` — the MCP query
+-- channel drops NOTICEs, the log keeps them):
+--
+--   [127] prime    — first_detection 0.04396 (n=40)  highest_price 0.04636 (n=39)  gap -0.24 pp
+--   [127] edge     — first_detection 0.07227 (n=20)  highest_price 0.07227 (n=20)  gap  0.00 pp
+--   [127] longshot — first_detection 0.03154 (n=103) highest_price 0.03363 (n=103) gap -0.21 pp
+--   [127] OK — every published band carries clv_basis=first_detection and both
+--              bases reproduce independently
+--
+-- THE TWO BASES BARELY DIFFER, AND THE REASON IS WORTH KEEPING. Not one
+-- selection in PRIME or EDGE was re-detected INSIDE its band: 54 PRIME and 27
+-- EDGE first-detection selections, 0 with a second qualifying detection, so
+-- band-first-then-earliest and band-first-then-highest are the same row on
+-- every one of them. The residual gap (-0.24 pp on PRIME) is entirely 120's
+-- survivor shape choosing a row in a DIFFERENT band for one selection (n=40
+-- against n=39). Across ALL bands 52 of 691 settled selections were
+-- re-detected at more than one price (mean spread 0.129), so the inflation
+-- this migration guards against is real in the data and simply had not yet
+-- landed inside a backed band. The brief's premise — that the basis explains
+-- PRIME moving +0.86% → +4.64% — does not survive the measurement; 125's
+-- removal of unpublished architectures is what moved it.
+--
+-- `attach_missing_closing_lines()` (087) was then run: 18 settled rows gained
+-- a close (3 of them PRIME), and the refresh re-ran. Final production state:
+--   prime  first_detection 0.04343 (n=43)  highest_price 0.04565 (n=42)
+--   edge   first_detection 0.07227 (n=20)  highest_price 0.07227 (n=20)
+-- Both gaps sit under the 1 pp bar `lib/clvBasis.clvBasisNote` draws at, so
+-- /performance states the basis in the tile label and prints NO dated note —
+-- by design: a note is for a disagreement, and there is not one.
 --
 -- ACCEPTANCE, asserted rather than eyeballed: after the refresh,
 -- `performance_band.avg_no_vig_clv` for PRIME and EDGE equals an INDEPENDENT
