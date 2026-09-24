@@ -33,7 +33,7 @@ const { buildPrematchVector } = require('./lib/halftimeFeatures');
 const { checkQuality, thresholdsFromEnv } = require('./lib/dataQuality');
 const { resolveTeamKey, initTeamKeyResolver } = require('./lib/teamKey');
 const { insertSignals } = require('./lib/insertSignals');
-const { inChunks } = require('./lib/pagedRead');
+const { inChunks, pageByKey } = require('./lib/pagedRead');
 
 // Config
 const MIN_BOOKMAKERS      = parseInt(process.env.MIN_BOOKMAKERS      || '2',    10);
@@ -161,20 +161,30 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled'], op
     ? opts.oddsMaxAgeMinutes * 60_000
     : ODDS_MAX_AGE_HOURS * 3_600_000;
   const freshCutoff = new Date(Date.now() - maxAgeMs).toISOString();
-  const oddsData = [];
-  const ODDS_PAGE = 1000;
-  for (let from = 0; ; from += ODDS_PAGE) {
-    const { data, error: oddsError } = await supabase
+
+  // KEYSET, NOT OFFSET, AND `id` IS SELECTED BECAUSE THE CURSOR NEEDS IT.
+  //
+  // This walk was `.order('id').range(from, from + 999)` and it was the
+  // statement the engine timed out on, roughly twice an hour, for the whole
+  // of 15-16 Sep 2026: `fetchMatchesForComputation[odds]: canceling statement
+  // due to statement timeout`. Measured in pg_stat_statements before the fix:
+  // 506,046 calls, mean 250ms, max 7,986ms against the API role's 8s
+  // `statement_timeout` — and the timeouts were climbing with the table (23 a
+  // day on 10 Sep, 94 on 14 Sep). Two causes, and the index fix in migration
+  // 128 is the larger one: `odds` had no index on `fetched_at`, so every page
+  // walked the whole (match_id, fetched_at) index — 535,849 entries — to find
+  // one day's 7,000 rows, and then OFFSET re-ran that walk and re-sorted it
+  // for every page. Keyset paging keeps the sort to what is still ahead, and
+  // it also stops a row inserted mid-walk (the in-play worker writes `odds`
+  // every 30s) shifting the offsets under the reader. See lib/pagedRead.
+  const oddsRows = await pageByKey(
+    () => supabase
       .from('odds')
-      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-      .gte('fetched_at', freshCutoff)
-      .order('id', { ascending: true })
-      .range(from, from + ODDS_PAGE - 1);
-    if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
-    if (!data?.length) break;
-    for (const o of data) if (matchIds.has(o.match_id)) oddsData.push(o);
-    if (data.length < ODDS_PAGE) break;
-  }
+      .select('id, match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
+      .gte('fetched_at', freshCutoff),
+    'id',
+    'fetchMatchesForComputation[odds]');
+  const oddsData = oddsRows.filter(o => matchIds.has(o.match_id));
 
   const oddsByMatch = {};
   for (const o of oddsData) {
