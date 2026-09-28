@@ -1,0 +1,70 @@
+# MaxEdge — the X channel.
+#
+# SEPARATE FROM engine.yml ON PURPOSE. The engine ticks every five minutes;
+# posting on that cadence is the definition of the automated behaviour X's
+# rules are aimed at, and `lib/xGuard`'s daily cap would spend the day refusing
+# 280 runs to allow four. Cadence belongs in the schedule, and the cap is the
+# backstop rather than the mechanism.
+#
+# ONE POST PER RUN, AT MOST. Four runs, spaced across the hours a UK audience
+# is actually reading, so a busy board and a quiet one look the same on the
+# timeline — which is what stops the account reading as a feed rather than an
+# account.
+#
+# THE SWITCH IS IN THE ENVIRONMENT, NOT IN THIS FILE. X_POSTING_ENABLED must be
+# exactly '1' or the job does nothing, so the channel can be stopped from the
+# repository secrets without a deploy and without editing a schedule.
+#
+# Minutes are deliberately off the hour: every scheduled workflow on GitHub
+# fires at :00 and queues behind the rest of them.
+
+name: Post to X
+
+on:
+  schedule:
+    - cron: '17 9 * * *'    # 09:17 UTC — before the day's early prices settle
+    - cron: '17 12 * * *'   # lunchtime
+    - cron: '43 16 * * *'   # pre-evening kickoffs
+    - cron: '43 18 * * *'   # evening
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Compose and guard, print, send nothing'
+        type: boolean
+        default: true
+
+concurrency:
+  group: post-to-x
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      # The rails are tested before every run rather than only in CI. They are
+      # the only thing between an unattended poster and the timeline, and a run
+      # that cannot prove them should not post.
+      - name: Check the compliance rails
+        run: node engine.xpost.test.js
+
+      - name: Post
+        env:
+          SUPABASE_URL:            ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          X_POSTING_ENABLED:       ${{ secrets.X_POSTING_ENABLED }}
+          X_API_KEY:               ${{ secrets.X_API_KEY }}
+          X_API_SECRET:            ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN:          ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET:   ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          X_DAILY_CAP:             ${{ vars.X_DAILY_CAP }}
+          DRY_RUN:                 ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '' }}
+        run: node postToXChannel.js

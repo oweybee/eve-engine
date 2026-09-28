@@ -48,6 +48,21 @@ const { isPublished, withheldReason, mayBroadcastInplay, inplayDisclosure, inpla
 } = require('./lib/publication');
 
 const DRY_RUN = process.env.DRY_RUN === '1';
+/**
+ * THE DEFAULT CHANNEL, NOT THE ONLY ONE (28 Sep 2026).
+ *
+ * This was a hard constant, which is why the file's name has been a fossil for
+ * months: adding X meant either editing this line or writing a second poster,
+ * and the header above records exactly what a second poster cost last time —
+ * the broadcast recomputing its own score and posting PRIME for selections the
+ * site badged WATCH.
+ *
+ * So the three functions that touch the ledger now take a channel and default
+ * to this one. Every existing call site is unchanged and `postToXChannel.js`
+ * passes 'x'. The ledger was already channel-scoped: both unique indexes on
+ * `posted_signals` are on (…, channel), so two channels cannot dedupe each
+ * other and no migration was needed.
+ */
 const CHANNEL = 'telegram';
 const RUN_ID  = process.env.GITHUB_RUN_ID ?? 'local';
 
@@ -117,7 +132,7 @@ function chatIdForSignal(telegram, signal) {
  * decoration: without one, `.range()` offsets index into an unspecified order
  * and pages can overlap or skip.
  */
-async function loadPostedIds(supabase) {
+async function loadPostedIds(supabase, channel = CHANNEL) {
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const PAGE = 1000, MAX_PAGES = 50;
   const ids = new Set();
@@ -126,7 +141,7 @@ async function loadPostedIds(supabase) {
     const { data, error } = await supabase
       .from('posted_signals')
       .select('signal_id')
-      .eq('channel', CHANNEL)
+      .eq('channel', channel)
       .gte('posted_at', since)
       .order('posted_at', { ascending: false })
       .order('id', { ascending: false })
@@ -178,12 +193,12 @@ function selectionKey(r) {
  * row with no matching posted row drops out entirely, so what comes back is
  * exactly "already told a subscriber about this", nothing else.
  */
-async function loadPostedSelectionsFor(supabase, matchIds) {
+async function loadPostedSelectionsFor(supabase, matchIds, channel = CHANNEL) {
   if (!matchIds.length) return new Set();
   const { data, error } = await supabase
     .from('value_signals')
     .select('match_id, market, market_line, outcome, posted_signals!inner(channel)')
-    .eq('posted_signals.channel', CHANNEL)
+    .eq('posted_signals.channel', channel)
     .in('match_id', matchIds);
   if (error) throw new Error(`loadPostedSelectionsFor: ${error.message}`);
   return new Set((data ?? []).map(selectionKey));
@@ -241,10 +256,10 @@ async function loadPostedSelectionsFor(supabase, matchIds) {
  */
 
 /** Claim id if this caller won; null if the row OR the selection is published. */
-async function claimPost(supabase, signalId, messageHash, dedupeSelection) {
+async function claimPost(supabase, signalId, messageHash, dedupeSelection, channel = CHANNEL) {
   const { data, error } = await supabase.rpc('claim_selection_post', {
     p_signal_id:        signalId,
-    p_channel:          CHANNEL,
+    p_channel:          channel,
     p_message_hash:     messageHash,
     p_dedupe_selection: dedupeSelection,
     p_run_id:           RUN_ID,
@@ -292,8 +307,8 @@ async function releasePost(supabase, claimId) {
  * harm than one duplicate post, on a channel whose readers cannot tell them
  * apart.
  */
-async function deliver(supabase, signal, messageHash, send, dedupeSelection = true) {
-  const claimId = await claimPost(supabase, signal.id, messageHash, dedupeSelection);
+async function deliver(supabase, signal, messageHash, send, dedupeSelection = true, channel = CHANNEL) {
+  const claimId = await claimPost(supabase, signal.id, messageHash, dedupeSelection, channel);
   if (!claimId) return { outcome: 'already_published' };
   if (!send)    return { outcome: 'claimed', claimId };
 
@@ -302,7 +317,10 @@ async function deliver(supabase, signal, messageHash, send, dedupeSelection = tr
     await confirmPost(supabase, claimId, res.message_id);
     return { outcome: 'sent', claimId, messageId: res.message_id };
   } catch (err) {
-    if (err && err.telegramRejected) {
+    // `telegramRejected` and `xRejected` mean the same thing — a well-formed
+    // refusal, which is PROOF nothing was delivered. A transport failure sets
+    // neither and the claim stands. See lib/xClient's header.
+    if (err && (err.telegramRejected || err.xRejected)) {
       await releasePost(supabase, claimId);
       return { outcome: 'refused', claimId, error: err };
     }
@@ -901,4 +919,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[postToX] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, deliver, claimPost, confirmPost, releasePost, loadPostedIds, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal, postTargetFor, getTelegramConfig, selectionKey, loadPostedSelectionsFor };
+module.exports = { run, deliver, claimPost, fetchRecentSignals, CHANNEL, confirmPost, releasePost, loadPostedIds, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal, postTargetFor, getTelegramConfig, selectionKey, loadPostedSelectionsFor };
