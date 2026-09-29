@@ -205,7 +205,7 @@ jobs:
         id: plan
         continue-on-error: true
         env:
-          DAYS_AHEAD: '3'
+          DAYS_AHEAD: '14'
         run: node planDay.js
 
       # Betfair ingest does NOT run here: Betfair geo-blocks GitHub's US runners
