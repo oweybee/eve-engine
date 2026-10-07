@@ -5,8 +5,8 @@
 'use strict';
 
 const assert = require('assert');
-const { planPolling, pollsForFixture, tierFor, dueNow, DEFAULT_TIERS } =
-  require('./lib/pollBudget');
+const { planPolling, pollsForFixture, tierFor, dueNow, DEFAULT_TIERS,
+        FIRST_POLL_RAMP_MIN } = require('./lib/pollBudget');
 
 let passed = 0;
 function test(name, fn) {
@@ -114,9 +114,41 @@ test('past-kickoff fixtures are excluded', () => {
 
 test('dueNow filters on nextPollAt', () => {
   const plan = planPolling({ fixtures: makeFixtures([1, 30]), budget: 150000, now: NOW });
-  assert.strictEqual(dueNow(plan.schedule, NOW).length, 0, 'nothing due immediately');
   const later = new Date(NOW.getTime() + 10 * 60_000);
-  assert.strictEqual(dueNow(plan.schedule, later).length, 1, 'closing-tier fixture due at +10m');
+  assert.strictEqual(dueNow(plan.schedule, later).length, 2, 'both polled inside ten minutes');
+});
+
+/* A FIXTURE HAS NEVER BEEN PRICED WHEN THE SCHEDULE IS BUILT, so waiting a
+   whole tier interval for its first look is a day of nothing on the distant
+   tier — and planDay rebuilds the schedule daily, which reset the wait before
+   it elapsed. 710 of 728 fixtures had never been polled on 7 Oct 2026. */
+test('the first poll of a fresh schedule is now, not one interval away', () => {
+  const plan = planPolling({ fixtures: makeFixtures([1, 30, 200]), budget: 150000, now: NOW });
+  assert.strictEqual(dueNow(plan.schedule, NOW).length, 3,
+    'one fixture per tier, every one of them due at once');
+});
+
+test('deals a tier evenly across the ramp rather than onto one run', () => {
+  const specs = Array.from({ length: 100 }, () => 200);   // all on one far tier
+  const plan = planPolling({ fixtures: makeFixtures(specs), budget: 150000, now: NOW });
+  const offsets = plan.schedule
+    .map(s => (new Date(s.nextPollAt).getTime() - NOW.getTime()) / 60_000)
+    .sort((a, b) => a - b);
+  assert.strictEqual(offsets[0], 0, 'the first one goes immediately');
+  assert.ok(offsets[offsets.length - 1] < FIRST_POLL_RAMP_MIN,
+    'the whole backlog clears inside the ramp');
+  const inFirstTenMin = offsets.filter(o => o < 10).length;
+  assert.ok(inFirstTenMin < 25, `no run gets the lot — ${inFirstTenMin} in ten minutes`);
+});
+
+/* SPREADING THE CLOSING TIER OVER AN HOUR WOULD BE THE OLD BUG WEARING THE
+   FIX'S NAME: that is the window where the price actually moves. */
+test('a tier tighter than the ramp keeps its own interval', () => {
+  const specs = Array.from({ length: 20 }, () => 1);      // all on closing (5 min)
+  const plan = planPolling({ fixtures: makeFixtures(specs), budget: 150000, now: NOW });
+  const worst = Math.max(...plan.schedule
+    .map(s => (new Date(s.nextPollAt).getTime() - NOW.getTime()) / 60_000));
+  assert.ok(worst < 5, `closing tier spread over ${worst} min, must stay under its 5`);
 });
 
 console.log(`\npoll budget tests: ${passed} passed${process.exitCode ? ' (with failures)' : ''}`);
