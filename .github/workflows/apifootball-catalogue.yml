@@ -1,0 +1,36 @@
+# Read-only diagnostic: print API-Football's real bet catalogue and the market
+# depth on live fixtures.
+#
+# Manual only — there is nothing to schedule. Every claim in the repo about
+# which markets the `/odds` payload carries is inference from the extractors;
+# the documentation sits behind a bot challenge and the local .env holds a
+# placeholder key, so a runner is the only place the real shape can be seen.
+# Twin of odds-api-catalogue.yml. See scripts/apiFootballCatalogue.js.
+#
+# Costs ~5 requests against a 75,000/day allowance, and writes nothing.
+name: API-Football Catalogue (diagnostic)
+
+on:
+  workflow_dispatch:
+    inputs:
+      fixtures:
+        description: 'How many upcoming fixtures to probe for market depth'
+        type: string
+        default: '2'
+
+permissions:
+  contents: read
+
+jobs:
+  catalogue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Print bet catalogue and market depth
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: node scripts/apiFootballCatalogue.js --fixtures "${{ inputs.fixtures || '2' }}"
