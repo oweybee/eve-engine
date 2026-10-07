@@ -1,13 +1,21 @@
 name: Plan Day
 
 # Runs once daily at 05:00 UTC — before the active polling window opens.
-# Fetches upcoming World Cup fixtures (3 days ahead), calculates the optimal
-# polling interval based on the daily request budget, and writes the plan to
+# Fetches the next DAYS_AHEAD days of fixtures across every tracked league,
+# assigns each one a polling tier by time to kickoff, and writes the plan to
 # Supabase. ingestOdds.js reads this plan to gate its own execution.
 on:
   schedule:
     - cron: '0 5 * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: >-
+          Rebuild today's plan even though one already exists. Costs one
+          fixtures fetch per tracked day and carries runs_completed across.
+          Use it when a schedule fix has to reach the day it was written on.
+        type: boolean
+        default: false
 
 jobs:
   plan:
@@ -20,6 +28,7 @@ jobs:
       DAYS_AHEAD:                '14'
       ACTIVE_START_HOUR:         '0'
       ACTIVE_END_HOUR:           '24'
+      FORCE_REPLAN:              ${{ inputs.force && '1' || '0' }}
 
     steps:
       - name: Checkout

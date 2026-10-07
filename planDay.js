@@ -67,6 +67,24 @@ const DAYS_AHEAD          = parseInt(process.env.DAYS_AHEAD || '1', 10);
 const FOOTBALL_SEASON     = parseInt(process.env.FOOTBALL_SEASON || String(new Date().getUTCFullYear()), 10);
 const DRY_RUN             = process.argv.includes('--dry-run');
 
+/**
+ * Rebuild today's plan over a plan that already has fixtures in it.
+ *
+ * ── WHY THE GUARD NEEDED AN ESCAPE HATCH ─────────────────────────────────
+ *
+ * The idempotency guard in `main` is right: an accidental re-run should not
+ * re-fetch the same fixtures or reset `runs_completed`. But it also means a
+ * fix to the SCHEDULE cannot reach the day it was written on. On 7 Oct 2026
+ * the first-poll bug was fixed at 20:10 and the 710 fixtures that had never
+ * been priced would have stayed unpriced until the next morning, because the
+ * plan holding their broken `nextPollAt` was a plan with fixtures in it.
+ *
+ * So a force is explicit and manual, and it carries `runs_completed` across —
+ * the guard's two stated reasons are the re-fetch cost and the reset, and only
+ * the first is unavoidable when a rebuild is what you actually want.
+ */
+const FORCE_REPLAN        = process.argv.includes('--force') || process.env.FORCE_REPLAN === '1';
+
 // ---------------------------------------------------------------------------
 // Tracked competitions
 // ---------------------------------------------------------------------------
@@ -487,6 +505,9 @@ async function savePlan(supabase, plan) {
 
 async function main() {
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
+  // Runs already spent today, carried across a forced rebuild so the day's
+  // budget accounting is not quietly handed back.
+  let carryRuns = null;
   console.log(`\n[planDay] ${DRY_RUN ? '(DRY RUN) ' : ''}${today} — budget ${DAILY_BUDGET} req, window ${ACTIVE_START_HOUR}:00–${ACTIVE_END_HOUR}:00 UTC\n`);
 
   // P1-3 fix: early-exit if a plan for today already exists.
@@ -510,9 +531,13 @@ async function main() {
     // reason for the guard is unaffected: a real plan is still never re-fetched
     // and `runs_completed` is still never reset to 0.
     const existingCount = existing?.fixture_ids?.length ?? 0;
-    if (existing && existingCount > 0) {
+    if (existing && existingCount > 0 && !FORCE_REPLAN) {
       console.log(`[planDay] plan for ${today} already exists (${existingCount} fixtures, ${existing.runs_completed}/${existing.runs_planned} runs) — skipping`);
       return;
+    }
+    if (existing && existingCount > 0) {
+      console.log(`[planDay] plan for ${today} already exists (${existingCount} fixtures, ${existing.runs_completed}/${existing.runs_planned} runs) — FORCED rebuild`);
+      carryRuns = existing.runs_completed ?? 0;
     }
     if (existing) {
       console.log(`[planDay] plan row for ${today} exists but holds NO fixtures — rebuilding over it`);
@@ -557,6 +582,7 @@ async function main() {
   }
 
   const plan = calcPlan(planned, today);
+  if (carryRuns != null) plan.runs_completed = carryRuns;
   try {
     await savePlan(supabase, plan);
   } catch (err) {
