@@ -118,11 +118,16 @@ async function probeFixture(fixtureId, label) {
 
   console.log(`bookmakers on this fixture: ${
     [...new Set((res[0].bookmakers ?? []).map(b => b.name))].join(', ') || '(none)'}`);
-  console.log('\nid | name | books quoting | distinct values | sample values | extracted');
+  // WHICH books, not just how many. A market quoted only by books outside
+  // lib/marketAnchor's BETTABLE_BOOKS is not addressable by this product at any
+  // schema cost, and a market whose only quotes exclude the anchor book cannot
+  // be de-vigged against a consensus. The count alone hides both.
+  console.log('\nid | name | books quoting | distinct values | sample values | extracted | which books');
   for (const [id, e] of [...perBet.entries()].sort((a, c) => a[0] - c[0])) {
     const sample = [...e.values].slice(0, 8).join(' / ');
+    const which = e.books.size <= 6 ? [...e.books].sort().join(', ') : '';
     console.log(`${id} | ${e.name} | ${e.books.size} | ${e.values.size} | ${sample} | ${
-      TAKEN_PREMATCH.has(id) ? 'YES' : 'no'}`);
+      TAKEN_PREMATCH.has(id) ? 'YES' : 'no'} | ${which}`);
   }
 
   // The specific question that sent anyone here: which goal lines arrive, given
@@ -134,7 +139,7 @@ async function probeFixture(fixtureId, label) {
       .map(v => (String(v).match(/(-?\d+(?:\.\d+)?)/) || [])[1])
       .filter(Boolean);
     console.log(`\ngoal lines present in bet 5: ${[...new Set(lines)].sort((a, b) => a - b).join(', ')}`);
-    console.log('ingestOdds.js keeps 2.5 and discards the rest.');
+    console.log('ingestOdds.js keeps the HALF lines; whole and quarter lines are left for settlement work.');
   }
 }
 

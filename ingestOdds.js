@@ -293,40 +293,98 @@ function extractH2hRows(bookmaker) {
 }
 
 /**
- * Extracts the Goals Over/Under 2.5 line from a bookmaker object.
+ * Extracts every HALF goal line from a bookmaker object.
  * API-Football: bet id 5 ("Goals Over/Under"), values like
  *   { value: "Over 2.5", odd: "1.74" }, { value: "Under 2.5", odd: "2.26" }
  *
  * Stored to match the existing Betfair convention so downstream reads uniformly:
  *   over → home_odds, under → away_odds, line → market_line, draw_odds → null.
  *
+ * THIS USED TO KEEP 2.5 AND THROW THE REST AWAY. The payload measured on a real
+ * fixture (Arsenal v Leeds, 10 Oct 2026, scripts/apiFootballCatalogue.js) carries
+ * TWENTY-ONE distinct lines from eight bookmakers in the same response we were
+ * already paying for:
+ *
+ *   0.5 1.0 1.25 1.5 1.75 2.0 2.25 2.5 2.75 3.0 3.25 3.5 3.75 4.0 4.25 4.5
+ *   4.75 5.0 5.5 6.5 7.5
+ *
+ * HALF LINES ONLY, AND THAT IS A SETTLEMENT CONSTRAINT, NOT A PREFERENCE. Those
+ * twenty-one lines are three different settlement classes and this engine can
+ * only settle one of them:
+ *
+ *   .5   (0.5, 1.5, 2.5 …)  win or loss. `fetchResults.resultFromGoals` settles
+ *                           these correctly today.
+ *   whole (1.0, 2.0, 3.0 …) PUSH when the total lands on the line.
+ *                           `resultFromGoals` compares with strict > and <, so a
+ *                           push would be recorded as a LOSS — a published
+ *                           result that is wrong, and only ever wrong against
+ *                           the reader.
+ *   quarter (1.25, 1.75 …)  half-win / half-loss. `value_signals_result_check`
+ *                           admits only win|loss|void|pending, so these cannot
+ *                           be stored at all, correctly or otherwise.
+ *
+ * So the predicate is the gate. Widening it needs push handling in settlement
+ * and a result-enum migration FIRST, in that order, or the engine starts
+ * publishing wrong results the hour it ships.
+ *
+ * Nothing downstream needed changing: `lib/secondaryMarkets.bestTwoWay` already
+ * groups by line, refuses to pair legs from different handicaps, and picks the
+ * MOST LIQUID line rather than the first one it sees. It was built for this and
+ * has been fed a single line since it was written.
+ *
+ * VOLUME. The dedupe key is `matchId:bookmaker:market:market_line`, so every
+ * line is its own series. Up to eight .5 lines are quoted where one was kept, so
+ * budget for an order-of-magnitude increase in `odds` rows for this market,
+ * bounded by how many books quote both sides of each line.
+ *
  * @param {object} bookmaker
- * @returns {Array<object>}
+ * @returns {Array<object>} one row per line with both sides present
  */
-const TOTALS_TARGET_LINE = 2.5;
+
+/**
+ * A half line, and nothing else. `line * 2` odd means x.5; this rejects whole
+ * numbers and quarter lines in one test and does not care how the feed spells
+ * them ("2.5", "2.50", 2.5).
+ */
+function isHalfLine(line) {
+  return Number.isFinite(line) && Number.isInteger(line * 2) && !Number.isInteger(line);
+}
+
 function extractTotalsRows(bookmaker) {
   const ou = (bookmaker?.bets ?? []).find(b => b.id === 5);
   if (!ou) return [];
 
-  let over = null, under = null;
+  const byLine = new Map();
   for (const v of ou.values ?? []) {
     const m = String(v.value ?? '').match(/^(over|under)\s+([\d.]+)$/i);
-    if (!m || parseFloat(m[2]) !== TOTALS_TARGET_LINE) continue;
+    if (!m) continue;
+    const line = parseFloat(m[2]);
+    if (!isHalfLine(line)) continue;
     const odd = parseFloat(v.odd);
     if (!(odd > 1) || odd > 999) continue;
-    if (/over/i.test(m[1])) over = odd; else under = odd;
+    let g = byLine.get(line);
+    if (!g) { g = { over: null, under: null }; byLine.set(line, g); }
+    if (/over/i.test(m[1])) g.over = odd; else g.under = odd;
   }
-  if (over == null || under == null) return [];
 
-  return [{
-    bookmaker:   slugifyBookmaker(bookmaker.name ?? ''),
-    market:      'totals',
-    market_line: TOTALS_TARGET_LINE,
-    home_odds:   over,
-    draw_odds:   null,
-    away_odds:   under,
-    fetched_at:  new Date().toISOString(),
-  }];
+  const fetched_at = new Date().toISOString();
+  const rows = [];
+  // BOTH SIDES OR NEITHER. A one-legged line cannot be de-vigged, and
+  // `bestTwoWay` would skip it anyway — writing it would only inflate the table
+  // and the apparent line count.
+  for (const [line, g] of [...byLine.entries()].sort((a, b) => a[0] - b[0])) {
+    if (g.over == null || g.under == null) continue;
+    rows.push({
+      bookmaker:   slugifyBookmaker(bookmaker.name ?? ''),
+      market:      'totals',
+      market_line: line,
+      home_odds:   g.over,
+      draw_odds:   null,
+      away_odds:   g.under,
+      fetched_at,
+    });
+  }
+  return rows;
 }
 
 /**
@@ -841,4 +899,5 @@ if (require.main === module) {
 module.exports = {
   ingest, extractH2hRows, extractTotalsRows, extractBttsRows, oddsHaveMoved,
   insertOddsRows,
+  isHalfLine,
 };

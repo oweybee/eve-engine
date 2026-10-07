@@ -23,7 +23,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { insertOddsRows } = require('./ingestOdds');
+const { insertOddsRows, extractTotalsRows, isHalfLine } = require('./ingestOdds');
 
 /** A supabase double recording every insert call and its payload shape. */
 function insertSpy({ failBatch = false, failRows = new Set() } = {}) {
@@ -113,4 +113,79 @@ test('THESE TESTS CAN ACTUALLY FAIL', async () => {
     async () => { await insertOddsRows(insertSpy(), 'm1', [entry('a')], () => {});
                   assert.strictEqual(1, 2); },
     /1 !== 2|Expected values/);
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// extractTotalsRows — half lines only, and why.
+//
+// bet id 5 returns TWENTY-ONE lines on a real Premier League fixture and we kept
+// one. The other twenty are three settlement classes: .5 settles win/loss, whole
+// lines PUSH (and `resultFromGoals` compares with strict > and <, so a push
+// records as a LOSS), quarter lines settle half-win/half-loss and
+// `value_signals_result_check` cannot store that at all. The predicate is the
+// gate that keeps the last two out until settlement can handle them.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ou = values => ({ name: 'Bet365', bets: [{ id: 5, name: 'Goals Over/Under', values }] });
+const pair = (line, o, u) => ([
+  { value: `Over ${line}`, odd: String(o) }, { value: `Under ${line}`, odd: String(u) },
+]);
+
+test('isHalfLine admits .5 and rejects whole and quarter lines', () => {
+  for (const l of [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5]) assert.ok(isHalfLine(l), `${l}`);
+  for (const l of [1, 2, 3, 4.0, 1.25, 1.75, 2.25, 2.75, 4.75]) assert.ok(!isHalfLine(l), `${l}`);
+  for (const l of [NaN, Infinity]) assert.ok(!isHalfLine(l));
+});
+
+test('emits one row per half line, sorted, both sides present', () => {
+  const rows = extractTotalsRows(ou([
+    ...pair(1.5, 1.40, 2.90), ...pair(2.5, 2.10, 1.72), ...pair(3.5, 4.00, 1.22),
+  ]));
+  assert.deepStrictEqual(rows.map(r => r.market_line), [1.5, 2.5, 3.5]);
+  assert.deepStrictEqual(rows.map(r => [r.home_odds, r.away_odds]),
+    [[1.40, 2.90], [2.10, 1.72], [4.00, 1.22]]);
+  assert.ok(rows.every(r => r.market === 'totals' && r.draw_odds === null));
+});
+
+test('whole and quarter lines are dropped even when both sides are quoted', () => {
+  const rows = extractTotalsRows(ou([
+    ...pair(2.0, 2.00, 1.80), ...pair(2.25, 1.95, 1.85),
+    ...pair(2.75, 2.40, 1.55), ...pair(2.5, 2.10, 1.72),
+  ]));
+  assert.deepStrictEqual(rows.map(r => r.market_line), [2.5]);
+});
+
+test('a one-legged line is not written', () => {
+  const rows = extractTotalsRows(ou([
+    { value: 'Over 3.5', odd: '4.00' },            // no Under 3.5
+    ...pair(2.5, 2.10, 1.72),
+  ]));
+  assert.deepStrictEqual(rows.map(r => r.market_line), [2.5]);
+});
+
+test('junk prices drop their line rather than half-writing it', () => {
+  const rows = extractTotalsRows(ou([
+    { value: 'Over 1.5', odd: '1.00' },            // <= 1
+    { value: 'Under 1.5', odd: '2.90' },
+    { value: 'Over 4.5', odd: '1200' },            // > 999
+    { value: 'Under 4.5', odd: '1.02' },
+    ...pair(2.5, 2.10, 1.72),
+  ]));
+  assert.deepStrictEqual(rows.map(r => r.market_line), [2.5]);
+});
+
+test('the full 21-line payload yields exactly the eight half lines', () => {
+  const all = [];
+  for (const l of [0.5, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25,
+                   3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0, 5.5, 6.5, 7.5]) {
+    all.push(...pair(l, 2.00, 1.80));
+  }
+  assert.deepStrictEqual(extractTotalsRows(ou(all)).map(r => r.market_line),
+    [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5]);
+});
+
+test('no bet 5 on the bookmaker → nothing', () => {
+  assert.deepStrictEqual(extractTotalsRows({ name: 'Bet365', bets: [{ id: 1, values: [] }] }), []);
+  assert.deepStrictEqual(extractTotalsRows({}), []);
 });
