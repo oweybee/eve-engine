@@ -23,7 +23,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { insertOddsRows, extractTotalsRows, isHalfLine } = require('./ingestOdds');
+const { insertOddsRows, extractTotalsRows, isHalfLine, chunk, IN_CHUNK } = require('./ingestOdds');
 
 /** A supabase double recording every insert call and its payload shape. */
 function insertSpy({ failBatch = false, failRows = new Set() } = {}) {
@@ -188,4 +188,34 @@ test('the full 21-line payload yields exactly the eight half lines', () => {
 test('no bet 5 on the bookmaker → nothing', () => {
   assert.deepStrictEqual(extractTotalsRows({ name: 'Bet365', bets: [{ id: 1, values: [] }] }), []);
   assert.deepStrictEqual(extractTotalsRows({}), []);
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// chunk — the `.in(...)` URL ceiling.
+//
+// 30 Sep 2026: the plan went from 13 fixtures to 419, prefetchLastOdds built a
+// ~16KB URL from 419 UUIDs, and 100 of 100 engine runs that day failed at the
+// ingest loop with the whole tail skipped. The repo had already recorded the
+// same failure once, at 32KB, in captureSnapshot.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('chunk splits at the limit and loses nothing', () => {
+  const xs = Array.from({ length: 419 }, (_, i) => i);
+  const cs = chunk(xs);
+  assert.strictEqual(cs.length, Math.ceil(419 / IN_CHUNK));
+  assert.ok(cs.every(c => c.length <= IN_CHUNK));
+  assert.deepStrictEqual(cs.flat(), xs);
+});
+
+test('chunk is a no-op below the limit, and empty stays empty', () => {
+  assert.deepStrictEqual(chunk([1, 2, 3]), [[1, 2, 3]]);
+  assert.deepStrictEqual(chunk([]), []);
+});
+
+test('a chunk of 36-char UUIDs stays well under 2KB of URL', () => {
+  const uuid = '3f2a9c71-4b8e-4d2f-9a6c-1e7b05d83c40';  // 36 chars, a real shape
+  const worst = chunk(Array.from({ length: 419 }, () => uuid))[0]
+    .map(encodeURIComponent).join(',').length;
+  assert.ok(worst < 2048, `${worst} bytes`);
 });

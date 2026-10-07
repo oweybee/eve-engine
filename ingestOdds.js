@@ -176,16 +176,47 @@ async function advancePlan(supabase, plan, polledIds = []) {
  * @param {string[]} externalIds
  * @returns {Promise<Map<string, string>>}
  */
+/**
+ * `.in(...)` goes into the URL, and the URL has a ceiling.
+ *
+ * PostgREST puts the whole list in the query string, so an `.in()` over N ids
+ * costs roughly N x (id length + 1) bytes of URL. This repo has already been
+ * bitten once: captureSnapshot built a ~32KB `.in(...)`, the request was
+ * rejected, and the step stayed green while odds_snapshots quietly stopped —
+ * the note is still above the loop in engine.yml.
+ *
+ * It was bitten a second time on 30 September 2026. Raising the horizon from 3
+ * days to 14 took the plan from 13 fixtures to 419, `prefetchLastOdds` built a
+ * ~16KB URL from 419 UUIDs, and **100 of 100 engine runs that day failed** at
+ * the ingest loop with the whole tail skipped. Nothing settled, no match
+ * details, no signals.
+ *
+ * Fifty keeps the worst case (36-char UUIDs) under 2KB, and the extra round
+ * trips are nothing beside a failed run. The horizon is correct; the prefetch
+ * has to survive it.
+ */
+const IN_CHUNK = 50;
+
+function chunk(xs, n = IN_CHUNK) {
+  const out = [];
+  for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));
+  return out;
+}
+
 async function prefetchMatchIds(supabase, externalIds) {
   if (!externalIds.length) return new Map();
-  const { data, error } = await supabase
-    .from('matches')
-    // `kickoff_at` rides along so the caller can drop fixtures that have already
-    // started — one extra column on a query we were making anyway.
-    .select('id, external_id, kickoff_at')
-    .in('external_id', externalIds);
-  if (error) throw new Error(`prefetchMatchIds: ${error.message}`);
-  return new Map((data ?? []).map(r => [r.external_id, { id: r.id, kickoffAt: r.kickoff_at }]));
+  const map = new Map();
+  for (const slice of chunk(externalIds)) {
+    const { data, error } = await supabase
+      .from('matches')
+      // `kickoff_at` rides along so the caller can drop fixtures that have
+      // already started — one extra column on a query we were making anyway.
+      .select('id, external_id, kickoff_at')
+      .in('external_id', slice);
+    if (error) throw new Error(`prefetchMatchIds: ${error.message}`);
+    for (const r of data ?? []) map.set(r.external_id, { id: r.id, kickoffAt: r.kickoff_at });
+  }
+  return map;
 }
 
 /**
@@ -206,20 +237,26 @@ async function prefetchLastOdds(supabase, matchIds) {
   if (!matchIds.length) return new Map();
 
   const since48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await supabase
-    .from('odds')
-    .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-    .in('match_id', matchIds)
-    .gte('fetched_at', since48h)
-    .order('fetched_at', { ascending: false });
-  if (error) throw new Error(`prefetchLastOdds: ${error.message}`);
 
-  // DESC order: first occurrence of each key is the most recent row.
-  // Key includes market_line so different lines of the same market don't collide.
+  // DESC order WITHIN each chunk: the first occurrence of a key is the most
+  // recent row for it. Keys never span chunks, because a chunk holds whole
+  // match ids, so chunking cannot split a key's history across two queries.
+  // Key includes market_line so different lines of the same market don't
+  // collide — which now matters a great deal more, since the totals extractor
+  // writes every half line rather than 2.5 alone.
   const map = new Map();
-  for (const row of data ?? []) {
-    const key = `${row.match_id}:${row.bookmaker}:${row.market}:${row.market_line ?? ''}`;
-    if (!map.has(key)) map.set(key, row);
+  for (const slice of chunk(matchIds)) {
+    const { data, error } = await supabase
+      .from('odds')
+      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
+      .in('match_id', slice)
+      .gte('fetched_at', since48h)
+      .order('fetched_at', { ascending: false });
+    if (error) throw new Error(`prefetchLastOdds: ${error.message}`);
+    for (const row of data ?? []) {
+      const key = `${row.match_id}:${row.bookmaker}:${row.market}:${row.market_line ?? ''}`;
+      if (!map.has(key)) map.set(key, row);
+    }
   }
   return map;
 }
@@ -900,4 +937,5 @@ module.exports = {
   ingest, extractH2hRows, extractTotalsRows, extractBttsRows, oddsHaveMoved,
   insertOddsRows,
   isHalfLine,
+  chunk, IN_CHUNK,
 };

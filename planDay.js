@@ -124,11 +124,44 @@ function httpGetOnce(path) {
   });
 }
 
+/**
+ * API-Football answers a quota, plan or ACCOUNT failure with HTTP **200**, an
+ * `errors` object, and an empty `response` array.
+ *
+ * That is not a theoretical shape. On 7 Oct 2026 this is what the account was
+ * actually returning, and had been since 1 October:
+ *
+ *   HTTP 200 {"errors":{"access":"Your account is suspended, check on …"}}
+ *
+ * `fetchFixturesForDate` reads `json.response ?? []`, so a suspended account and
+ * a day with no football were byte-for-byte the same event. calcPlan then took
+ * its zero-fixture branch, wrote a valid-looking EMPTY plan, and exited 0.
+ * ingestOdds read that plan, logged "rest day", and returned. Seven days of
+ * green CI runs over a dead feed, and the workflow summary could not tell the
+ * difference because there was no difference to see.
+ *
+ * So the errors field is checked HERE, once, on the only path every call takes.
+ * An error is fatal: nothing downstream may interpret an empty response again.
+ */
+function assertNoApiErrors(path, json) {
+  const errs = json?.errors;
+  const empty = errs == null
+    || (Array.isArray(errs) && errs.length === 0)
+    || (typeof errs === 'object' && Object.keys(errs).length === 0);
+  if (empty) return;
+  const err = new Error(`API-Football refused ${path}: ${JSON.stringify(errs)}`);
+  err.isApiError = true;
+  throw err;
+}
+
 async function httpGet(path, retries = 3, baseDelayMs = 60_000) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      return await httpGetOnce(path);
+      const json = await httpGetOnce(path);
+      assertNoApiErrors(path, json);
+      return json;
     } catch (err) {
+      if (err.isApiError) throw err;   // a refusal is not a transient failure
       if (err.is429 && attempt < retries) {
         const delay = baseDelayMs * attempt;
         console.warn(`[plan] 429 on attempt ${attempt}/${retries} — waiting ${delay / 1000}s before retry`);
@@ -466,9 +499,23 @@ async function main() {
       .select('date, fixture_ids, runs_planned, runs_completed')
       .eq('date', today)
       .single();
-    if (existing) {
-      console.log(`[planDay] plan for ${today} already exists (${existing.fixture_ids?.length ?? 0} fixtures, ${existing.runs_completed}/${existing.runs_planned} runs) — skipping`);
+    // AN EMPTY ROW IS NOT A PLAN, and treating it as one is what made the
+    // October outage self-locking. The empty row is written at 00:04 by the
+    // first engine tick after midnight; every later tick that day then found a
+    // row, skipped, and did nothing. Fixing the upstream cause mid-morning
+    // changed nothing until 00:04 the following day, because the placeholder
+    // was still sitting in the way.
+    //
+    // So the guard is "a plan with fixtures in it", not "a row". The original
+    // reason for the guard is unaffected: a real plan is still never re-fetched
+    // and `runs_completed` is still never reset to 0.
+    const existingCount = existing?.fixture_ids?.length ?? 0;
+    if (existing && existingCount > 0) {
+      console.log(`[planDay] plan for ${today} already exists (${existingCount} fixtures, ${existing.runs_completed}/${existing.runs_planned} runs) — skipping`);
       return;
+    }
+    if (existing) {
+      console.log(`[planDay] plan row for ${today} exists but holds NO fixtures — rebuilding over it`);
     }
   }
 
@@ -477,7 +524,14 @@ async function main() {
     fixtures = await fetchUpcomingFixtures(today);
     console.log(`[plan] ${fixtures.length} total fixture(s) across next ${DAYS_AHEAD} days`);
   } catch (err) {
+    // Exits BEFORE savePlan, so a refused day leaves whatever plan already
+    // exists untouched rather than stamping an empty one over it.
     console.error(`[plan] failed to fetch fixtures: ${err.message}`);
+    if (err.isApiError) {
+      console.error('[plan] this is an API-Football refusal, not an empty slate. ' +
+                    'Check the subscription at https://dashboard.api-football.com ' +
+                    'before looking anywhere else.');
+    }
     process.exit(1);
   }
 
@@ -522,4 +576,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { upsertMatches, upsertTeamRows, fetchFixturesForDate, calcPlan, TRACKED_LEAGUES };
+module.exports = { upsertMatches, upsertTeamRows, fetchFixturesForDate, calcPlan, assertNoApiErrors, TRACKED_LEAGUES };
