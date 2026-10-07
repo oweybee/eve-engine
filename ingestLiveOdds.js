@@ -71,19 +71,52 @@ async function fetchTrackedLiveMatches(supabase) {
   return map;
 }
 
+/**
+ * Picks the one value to use when the live feed quotes the same selection twice.
+ *
+ * API-Football sets `main: true` on the entry to consider when SEVERAL IDENTICAL
+ * values exist for one bet, and `false` on the others; where a value is unique
+ * `main` is `false` or `null`. Their own documented example quotes Asian
+ * Handicap Home at handicap -1 twice — 1.475 with `main: false` and 2.05 with
+ * `main: true`. Same selection, same line, a 39% different price.
+ *
+ * Taking the wrong one does not read as an error anywhere downstream. It reads
+ * as an edge, which is the worst way for a price bug to present in this engine.
+ *
+ * One candidate is the answer. Several with exactly one flagged `main` is the
+ * answer. Several with no single `main` is ambiguous, and this returns null
+ * rather than guess — the same refusal the totals line guard makes, for the same
+ * reason: a price we cannot identify is not a price.
+ *
+ * @param {Array<object>} candidates values already filtered to one selection
+ * @returns {object|null}
+ */
+function pickMain(candidates) {
+  if (candidates.length <= 1) return candidates[0] ?? null;
+  const main = candidates.filter(v => v?.main === true);
+  return main.length === 1 ? main[0] : null;
+}
+
 /** Extract the current 1X2 price from an /odds/live bookmaker/bet payload. */
 function extractLiveH2h(oddsBets) {
   // /odds/live response item shape: { fixture, odds: [ { id, name, values:[...] } ] }
   // Match-winner bet names vary ("Fulltime Result" / "Match Winner" / "1x2").
+  //
+  // MATCHED BY NAME, NEVER BY BET ID, and that is deliberate. Pre-match and
+  // in-play are separate id spaces — the API's own documentation says the ids
+  // "are not compatible" between the two endpoints, twice. Pre-match id 1 is
+  // Match Winner; in-play id 1 is Over/Under Extra Time. Pre-match 20 is Double
+  // Chance - First Half; in-play 20 is Match Corners. An id carried across the
+  // two feeds reads a different market and says nothing about it.
   const bet = (oddsBets ?? []).find(b =>
     /full ?time result|match winner|1x2|fulltime/i.test(b?.name ?? '')
   );
   if (!bet) return null;
 
   const pick = label => {
-    const v = (bet.values ?? []).find(x =>
+    const v = pickMain((bet.values ?? []).filter(x =>
       String(x.value ?? '').toLowerCase() === label && !x.suspended
-    );
+    ));
     const o = v ? parseFloat(v.odd) : NaN;
     return Number.isFinite(o) && o > 1 && o < 1000 ? o : null;
   };
@@ -112,7 +145,11 @@ function extractLiveTotals(oddsBets) {
   });
   if (!bet) return [];
 
-  const byLine = new Map();
+  // COLLECT EVERY CANDIDATE PER (direction, line) FIRST, then let pickMain
+  // choose. This loop used to assign straight into the result map, so where the
+  // feed quotes one line more than once it silently kept whichever entry
+  // happened to arrive last in the array instead of the one flagged `main`.
+  const candidates = new Map(); // `${line}:${dir}` -> values[]
   for (const v of bet.values ?? []) {
     if (v?.suspended) continue;
     const raw = String(v?.value ?? '');
@@ -125,10 +162,27 @@ function extractLiveTotals(oddsBets) {
       const d = raw.match(/over|under/i);
       if (!d) continue;
       dir = d[0].toLowerCase();
-      line = parseFloat(v?.handicap ?? v?.main ?? '');
+      // `handicap` carries the line when the value is a bare "Over"/"Under".
+      // This used to fall back to `v.main`, which is a BOOLEAN flag and never a
+      // line. parseFloat(true) is NaN so it was filtered out rather than
+      // mispriced, but it was two unrelated fields confused in one expression.
+      line = parseFloat(v?.handicap ?? '');
     }
+    if (!Number.isFinite(line)) continue;
+    const key = `${line}:${dir}`;
+    if (!candidates.has(key)) candidates.set(key, []);
+    candidates.get(key).push(v);
+  }
+
+  const byLine = new Map();
+  for (const [key, group] of candidates) {
+    const v = pickMain(group);
+    if (!v) continue;
     const odd = parseFloat(v?.odd);
-    if (!Number.isFinite(line) || !Number.isFinite(odd) || odd <= 1 || odd >= 1000) continue;
+    if (!Number.isFinite(odd) || odd <= 1 || odd >= 1000) continue;
+    const sep = key.lastIndexOf(':');
+    const line = parseFloat(key.slice(0, sep));
+    const dir = key.slice(sep + 1);
     let g = byLine.get(line);
     if (!g) { g = { over: null, under: null }; byLine.set(line, g); }
     if (dir === 'over') g.over = odd; else g.under = odd;
@@ -252,4 +306,4 @@ if (require.main === module) {
     .catch(err => { console.error('[live] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, extractLiveH2h, extractLiveTotals, fetchTrackedLiveMatches };
+module.exports = { run, pickMain, extractLiveH2h, extractLiveTotals, fetchTrackedLiveMatches };

@@ -335,6 +335,20 @@ test('skips suspended selections → null', () => {
 });
 test('no match-winner bet → null', () =>
   assert.strictEqual(extractLiveH2h([{ name: 'Corners', values: [] }]), null));
+test('duplicate selection: takes the value flagged main, not the first one', () => {
+  const bets = [{ name: 'Fulltime Result', values: [
+    { value: 'Home', odd: '1.45', main: false }, { value: 'Home', odd: '4.20', main: true },
+    { value: 'Draw', odd: '3.40' }, { value: 'Away', odd: '1.80' },
+  ] }];
+  assert.deepStrictEqual(extractLiveH2h(bets), { home: 4.2, draw: 3.4, away: 1.8 });
+});
+test('duplicate selection with no main flagged → null (refuses to guess)', () => {
+  const bets = [{ name: 'Fulltime Result', values: [
+    { value: 'Home', odd: '1.45' }, { value: 'Home', odd: '4.20' },
+    { value: 'Draw', odd: '3.40' }, { value: 'Away', odd: '1.80' },
+  ] }];
+  assert.strictEqual(extractLiveH2h(bets), null);
+});
 
 console.log('lib/elo');
 test('equal ratings: home favoured by home advantage', () =>

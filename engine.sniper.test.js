@@ -11,7 +11,7 @@ const assert = require('assert');
 const wp = require('./lib/inplayWinProb');
 const inplay = require('./lib/inplay');
 const { sniperCandidates, isHalftimeWindow } = require('./lib/secondHalfSniper');
-const { extractLiveTotals } = require('./ingestLiveOdds');
+const { extractLiveTotals, pickMain } = require('./ingestLiveOdds');
 
 let passed = 0, failed = 0;
 function test(label, fn) {
@@ -190,6 +190,61 @@ test('ignores corners/cards over-under markets', () => {
 test('no goals market → empty', () => {
   assert.strictEqual(extractLiveTotals([{ name: 'Match Winner', values: [] }]).length, 0);
 });
+
+// ── the `main` flag ──────────────────────────────────────────────────────────
+// API-Football quotes the same selection more than once on a live bet and marks
+// the one to use with `main: true`. Their own example has Asian Handicap Home at
+// handicap -1 twice, 1.475 (main false) and 2.05 (main true) — a 39% price gap
+// on one selection. This parser used to keep whichever arrived LAST, which does
+// not surface as an error downstream, it surfaces as an edge.
+console.log('extractLiveTotals (the main flag)');
+test('duplicate line: takes the value flagged main, not the last one', () => {
+  const out = extractLiveTotals([
+    { name: 'Over/Under Line', values: [
+      { value: 'Over',  handicap: '2.5', odd: '1.80', main: true  },
+      { value: 'Over',  handicap: '2.5', odd: '3.45', main: false },
+      { value: 'Under', handicap: '2.5', odd: '2.00', main: true  },
+      { value: 'Under', handicap: '2.5', odd: '1.10', main: false },
+    ] },
+  ]);
+  assert.deepStrictEqual(out, [{ line: 2.5, over: 1.80, under: 2.00 }]);
+});
+test('duplicate line with no main flagged → refuses rather than guesses', () => {
+  const out = extractLiveTotals([
+    { name: 'Over/Under', values: [
+      { value: 'Over 2.5', odd: '1.80' },
+      { value: 'Over 2.5', odd: '3.45' },
+      { value: 'Under 2.5', odd: '2.00' },
+    ] },
+  ]);
+  assert.deepStrictEqual(out, [{ line: 2.5, over: null, under: 2.00 }]);
+});
+test('a unique value is used whatever main says (false/null when unique)', () => {
+  const out = extractLiveTotals([
+    { name: 'Over/Under', values: [
+      { value: 'Over 2.5', odd: '2.10', main: false },
+      { value: 'Under 2.5', odd: '1.72', main: null },
+    ] },
+  ]);
+  assert.deepStrictEqual(out, [{ line: 2.5, over: 2.10, under: 1.72 }]);
+});
+test('handicap no longer falls back to the boolean main field', () => {
+  // value="Over" with no handicap and main:true must NOT become line 1.
+  assert.strictEqual(extractLiveTotals([
+    { name: 'Over/Under', values: [{ value: 'Over', odd: '1.90', main: true }] },
+  ]).length, 0);
+});
+
+console.log('pickMain');
+test('single candidate is returned as-is', () =>
+  assert.deepStrictEqual(pickMain([{ odd: '2.0' }]), { odd: '2.0' }));
+test('empty → null', () => assert.strictEqual(pickMain([]), null));
+test('several, one main → that one', () =>
+  assert.strictEqual(pickMain([{ odd: '1.4', main: false }, { odd: '2.0', main: true }]).odd, '2.0'));
+test('several, two mains → null (ambiguous)', () =>
+  assert.strictEqual(pickMain([{ main: true }, { main: true }]), null));
+test('several, none main → null (ambiguous)', () =>
+  assert.strictEqual(pickMain([{ odd: '1.4' }, { odd: '2.0' }]), null));
 
 // ── the in-play price ceiling (lib/inplay.INPLAY_MAX_ODDS) ───────────────────
 // Every pre-match signal path has an odds band and the three in-play stages had
