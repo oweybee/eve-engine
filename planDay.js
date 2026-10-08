@@ -218,6 +218,23 @@ async function fetchFixturesForDate(date, league) {
   return upcoming.map(f => ({ ...f, _league: league }));
 }
 
+/**
+ * ISO 3166-1 alpha-2, with the Home Nations on the provider's own sub-codes:
+ * England is `gb-eng` and not `gb`. Migration 132 holds the same table and
+ * says why the flag is the mark the board draws rather than the league badge.
+ * A country missing here gets no flag and falls back to the badge, which is
+ * the right outcome for World, Europe, International, South America and
+ * Africa — the five that are not countries.
+ */
+const FLAG_CODES = {
+  England: 'gb-eng', Scotland: 'gb-sct', Wales: 'gb-wls',
+  Spain: 'es', Italy: 'it', Germany: 'de', France: 'fr', Netherlands: 'nl',
+  Portugal: 'pt', Turkey: 'tr', Greece: 'gr', Belgium: 'be', Austria: 'at',
+  Switzerland: 'ch', Denmark: 'dk', Norway: 'no', Sweden: 'se', Finland: 'fi',
+  Poland: 'pl', Romania: 'ro', Russia: 'ru', Ireland: 'ie', USA: 'us',
+  Mexico: 'mx', Brazil: 'br', Argentina: 'ar', Japan: 'jp', China: 'cn',
+};
+
 // ---------------------------------------------------------------------------
 // Fetch fixtures across every tracked league for today + DAYS_AHEAD days
 // ---------------------------------------------------------------------------
@@ -412,6 +429,13 @@ async function upsertMatches(supabase, fixtures, { extraCols } = {}) {
       leagueRow.external_id = String(league.id);
       leagueRow.logo_url = `https://media.api-sports.io/football/leagues/${league.id}.png`;
     }
+    // THE FLAG IS WHAT THE BOARD DRAWS, and it is keyed on the COUNTRY rather
+    // than on the league id — so a competition this file has never ingested
+    // still gets one the moment its country is a country we have a code for.
+    // Absent for World / Europe / International, which are not countries, and
+    // those keep the competition badge above.
+    const flag = FLAG_CODES[league.country];
+    if (flag) leagueRow.flag_url = `https://media.api-sports.io/flags/${flag}.svg`;
     const { data, error } = await supabase
       .from('leagues')
       .upsert(leagueRow, { onConflict: 'name,country' })

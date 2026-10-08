@@ -1,4 +1,4 @@
--- 132 — a league wears its own badge
+-- 132 — a league wears its country's flag, and keeps its own badge behind it
 --
 -- NOT YET APPLIED.
 --
@@ -51,11 +51,14 @@ begin;
 
 alter table public.leagues add column if not exists external_id text;
 alter table public.leagues add column if not exists logo_url   text;
+alter table public.leagues add column if not exists flag_url   text;
 
 comment on column public.leagues.external_id is
   'API-Football league id. Not unique: legacy rows name the same competition.';
 comment on column public.leagues.logo_url is
   'Competition badge, https://media.api-sports.io/football/leagues/{external_id}.png';
+comment on column public.leagues.flag_url is
+  'The country flag the board draws. Null for the four rows whose country is not one.';
 
 -- The tracked set (lib/trackedLeagues.js), plus the eight legacy spellings.
 with pairs(api_id, name, country) as (
@@ -123,13 +126,57 @@ update public.leagues l
  where l.name = p.name
    and l.country = p.country;
 
+-- ── AND THE FLAG, WHICH IS WHAT THE BOARD ACTUALLY DRAWS ────────────────
+--
+-- Owner, 8 Oct: the country flag rather than the competition badge. It is the
+-- better mark at 22px. A league badge is a crest with lettering in it — UEFA
+-- CHAMPIONS LEAGUE around a ball, BUNDESLIGA in white on red — drawn to be
+-- read at poster size, and at the size of a group heading all forty are a
+-- smudge. A flag is three or four flat shapes and is legible at any size, and
+-- the question a reader is answering while scanning headings is which country
+-- they are looking at.
+--
+-- SAME DERIVED URL, A DIFFERENT PATH. `/flags/{code}.svg`, and the codes are
+-- ISO 3166-1 alpha-2 with the three Home Nations carrying the provider's own
+-- `gb-eng` / `gb-sct` / `gb-wls` sub-codes, because England and Scotland are
+-- not `gb`. All 27 below were requested on 8 Oct and all 27 returned 200.
+--
+-- NINE ROWS GET NO FLAG AND THAT IS NOT A GAP. Their country is World, Europe,
+-- International, South America or Africa, none of which is a country, and
+-- inventing a flag for a continent is inventing a fact. Those nine keep the
+-- competition badge above, which is the right mark for them anyway: the
+-- Champions League, the Euro and the Libertadores each have one that IS the
+-- competition rather than a league's wordmark. Three of the nine have a
+-- fixture inside a fortnight (the UEFA set, filed under World), so this
+-- fallback is load-bearing on an ordinary week and not a corner.
+--
+-- Flag, then badge, then the letters.
+update public.leagues set flag_url =
+  'https://media.api-sports.io/flags/' || c.code || '.svg'
+from (values
+  ('England','gb-eng'), ('Scotland','gb-sct'), ('Wales','gb-wls'),
+  ('Spain','es'),       ('Italy','it'),        ('Germany','de'),
+  ('France','fr'),      ('Netherlands','nl'),  ('Portugal','pt'),
+  ('Turkey','tr'),      ('Greece','gr'),       ('Belgium','be'),
+  ('Austria','at'),     ('Switzerland','ch'),  ('Denmark','dk'),
+  ('Norway','no'),      ('Sweden','se'),       ('Finland','fi'),
+  ('Poland','pl'),      ('Romania','ro'),      ('Russia','ru'),
+  ('Ireland','ie'),     ('USA','us'),          ('Mexico','mx'),
+  ('Brazil','br'),      ('Argentina','ar'),    ('Japan','jp'),
+  ('China','cn')
+) as c(country, code)
+where public.leagues.country = c.country;
+
 commit;
 
--- Acceptance. Expect 48 of 48 rows carrying a badge, and nothing in the second
--- query, which is the set of competitions with a fixture inside a fortnight and
--- no badge to draw beside it.
+-- Acceptance. Expect 48 rows with a badge and 39 with a flag — the nine
+-- without are the World / Europe / International / South America / Africa
+-- rows, which are the nine that keep the badge. The second query should return nothing: it is the
+-- set of competitions with a fixture inside a fortnight and no mark at all to
+-- draw beside them.
 --
 --   select count(*) filter (where logo_url is not null) as with_badge,
+--          count(*) filter (where flag_url is not null) as with_flag,
 --          count(*) as rows
 --     from public.leagues;
 --
@@ -137,4 +184,4 @@ commit;
 --     from public.matches m
 --     join public.leagues l on l.id = m.league_id
 --    where m.kickoff_at between now() and now() + interval '14 days'
---      and l.logo_url is null;
+--      and l.flag_url is null and l.logo_url is null;
