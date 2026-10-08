@@ -58,7 +58,7 @@ comment on column public.leagues.external_id is
 comment on column public.leagues.logo_url is
   'Competition badge, https://media.api-sports.io/football/leagues/{external_id}.png';
 comment on column public.leagues.flag_url is
-  'The country flag the board draws. Null for the four rows whose country is not one.';
+  'The country flag the board draws. Null for the nine rows whose country is not one.';
 
 -- The tracked set (lib/trackedLeagues.js), plus the eight legacy spellings.
 with pairs(api_id, name, country) as (
