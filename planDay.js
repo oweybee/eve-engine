@@ -400,9 +400,21 @@ async function upsertMatches(supabase, fixtures, { extraCols } = {}) {
     const league = f._league;
     if (!league) { untagged++; continue; }
     if (leagueIdByKey.has(leagueKey(league))) continue;
+    // Migration 132 gave `leagues` the same two columns `teams` has carried
+    // since 109. No name matching is needed for the competition half: the id
+    // IS the tracked-list entry, and the badge path is derived from it exactly
+    // as every crest URL already in `teams` is. Same rule as the team upsert
+    // below — only send a key when it has a value, because PostgREST builds
+    // `ON CONFLICT DO UPDATE SET` from the keys present and an explicit null
+    // would blank a good badge.
+    const leagueRow = { name: league.name, country: league.country };
+    if (league.id != null) {
+      leagueRow.external_id = String(league.id);
+      leagueRow.logo_url = `https://media.api-sports.io/football/leagues/${league.id}.png`;
+    }
     const { data, error } = await supabase
       .from('leagues')
-      .upsert({ name: league.name, country: league.country }, { onConflict: 'name,country' })
+      .upsert(leagueRow, { onConflict: 'name,country' })
       .select('id').single();
     if (error) { console.warn(`[plan] upsertLeague(${league.name}): ${error.message}`); continue; }
     leagueIdByKey.set(leagueKey(league), data.id);
