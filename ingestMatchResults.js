@@ -47,7 +47,21 @@
 const { httpGetText } = require('./lib/httpClient');
 const { getClient } = require('./lib/supabaseClient');
 
-const HOST = 'www.football-data.co.uk';
+/*
+ * THE APEX, NOT `www` (8 Oct 2026). football-data.co.uk moved and now 302s
+ * every file on the `www` host. `lib/httpClient` follows a redirect on GET as
+ * of the same day, so this would work either way; asking for the host that
+ * answers saves ten redirects a run and, more to the point, means the next
+ * move shows up in the log as a followed hop rather than as a silent cost.
+ *
+ * THE FAILURE IT ENDS. Every run from 3 Sep to 8 Oct failed on all ten
+ * divisions with `HTTP 302:` and an empty body, because 302 is not in
+ * RETRYABLE_STATUS_CODES — so the run exhausted nothing, retried nothing and
+ * reported a fetch failure that never said the word redirect. Five weeks of
+ * settled results never reached `match_results`, and the edge table on
+ * /leagues showed an empty 2026/27 the whole time.
+ */
+const HOST = 'football-data.co.uk';
 
 /**
  * The divisions this table holds, and the country each belongs to.
