@@ -39,8 +39,18 @@
 -- bound. A price nobody has quoted since this morning is not a price, and the
 -- card names a figure a reader is meant to be able to go and take.
 --
--- OWNER DECISION. This file is written and NOT APPLIED. It moves a line
--- between the free and paid product, which is not a migration's call to make.
+-- OWNER DECISION, TAKEN. Written and held back because it moves a line between
+-- the free and the paid product, which is not a migration's call to make.
+-- APPLIED 8 Oct 2026 on the owner's instruction. Verified as anon after: 3,211
+-- rows over 303 fixtures from this view, while `odds` itself still answers
+-- that seat with 1,385 rows. The derived figure is public and the table it
+-- comes from is exactly as gated as it was.
+--
+-- THE BOOK'S NAME DID NOT GO WITH IT. `lib/boardPrices` reads this view for
+-- the price and the count and makes a SECOND, best-effort read of `odds` for
+-- the name, writing it onto a cell only where that book is quoting the same
+-- number. So every seat sees a price; the name stays the paid half; and a card
+-- can never say 1.75 BetVictor while BetVictor is on 1.73.
 
 create or replace view public.v_best_prices as
 with fresh as (

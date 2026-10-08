@@ -1,6 +1,6 @@
 -- 132 — a league wears its country's flag, and keeps its own badge behind it
 --
--- NOT YET APPLIED.
+-- APPLIED 8 Oct 2026. 48 of 48 rows carry a badge, 39 of 48 a flag.
 --
 -- The fixtures board groups by competition and had nothing to draw for one but
 -- a three-letter code cut from the name: EPL, CHA, LAL, SEA, ERE. Every club on

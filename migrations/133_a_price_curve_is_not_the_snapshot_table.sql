@@ -1,7 +1,9 @@
 -- 133 — a price curve is not the snapshot table
 --
--- NOT YET APPLIED. Same shape, same argument and the same owner decision as
--- migration 130: this moves a line between the free and the paid product.
+-- APPLIED 8 Oct 2026, on the owner's instruction. Verified as anon after:
+-- 44,098 curve rows over 346 fixtures, while `odds_snapshots` itself still
+-- answers that seat with 5,127 rows. The derived figure is public; the table
+-- it comes from is exactly as gated as it was.
 --
 -- ── THE PROBLEM THIS ANSWERS ────────────────────────────────────────────
 --
