@@ -21,10 +21,19 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'signals | results | weekly | trends | movers'
+        description: 'signals | results | weekly | trends | movers | delete'
         type: choice
-        options: [signals, results, weekly, trends, movers]
+        options: [signals, results, weekly, trends, movers, delete]
         default: signals
+      delete_channel:
+        description: 'delete only: which webhook posted it'
+        type: choice
+        options: [hitrates, pulse, results, record, signals]
+        default: hitrates
+      delete_ids:
+        description: 'delete only: message ids, comma separated'
+        type: string
+        default: ''
       dry_run:
         description: 'Compose and print, send nothing'
         type: boolean
@@ -71,5 +80,7 @@ jobs:
           DISCORD_WEBHOOK_HITRATES:  ${{ secrets.DISCORD_WEBHOOK_HITRATES }}
           DISCORD_WEBHOOK_PULSE:     ${{ secrets.DISCORD_WEBHOOK_PULSE }}
           DISCORD_DAILY_CAP:         ${{ vars.DISCORD_DAILY_CAP }}
+          DELETE_CHANNEL:            ${{ inputs.delete_channel }}
+          DELETE_IDS:                ${{ inputs.delete_ids }}
           DRY_RUN:                   ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '' }}
         run: node postToDiscord.js ${{ steps.mode.outputs.m }}

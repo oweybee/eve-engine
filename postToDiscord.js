@@ -63,7 +63,7 @@ const { dedupeConflicts } = require('./lib/signalTier');
 const {
   signalPost, resultPost, weeklyRecordPost, threadName, ComposeRefusal,
 } = require('./lib/discordCompose');
-const { postWebhook, postWebhookFiles, channelEnabled } = require('./lib/discordClient');
+const { postWebhook, postWebhookFiles, deleteWebhookMessage, channelEnabled } = require('./lib/discordClient');
 const { trendsPost, trendSections, moversPost, moverRows } = require('./lib/discordDigest');
 const { trendsCard, moversCard } = require('./lib/discordCards');
 const { pageAll, inChunks } = require('./lib/pagedRead');
@@ -292,12 +292,32 @@ async function runMovers(supabase) {
     () => moversCard(moverRows(rows, fixtures)));
 }
 
+// ── Admin: delete posts the bot made (workflow_dispatch only) ────────────
+const WEBHOOK_FOR = {
+  signals: 'DISCORD_WEBHOOK_SIGNALS', results: 'DISCORD_WEBHOOK_RESULTS', record: 'DISCORD_WEBHOOK_RECORD',
+  hitrates: 'DISCORD_WEBHOOK_HITRATES', pulse: 'DISCORD_WEBHOOK_PULSE',
+};
+
+async function runDelete() {
+  const channel = process.env.DELETE_CHANNEL;
+  const ids = String(process.env.DELETE_IDS ?? '').split(/[\s,]+/).filter(Boolean);
+  const env = WEBHOOK_FOR[channel];
+  if (!env) throw new Error(`delete: unknown channel "${channel}"`);
+  if (!ids.length) throw new Error('delete: no message ids');
+  for (const id of ids) {
+    if (DRY_RUN) { console.log(`[postToDiscord] would delete ${channel} ${id}`); continue; }
+    console.log(`[postToDiscord] ${channel} ${id}: ${await deleteWebhookMessage(process.env[env], id)}`);
+  }
+  return { deleted: DRY_RUN ? 0 : ids.length };
+}
+
 async function run(mode = process.argv[2] ?? 'signals') {
   console.log(`\n[postToDiscord] ${new Date().toISOString()} mode=${mode}${DRY_RUN ? ' [DRY RUN]' : ''}`);
   if (!channelEnabled() && !DRY_RUN) {
     console.log('[postToDiscord] channel disabled (DISCORD_POSTING_ENABLED != 1)');
     return { posted: 0, reason: 'channel-disabled' };
   }
+  if (mode === 'delete') return runDelete();
   const supabase = getSupabase();
   if (mode === 'signals') return runSignals(supabase);
   if (mode === 'results') return runResults(supabase);
