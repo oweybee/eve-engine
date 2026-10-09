@@ -31,7 +31,7 @@ on:
         type: string
         default: ''
       edge_check:
-        description: 'edge only: print one club's full row in the log'
+        description: "edge only: print one club's full row in the log"
         type: string
         default: ''
       delete_channel:
