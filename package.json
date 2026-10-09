@@ -1,7 +1,7 @@
 {
   "name": "numbers-game-engine",
   "version": "1.0.0",
-  "description": "numbers_game \u2014 Value Detection Computation Engine",
+  "description": "numbers_game — Value Detection Computation Engine",
   "main": "computeValues.js",
   "scripts": {
     "start": "node computeValues.js",
@@ -20,7 +20,10 @@
     "post-to-discord:dry": "DRY_RUN=1 node postToDiscord.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.0.0"
+    "@fontsource/onest": "^5.1.1",
+    "@resvg/resvg-js": "^2.6.2",
+    "@supabase/supabase-js": "^2.0.0",
+    "satori": "^0.12.2"
   },
   "optionalDependencies": {
     "onnxruntime-node": "^1.27.0"

@@ -226,4 +226,14 @@ t('digests never read value_signals (they go to channels everyone can see)', () 
   assert(!digestIo.includes('value_signals'));
 });
 
-console.log(`\n${n} passed`);
+// Image cards: async, so they run after the sync checks.
+(async () => {
+  const { trendsCard, moversCard } = require('./lib/discordCards');
+  const { trendSections, moverRows } = require('./lib/discordDigest');
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const a = await trendsCard(trendSections([fx], hist));
+  assert(a.subarray(0, 4).equals(PNG) && a.length > 10000, 'trends card is a real PNG'); n++; console.log(`ok ${n} trends card renders`);
+  const b = await moversCard(moverRows(oddsRows, [fx]));
+  assert(b.subarray(0, 4).equals(PNG) && b.length > 10000, 'movers card is a real PNG'); n++; console.log(`ok ${n} movers card renders`);
+  console.log(`\n${n} passed`);
+})().catch(err => { console.error(err); process.exit(1); });

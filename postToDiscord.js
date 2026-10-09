@@ -63,8 +63,9 @@ const { dedupeConflicts } = require('./lib/signalTier');
 const {
   signalPost, resultPost, weeklyRecordPost, threadName, ComposeRefusal,
 } = require('./lib/discordCompose');
-const { postWebhook, channelEnabled } = require('./lib/discordClient');
-const { trendsPost, moversPost } = require('./lib/discordDigest');
+const { postWebhook, postWebhookFiles, channelEnabled } = require('./lib/discordClient');
+const { trendsPost, trendSections, moversPost, moverRows } = require('./lib/discordDigest');
+const { trendsCard, moversCard } = require('./lib/discordCards');
 const { pageAll, inChunks } = require('./lib/pagedRead');
 
 const DRY_RUN = process.env.DRY_RUN === '1';
@@ -229,11 +230,37 @@ async function upcomingFixtures(supabase) {
     .eq('status', 'scheduled'), 'id', 'upcomingFixtures');
 }
 
-async function postDigest(payload, webhook, label) {
+/** Alt text for the image: the text card's lines with the markdown stripped. */
+function altText(payload) {
+  return payload.embeds.map(e => `${e.title}: ${e.description}`).join(' | ')
+    .replace(/<t:\d+:t>/g, '').replace(/[`*]/g, '').replace(/\s+/g, ' ').slice(0, 1024);
+}
+
+/**
+ * Post a digest as an image card, falling back to the text card if drawing
+ * fails. The text card is always composed first: it carries the copy check
+ * (assertClean) and the alt text, so the image can never say something the
+ * text version was not allowed to. DISCORD_CARDS=0 forces text.
+ */
+async function postDigest(payload, webhook, label, drawCard) {
   if (!payload) { console.log(`[postToDiscord] ${label}: nothing cleared the bar, no post`); return { posted: 0 }; }
-  if (DRY_RUN) { console.log(JSON.stringify(payload, null, 2)); return { posted: 0 }; }
+  let png = null;
+  if (drawCard && process.env.DISCORD_CARDS !== '0') {
+    try { png = await drawCard(); }
+    catch (err) { console.warn(`[postToDiscord] ${label}: card render failed, posting text: ${err.message}`); }
+  }
+  if (DRY_RUN) {
+    console.log(JSON.stringify(payload, null, 2));
+    if (png) console.log(`[postToDiscord] ${label}: card rendered, ${png.length} bytes`);
+    return { posted: 0 };
+  }
   if (!webhook) { console.log(`[postToDiscord] ${label}: no webhook set, skipping`); return { posted: 0 }; }
-  await postWebhook(webhook, payload);
+  if (png) {
+    await postWebhookFiles(webhook, { content: payload.content, allowed_mentions: { parse: [] } },
+      [{ name: `${label}.png`, data: png, type: 'image/png', description: altText(payload) }]);
+  } else {
+    await postWebhook(webhook, payload);
+  }
   return { posted: 1 };
 }
 
@@ -247,7 +274,8 @@ async function runTrends(supabase) {
   const away = await inChunks(teams, 'id', 'trends away', c => done(supabase.from('matches').select(cols).in('away_team_id', c)));
   const history = [...new Map([...home, ...away].map(m => [m.id, m])).values()];
   console.log(`[postToDiscord] trends: ${fixtures.length} fixtures, ${history.length} past matches`);
-  return postDigest(trendsPost(fixtures, history), process.env.DISCORD_WEBHOOK_HITRATES, 'trends');
+  return postDigest(trendsPost(fixtures, history), process.env.DISCORD_WEBHOOK_HITRATES, 'trends',
+    () => trendsCard(trendSections(fixtures, history)));
 }
 
 async function runMovers(supabase) {
@@ -257,7 +285,8 @@ async function runMovers(supabase) {
     .select('id, match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
     .eq('market', 'h2h').in('match_id', c));
   console.log(`[postToDiscord] movers: ${fixtures.length} fixtures, ${rows.length} price rows`);
-  return postDigest(moversPost(rows, fixtures), process.env.DISCORD_WEBHOOK_PULSE, 'movers');
+  return postDigest(moversPost(rows, fixtures), process.env.DISCORD_WEBHOOK_PULSE, 'movers',
+    () => moversCard(moverRows(rows, fixtures)));
 }
 
 async function run(mode = process.argv[2] ?? 'signals') {
