@@ -160,6 +160,15 @@ t('form counts only the last 10 completed games and needs at least 8', () => {
   assert.strictEqual(formOf('H', hist.filter(m => Number(m.id.slice(1)) < 7)), null);
 });
 
+t('each team gets a 🟩/🟥 strip, oldest game first', () => {
+  const f = formOf('H', hist);
+  // newest 10 are i=0..9; misses at i=3 and i=7. Oldest first means i=9 first.
+  assert.deepStrictEqual(f.seq.over25, [9,8,7,6,5,4,3,2,1,0].map(i => i !== 3 && i !== 7));
+  const s = all(trendsPost([fx], hist));
+  assert(s.includes('🟩🟩🟥🟩🟩🟩🟥🟩🟩🟩'));
+  assert(!s.includes('⬜'));
+});
+
 t('each trend is its own card, footer on the last one only', () => {
   const p = trendsPost([fx], hist);
   assert(p.embeds.length >= 2);
