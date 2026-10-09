@@ -143,26 +143,27 @@ t('a blank env var falls back to the default rather than 0', () => {
 const { formOf, trendsPost, priceMoves, moversPost } = require('./lib/discordDigest');
 
 const day = i => new Date(Date.UTC(2026, 9, 1 - i, 15)).toISOString();
-// Team H: 8 games, 7 with 3+ goals and both scoring. Team A likewise.
+// Team H: 12 games. Of the newest 10, 8 had 3+ goals and both scoring; the
+// two oldest were 1-0s and must not count. Team A likewise.
 const hist = [];
-for (let i = 0; i < 8; i++) {
-  const big = i !== 3;
+for (let i = 0; i < 12; i++) {
+  const big = i !== 3 && i !== 7 && i < 10;
   hist.push({ id: `h${i}`, kickoff_at: day(i), home_team_id: 'H', away_team_id: `x${i}`, goals_home: big ? 2 : 1, goals_away: big ? 1 : 0 });
   hist.push({ id: `a${i}`, kickoff_at: day(i), home_team_id: `y${i}`, away_team_id: 'A', goals_home: big ? 2 : 0, goals_away: big ? 2 : 0 });
 }
 const fx = { id: 'F', kickoff_at: '2026-10-10T14:00:00Z', home_team_id: 'H', away_team_id: 'A',
   home_team: { name: 'Hull' }, away_team: { name: 'Leeds' } };
 
-t('form counts only the last 8 completed games and needs at least 6', () => {
+t('form counts only the last 10 completed games and needs at least 8', () => {
   const f = formOf('H', hist);
-  assert.strictEqual(f.n, 8); assert.strictEqual(f.over25, 7); assert.strictEqual(f.btts, 7);
-  assert.strictEqual(formOf('H', hist.slice(0, 6)), null);
+  assert.strictEqual(f.n, 10); assert.strictEqual(f.over25, 8); assert.strictEqual(f.btts, 8);
+  assert.strictEqual(formOf('H', hist.filter(m => Number(m.id.slice(1)) < 7)), null);
 });
 
 t('trends card shows counts out of games played, with no prices', () => {
   const p = trendsPost([fx], hist);
   const s = all(p);
-  assert(s.includes('7/8'));
+  assert(s.includes('8/10'));
   assert(s.includes('Hull v Leeds'));
   assert(!/\b\d\.\d\d\b/.test(s.replace(/<t:\d+:t>/g, '')), 'no decimal prices in a trends card');
   assert(s.includes('18+'));
