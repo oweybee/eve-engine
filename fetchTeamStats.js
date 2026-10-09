@@ -98,6 +98,9 @@ function parseFixtureResult(fx, teamId) {
 
   return {
     fixtureId:     fx?.fixture?.id,
+    /** THE KICK-OFF, CARRIED SO THE WINDOW CAN BE ORDERED BY IT. See
+     *  `fetchTeamWindow`: nothing here used to know when a fixture was. */
+    kickoff:       fx?.fixture?.date ?? null,
     result:        gf > ga ? 'W' : gf < ga ? 'L' : 'D',
     gf, ga,
     cleanSheet:    ga === 0,
@@ -139,7 +142,8 @@ const round2 = x => (x == null ? null : Math.round(x * 100) / 100);
 /**
  * Aggregate a team's last-N fixtures (+ their per-fixture stats) into a
  * team_statistics row.
- * @param {object[]} results  parseFixtureResult outputs (newest first)
+ * @param {object[]} results  parseFixtureResult outputs, OLDEST FIRST (see
+ *   `fetchTeamWindow` — this used to say "newest first" and nothing sorted it)
  * @param {object[]} fxStats  extractFixtureStats outputs, aligned to results
  */
 function aggregateTeamStats(results, fxStats) {
@@ -245,7 +249,35 @@ async function freshnessMap(supabase) {
 
 async function fetchTeamWindow(teamId) {
   const fxJson = await httpGet(`/fixtures?team=${teamId}&last=${LAST_N}`);
-  const fixtures = fxJson.response ?? [];
+  /**
+   * ── THE WINDOW IS ORDERED HERE, AND IT WAS NOT ORDERED AT ALL ───────────
+   *
+   * `form` is built by joining these results in array order, and the array was
+   * whatever `/fixtures?last=N` happened to return. Nothing sorted it, nothing
+   * checked it, and the string carried no date for anyone to check it against.
+   * Downstream, `MatchHero` reversed the string on the stated belief that the
+   * feed writes it oldest-first — a belief this file's own JSDoc contradicted,
+   * saying "newest first".
+   *
+   * Measured 9 Oct 2026: for Bradford, `team_statistics.form` and our own
+   * `matches` rows held THE SAME TEN RESULTS IN A DIFFERENT ORDER. The games
+   * were right; the sequence was not, so a reader saw a club's recent run
+   * shuffled.
+   *
+   * OLDEST FIRST, because that is how the board already draws a form run and
+   * how a league table reads. The direction is now a property of the data
+   * rather than an assumption each surface makes separately.
+   */
+  const fixtures = [...(fxJson.response ?? [])].sort((a, b) => {
+    const ta = Date.parse(a?.fixture?.date ?? '');
+    const tb = Date.parse(b?.fixture?.date ?? '');
+    // A fixture with no parseable date sorts last rather than poisoning the
+    // comparator: NaN comparisons are all false and leave the order undefined.
+    if (!Number.isFinite(ta) && !Number.isFinite(tb)) return 0;
+    if (!Number.isFinite(ta)) return 1;
+    if (!Number.isFinite(tb)) return -1;
+    return ta - tb;
+  });
 
   const results = [];
   const fxStats = [];
