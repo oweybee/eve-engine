@@ -1,0 +1,98 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — league tables
+#
+# Writes the governing body's own table per league-season into
+# `league_standings`. The competitions page draws it, the match page has a tab
+# for it, and the fixture card's "10th v 2nd" line reads one row of it.
+#
+# STORED, NEVER DERIVED. A table computed from `matches` in the browser cannot
+# know about points deductions, expunged records, play-off groupings or a
+# mid-season reorganisation, because none of those is a match — it would look
+# authoritative and disagree with the official table. See migration 134.
+#
+# TWICE A DAY, AND THAT IS A PROPERTY OF THE INPUT. A league table moves when a
+# match settles, so between matchdays it is the same table re-fetched. One run
+# after the overnight results sweep and one before the European evening
+# kickoffs is the same cadence, and for the same reason, as the ELO forecasts.
+#
+# ONE VENDOR CALL PER LEAGUE: 48 leagues, so ~48 requests a run against a daily
+# budget `fetchTeamStats` spends ~11 per team on. The cheapest surface here.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge League Tables
+
+on:
+  schedule:
+    # 05:40 UTC — after the overnight results sweep, so the day opens on a
+    # table that includes yesterday.
+    - cron: '40 5 * * *'
+    # 16:10 UTC — ahead of the European evening kickoffs, picking up any
+    # afternoon settlements.
+    - cron: '10 16 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Read and report the tally without writing'
+        type: boolean
+        default: false
+      season:
+        description: 'Season START year (2026 ⇒ 2026/27). Blank for the current one.'
+        type: string
+        default: ''
+
+concurrency:
+  group: standings-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  standings:
+    name: Write the league tables
+    runs-on: ubuntu-latest
+    # THE SCRIPT'S OWN BUDGET IS 100s AND STOPS ITSELF, so this is the outer
+    # bound and not the mechanism. A step that is killed prints no summary,
+    # which is indistinguishable from a quiet slate; see lib/watchdog.
+    timeout-minutes: 10
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Unit tests
+        # The parser's whole job is deciding which rows may be stored. Running
+        # its tests before it writes means a dropped guard cannot reach the
+        # table: a null rank coerced to 0 would have stored every such club at
+        # position 0, colliding on the primary key and printing "0th".
+        run: node engine.standings.test.js
+
+      - name: Fetch the tables
+        shell: bash
+        run: |
+          # pipefail is load-bearing: without it `tee` supplies the exit code
+          # and a failed run reports success, which is how a month of stale
+          # league tables would go unnoticed.
+          set -o pipefail
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          node fetchStandings.js \
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            ${{ inputs.season && format('--season {0}', inputs.season) || '' }} \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          status=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit $status
