@@ -2,7 +2,8 @@
 #
 # Discord is our own server, not a public timeline, so the cadence can follow
 # the board: signals every 15 minutes (into the Plus-only #signals forum,
-# no delay), results hourly, and the record card on Monday morning.
+# no delay), results hourly, the record card on Monday morning, a daily
+# trends card to #hit-rates and price movers to #market-pulse three times a day.
 #
 # THE SWITCH IS IN THE ENVIRONMENT. DISCORD_POSTING_ENABLED must be exactly '1'
 # or every mode does nothing, so the channel stops from the repo secrets.
@@ -15,12 +16,14 @@ on:
     - cron: '7,22,37,52 * * * *'   # signals
     - cron: '41 * * * *'           # results
     - cron: '13 8 * * 1'           # weekly record, Monday 08:13 UTC
+    - cron: '5 7 * * *'            # trends to #hit-rates, daily 07:05 UTC
+    - cron: '35 9,12,17 * * *'     # movers to #market-pulse, 3x daily
   workflow_dispatch:
     inputs:
       mode:
-        description: 'signals | results | weekly'
+        description: 'signals | results | weekly | trends | movers'
         type: choice
-        options: [signals, results, weekly]
+        options: [signals, results, weekly, trends, movers]
         default: signals
       dry_run:
         description: 'Compose and print, send nothing'
@@ -53,6 +56,8 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then echo "m=${{ inputs.mode }}" >> "$GITHUB_OUTPUT";
           elif [ "${{ github.event.schedule }}" = "41 * * * *" ]; then echo "m=results" >> "$GITHUB_OUTPUT";
           elif [ "${{ github.event.schedule }}" = "13 8 * * 1" ]; then echo "m=weekly" >> "$GITHUB_OUTPUT";
+          elif [ "${{ github.event.schedule }}" = "5 7 * * *" ]; then echo "m=trends" >> "$GITHUB_OUTPUT";
+          elif [ "${{ github.event.schedule }}" = "35 9,12,17 * * *" ]; then echo "m=movers" >> "$GITHUB_OUTPUT";
           else echo "m=signals" >> "$GITHUB_OUTPUT"; fi
 
       - name: Post
@@ -63,6 +68,8 @@ jobs:
           DISCORD_WEBHOOK_SIGNALS:   ${{ secrets.DISCORD_WEBHOOK_SIGNALS }}
           DISCORD_WEBHOOK_RESULTS:   ${{ secrets.DISCORD_WEBHOOK_RESULTS }}
           DISCORD_WEBHOOK_RECORD:    ${{ secrets.DISCORD_WEBHOOK_RECORD }}
+          DISCORD_WEBHOOK_HITRATES:  ${{ secrets.DISCORD_WEBHOOK_HITRATES }}
+          DISCORD_WEBHOOK_PULSE:     ${{ secrets.DISCORD_WEBHOOK_PULSE }}
           DISCORD_DAILY_CAP:         ${{ vars.DISCORD_DAILY_CAP }}
           DRY_RUN:                   ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '' }}
         run: node postToDiscord.js ${{ steps.mode.outputs.m }}

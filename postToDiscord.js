@@ -23,6 +23,11 @@
  *   node postToDiscord.js results   Every settled signal that went out, win or
  *                                   loss, to #results and back into its thread.
  *   node postToDiscord.js weekly    The record card from performance_band.
+ *   node postToDiscord.js trends    #hit-rates: goals form for the next 24h of
+ *                                   fixtures (settled scores only, no prices).
+ *   node postToDiscord.js movers    #market-pulse: biggest median 1X2 price
+ *                                   moves, open vs now. Never names a best
+ *                                   book, a fair price or a gap.
  *
  * ── LEDGER CHANNELS (posted_signals.channel) ────────────────────────────────
  *
@@ -43,6 +48,8 @@
  *   DISCORD_WEBHOOK_SIGNALS              #signals (a FORUM channel, Plus only)
  *   DISCORD_WEBHOOK_RESULTS              #results
  *   DISCORD_WEBHOOK_RECORD               #weekly-record
+ *   DISCORD_WEBHOOK_HITRATES             #hit-rates
+ *   DISCORD_WEBHOOK_PULSE                #market-pulse
  *   DISCORD_DAILY_CAP        default 12  signal posts per channel per UTC day
  *   DRY_RUN=1                            compose and print, never send or claim
  */
@@ -57,6 +64,8 @@ const {
   signalPost, resultPost, weeklyRecordPost, threadName, ComposeRefusal,
 } = require('./lib/discordCompose');
 const { postWebhook, channelEnabled } = require('./lib/discordClient');
+const { trendsPost, moversPost } = require('./lib/discordDigest');
+const { pageAll, inChunks } = require('./lib/pagedRead');
 
 const DRY_RUN = process.env.DRY_RUN === '1';
 // An unset GitHub `vars.X` arrives as an EMPTY STRING, and Number('') is 0:
@@ -206,6 +215,51 @@ async function runWeekly(supabase) {
   return { posted: 1 };
 }
 
+// ── Daily digests (lib/discordDigest). Settled scores and prices only. ────
+
+const FIXTURE_SELECT = `id, kickoff_at, home_team_id, away_team_id,
+  home_team:teams!matches_home_team_id_fkey ( name ),
+  away_team:teams!matches_away_team_id_fkey ( name )`;
+
+/** Pre-match fixtures kicking off in the next 24 hours. */
+async function upcomingFixtures(supabase) {
+  const now = new Date(), until = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  return pageAll(() => supabase.from('matches').select(FIXTURE_SELECT)
+    .gt('kickoff_at', now.toISOString()).lte('kickoff_at', until.toISOString())
+    .eq('status', 'scheduled'), 'id', 'upcomingFixtures');
+}
+
+async function postDigest(payload, webhook, label) {
+  if (!payload) { console.log(`[postToDiscord] ${label}: nothing cleared the bar, no post`); return { posted: 0 }; }
+  if (DRY_RUN) { console.log(JSON.stringify(payload, null, 2)); return { posted: 0 }; }
+  if (!webhook) { console.log(`[postToDiscord] ${label}: no webhook set, skipping`); return { posted: 0 }; }
+  await postWebhook(webhook, payload);
+  return { posted: 1 };
+}
+
+async function runTrends(supabase) {
+  const fixtures = await upcomingFixtures(supabase);
+  const teams = [...new Set(fixtures.flatMap(f => [f.home_team_id, f.away_team_id]))];
+  const since = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
+  const cols = 'id, kickoff_at, home_team_id, away_team_id, goals_home, goals_away';
+  const done = q => q.eq('status', 'completed').gte('kickoff_at', since).not('goals_home', 'is', null);
+  const home = await inChunks(teams, 'id', 'trends home', c => done(supabase.from('matches').select(cols).in('home_team_id', c)));
+  const away = await inChunks(teams, 'id', 'trends away', c => done(supabase.from('matches').select(cols).in('away_team_id', c)));
+  const history = [...new Map([...home, ...away].map(m => [m.id, m])).values()];
+  console.log(`[postToDiscord] trends: ${fixtures.length} fixtures, ${history.length} past matches`);
+  return postDigest(trendsPost(fixtures, history), process.env.DISCORD_WEBHOOK_HITRATES, 'trends');
+}
+
+async function runMovers(supabase) {
+  const fixtures = await upcomingFixtures(supabase);
+  const ids = fixtures.map(f => f.id);
+  const rows = await inChunks(ids, 'id', 'movers odds', c => supabase.from('odds')
+    .select('id, match_id, bookmaker, home_odds, draw_odds, away_odds, fetched_at')
+    .eq('market', 'h2h').in('match_id', c));
+  console.log(`[postToDiscord] movers: ${fixtures.length} fixtures, ${rows.length} price rows`);
+  return postDigest(moversPost(rows, fixtures), process.env.DISCORD_WEBHOOK_PULSE, 'movers');
+}
+
 async function run(mode = process.argv[2] ?? 'signals') {
   console.log(`\n[postToDiscord] ${new Date().toISOString()} mode=${mode}${DRY_RUN ? ' [DRY RUN]' : ''}`);
   if (!channelEnabled() && !DRY_RUN) {
@@ -216,6 +270,8 @@ async function run(mode = process.argv[2] ?? 'signals') {
   if (mode === 'signals') return runSignals(supabase);
   if (mode === 'results') return runResults(supabase);
   if (mode === 'weekly') return runWeekly(supabase);
+  if (mode === 'trends') return runTrends(supabase);
+  if (mode === 'movers') return runMovers(supabase);
   throw new Error(`unknown mode "${mode}"`);
 }
 
