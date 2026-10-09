@@ -20,7 +20,7 @@
  */
 'use strict';
 const assert = require('assert');
-const { parseStandings, groupLabelFor, withTeamIds, currentSeasonYear } = require('./fetchStandings');
+const { parseStandings, groupLabelFor, withTeamIds, currentSeasonYear, tablesIn } = require('./fetchStandings');
 
 let passed = 0;
 function test(n, f) {
@@ -56,6 +56,9 @@ test('reads one ladder into one row per club', () => {
   assert.strictEqual(out[0].goals_for, 21);
   assert.strictEqual(out[0].goals_against, 6);
   assert.strictEqual(out[0].form, 'WWDLW');
+  // THE EMPTY STRING, NOT NULL: the group is part of the primary key from
+  // migration 135 and a nullable column cannot carry one.
+  assert.strictEqual(out[0].group_label, '');
 });
 
 test('carries the vendor rank rather than re-deriving it from points', () => {
@@ -92,6 +95,25 @@ test('drops a row that has no rank, no id or no name, and keeps the rest', () =>
   assert.strictEqual(out[0].api_team_id, 42);
 });
 
+test('keeps one club twice when a competition puts it in two of its tables', () => {
+  // THE 9 OCT PRODUCTION FAILURE, as a test. Veikkausliiga sends a regular
+  // season and a championship round drawn from it, so the same club arrives
+  // twice in one league-season. Both rows are real — the championship-round
+  // position is the one a reader wants in October and the regular-season
+  // position is how the club got there — so both are kept, and migration 135
+  // put the group in the key so they can be.
+  const out = parseStandings(payload([
+    [row({ rank: 3, group: 'Regular Season', team: { id: 42, name: 'HJK' } })],
+    [row({ rank: 1, group: 'Championship Round', team: { id: 42, name: 'HJK' } })],
+  ], 'Veikkausliiga'));
+  assert.strictEqual(out.length, 2);
+  assert.strictEqual(out[0].api_team_id, 42);
+  assert.strictEqual(out[1].api_team_id, 42);
+  assert.deepStrictEqual(out.map((r) => r.group_label), ['Regular Season', 'Championship Round']);
+  // AND THE KEY SEPARATES THEM. Same league, season and club; different table.
+  assert.strictEqual(new Set(out.map((r) => r.group_label)).size, 2);
+});
+
 test('degrades a missing figure to zero rather than losing the club', () => {
   // A SIDE THAT HAS NOT PLAYED has no `all` block in some responses. It is
   // still in the table and still has a position, so it is still a row.
@@ -114,6 +136,9 @@ test('returns nothing at all for a response with no table in it', () => {
 console.log('\ngroupLabelFor');
 
 test('treats the competition’s own name as no group at all', () => {
+  // NULL HERE, '' AT THE WRITER. This function answers "is this a real group";
+  // the empty-string sentinel is the storage layer's business and the caller
+  // applies it, so the test for the question stays about the question.
   assert.strictEqual(groupLabelFor('Premier League', 'Premier League'), null);
   assert.strictEqual(groupLabelFor('  premier league  ', 'Premier League'), null);
 });
@@ -126,6 +151,14 @@ test('keeps a real group', () => {
 test('is null for an absent label', () => {
   assert.strictEqual(groupLabelFor(null, 'X'), null);
   assert.strictEqual(groupLabelFor('   ', 'X'), null);
+});
+
+console.log('\ntablesIn');
+
+test('counts the tables in a competition, not the rows', () => {
+  assert.strictEqual(tablesIn([{ group_label: '' }, { group_label: '' }]), 1);
+  assert.strictEqual(tablesIn([{ group_label: 'Group A' }, { group_label: 'Group B' }]), 2);
+  assert.strictEqual(tablesIn([]), 0);
 });
 
 console.log('\nwithTeamIds');
