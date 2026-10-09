@@ -137,7 +137,10 @@ function parseStandings(payload) {
         // vendor puts it there rather than on the array. Null where the group
         // is just the competition's own name, which is how a single-table
         // competition comes back: "Premier League" is not a group.
-        group_label: groupLabelFor(row?.group, league?.name),
+        // THE EMPTY STRING, NOT NULL, because the group is part of the
+        // primary key from migration 135 and a nullable column cannot carry
+        // one. `lib/standings` maps it back to null on the way out.
+        group_label: groupLabelFor(row?.group, league?.name) ?? '',
         position,
         played: intOr0(all.played),
         won: intOr0(all.win),
@@ -167,6 +170,30 @@ function groupLabelFor(group, leagueName) {
   if (!g) return null;
   if (leagueName && g.toLowerCase() === String(leagueName).trim().toLowerCase()) return null;
   return g;
+}
+
+/**
+ * ── THREE COMPETITIONS PUT ONE CLUB IN TWO OF THEIR OWN TABLES ───────────
+ *
+ * Found by the first production run, 9 Oct 2026. Veikkausliiga runs a regular
+ * season and then a championship round drawn from it; Liga Profesional
+ * Argentina has zone tables and an overall annual table; the World Cup has
+ * group tables and a wider qualifying one. All three sent the same club twice
+ * in one league-season and all three failed their insert on migration 134's
+ * key, which did not include the group — so all three stayed empty while the
+ * other 41 leagues wrote fine.
+ *
+ * Both tables are real and worth keeping: a Finnish club's championship-round
+ * position is the one a reader wants in October and its regular-season
+ * position is how it got there, so dropping either would be choosing which of
+ * the governing body's tables to believe.
+ *
+ * Migration 135 put the group in the key. This exists so the writer can SAY
+ * that is what is going on, and so a run reports it rather than looking like
+ * forty-one leagues was all there was.
+ */
+function tablesIn(rows) {
+  return new Set(rows.map((r) => r.group_label ?? '')).size;
 }
 
 function intOr0(v) {
@@ -290,7 +317,7 @@ async function main() {
       const toWrite = withTeamIds(rows, byExternalId).map((r) => ({
         ...r, league_id: league.id, season, updated_at: new Date().toISOString(),
       }));
-      const groups = new Set(toWrite.map((r) => r.group_label ?? ''));
+      const groups = tablesIn(toWrite);
 
       if (!DRY_RUN) {
         // ── DELETE THEN INSERT, PER LEAGUE-SEASON ───────────────────────
@@ -310,7 +337,7 @@ async function main() {
       }
 
       summary.leagues += 1;
-      summary.tables += groups.size;
+      summary.tables += groups;
       summary.rows += toWrite.length;
       summary.resolved += toWrite.filter((r) => r.team_id != null).length;
       await sleep(SLEEP_MS);
@@ -337,11 +364,11 @@ async function main() {
     const q = apiQuota.latestReading();
     if (q) console.log(`[standings] ${apiQuota.describeQuota(q)}`);
   } finally {
-    dog.end();
+    dog.finish();
   }
 }
 
-module.exports = { parseStandings, groupLabelFor, withTeamIds, currentSeasonYear };
+module.exports = { parseStandings, groupLabelFor, withTeamIds, currentSeasonYear, tablesIn };
 
 if (require.main === module) {
   // THE READING IS PERSISTED AT THE END OF THE RUN, as every other
