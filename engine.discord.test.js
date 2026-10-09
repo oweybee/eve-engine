@@ -160,6 +160,15 @@ t('form counts only the last 10 completed games and needs at least 8', () => {
   assert.strictEqual(formOf('H', hist.filter(m => Number(m.id.slice(1)) < 7)), null);
 });
 
+t('each team gets a 🟩/🟥 strip, oldest game first', () => {
+  const f = formOf('H', hist);
+  // newest 10 are i=0..9; misses at i=3 and i=7. Oldest first means i=9 first.
+  assert.deepStrictEqual(f.seq.over25, [9,8,7,6,5,4,3,2,1,0].map(i => i !== 3 && i !== 7));
+  const s = all(trendsPost([fx], hist));
+  assert(s.includes('🟩🟩🟥🟩🟩🟩🟥🟩🟩🟩'));
+  assert(!s.includes('⬜'));
+});
+
 t('each trend is its own card, footer on the last one only', () => {
   const p = trendsPost([fx], hist);
   assert(p.embeds.length >= 2);
@@ -217,4 +226,14 @@ t('digests never read value_signals (they go to channels everyone can see)', () 
   assert(!digestIo.includes('value_signals'));
 });
 
-console.log(`\n${n} passed`);
+// Image cards: async, so they run after the sync checks.
+(async () => {
+  const { trendsCard, moversCard } = require('./lib/discordCards');
+  const { trendSections, moverRows } = require('./lib/discordDigest');
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const a = await trendsCard(trendSections([fx], hist));
+  assert(a.subarray(0, 4).equals(PNG) && a.length > 10000, 'trends card is a real PNG'); n++; console.log(`ok ${n} trends card renders`);
+  const b = await moversCard(moverRows(oddsRows, [fx]));
+  assert(b.subarray(0, 4).equals(PNG) && b.length > 10000, 'movers card is a real PNG'); n++; console.log(`ok ${n} movers card renders`);
+  console.log(`\n${n} passed`);
+})().catch(err => { console.error(err); process.exit(1); });
