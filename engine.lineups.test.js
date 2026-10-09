@@ -81,7 +81,12 @@ test('soonest kickoff first — a missed XI is not late, it is gone', () => {
 // captureLineups, over a fake client
 // ---------------------------------------------------------------------------
 
-function fakeSupabase({ matches = [], held = [], onUpsert = () => {} } = {}) {
+function fakeSupabase({ matches = [], held = [], halfHeld = [], onUpsert = () => {} } = {}) {
+  // `held` = both sides confirmed; `halfHeld` = only one side confirmed.
+  const heldRows = [
+    ...held.flatMap(f => [{ fixture_id: f, team_id: 1 }, { fixture_id: f, team_id: 2 }]),
+    ...halfHeld.map(f => ({ fixture_id: f, team_id: 1 })),
+  ];
   return {
     from(table) {
       if (table === 'matches') {
@@ -91,7 +96,7 @@ function fakeSupabase({ matches = [], held = [], onUpsert = () => {} } = {}) {
       }
       if (table === 'lineups') {
         return {
-          select: () => ({ in: () => ({ eq: async () => ({ data: held.map(f => ({ fixture_id: f })), error: null }) }) }),
+          select: () => ({ in: () => ({ eq: async () => ({ data: heldRows, error: null }) }) }),
           upsert: async (row) => { onUpsert(row); return { error: null }; },
         };
       }
@@ -131,6 +136,15 @@ test('A CONFIRMED LINEUP IS NEVER RE-ASKED — that is what makes 5 minutes affo
   assert.equal(calls, 0, 'asked for an XI we already hold');
   assert.equal(c.held, 1);
   assert.equal(c.due, 0);
+});
+
+test('ONE SIDE CONFIRMED IS NOT HELD — the other XI is still asked for (Guingamp v Nancy, 9 Oct)', async () => {
+  let calls = 0;
+  const sb = fakeSupabase({ matches: [sched(30)], halfHeld: ['1'] });
+  const c = await captureLineups(sb, async () => { calls++; return [XI(1), XI(2)]; }, { pauseMs: 0 });
+  assert.equal(calls, 1, 'a half-captured fixture was treated as held');
+  assert.equal(c.held, 0);
+  assert.equal(c.due, 1);
 });
 
 test('one fixture erroring does not stop the rest of the slate', async () => {
