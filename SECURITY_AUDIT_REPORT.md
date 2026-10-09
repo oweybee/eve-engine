@@ -1,5 +1,57 @@
 # Security Audit Report — Database Schema, Migrations & Compute Layer
 
+## Automated re-audit — 2026-10-04 (supersedes the status table below where they conflict)
+
+**Scope:** `migrations/001–127`, live `MaxEdge Project` public schema (read-only catalog queries + Supabase security advisors), `computeValues.js`, `lib/supabaseClient.js`.
+Note: the task text names `engine/computeValues.js`; the file is `computeValues.js` at the repo root.
+
+### Result: 3 issues found (1 High, 1 Medium, 1 Low) — compute layer clean
+
+| # | Severity | Issue |
+|---|---|---|
+| A | **High** | **`performance_band` FIXED 9 Oct 2026** (migration 121). `price_freshness_policy` still open. `anon` and `authenticated` held **TRUNCATE** (plus INSERT/UPDATE/DELETE) on `public.performance_band` and `public.price_freshness_policy`. RLS does not govern TRUNCATE, so anyone with the public key can empty both public-read tables via a TRUNCATE-capable path. Migration 095's closing rule ("the client holds no write privilege anywhere in `public` outside bets/bankroll_transactions/preferences/user_bookmakers") does **not** hold in production. |
+| B | Medium | `authenticated` holds TRUNCATE/INSERT/UPDATE/DELETE on internal tables `engine_runs`, `league_refresh_scope`, `pipeline_heartbeat`, `refresh_tier_occupancy`. RLS (on, zero policies) blocks DML but not TRUNCATE. |
+| C | Low | Write grants on views (`performance_signals`, `performance_signals_pending`, `closing_lines_valid`, `closing_lines_independent_valid`, `signal_health_check`, `v_board_rows`, `v_league_base_rates`, `v_engine_reliability`, `v_refresh_queue`). Two (`performance_signals`, `v_league_base_rates`) are `SECURITY DEFINER` (advisor ERROR `security_definer_view`); an auto-updatable definer view would bypass RLS. Currently aggregate-shaped, so not known-exploitable, but fragile. |
+
+#### A — Location
+- `public.performance_band`: created in `migrations/103_performance_by_band.sql` (RLS enabled, policies `performance_band_anon_read` SELECT, `performance_band_service` ALL for service_role) — **no REVOKE** anywhere in the migration.
+- `public.price_freshness_policy`: exists in production with RLS + a public SELECT policy but **has no tracked migration at all** (`grep` over `migrations/` finds nothing) — schema drift; a replay would not create it, and nothing revokes its default grants.
+
+#### A/B/C — Remediation (new migration, e.g. `128_revoke_client_writes_and_truncate.sql`)
+```sql
+revoke insert, update, delete, truncate, references, trigger
+  on public.performance_band, public.price_freshness_policy,
+     public.engine_runs, public.league_refresh_scope,
+     public.pipeline_heartbeat, public.refresh_tier_occupancy
+  from anon, authenticated;
+
+-- views: client roles read only
+revoke insert, update, delete, truncate on
+  public.performance_signals, public.performance_signals_pending,
+  public.closing_lines_valid, public.closing_lines_independent_valid,
+  public.signal_health_check, public.v_board_rows, public.v_league_base_rates,
+  public.v_engine_reliability, public.v_refresh_queue
+  from anon, authenticated;
+
+alter view public.performance_signals set (security_invoker = true);   -- verify read path first
+alter view public.v_league_base_rates set (security_invoker = true);
+```
+Also: (1) commit a migration that creates `price_freshness_policy` (or document it as out-of-band); (2) set `alter default privileges in schema public revoke all on tables from anon, authenticated` so new tables stop being born writable; (3) extend 095's closing assertion to cover TRUNCATE and views, and run it in CI against a replayed schema.
+
+### Check 1 — RLS on new tables
+Every table created in `migrations/096–127` (`band_calibration`, `performance_band`, `inplay_momentum`) has `ENABLE ROW LEVEL SECURITY`. Live DB: **zero** public tables have RLS disabled. The static scan still flags 12 older tables (`recommendations`, `odds_snapshots`, `value_signals`, `performance_summary`, `engine_plan`, `posted_signals`, `team_statistics`, `referee_stats`, `team_elo`, `inplay_baseline`, `paper_models`, `mx_team_match`) with no tracked enable statement — production has RLS on for all (confirmed); this is the replay-only audit-trail gap already recorded as Finding 4 below. Recommend a single idempotent migration re-stating `enable row level security` for them.
+
+### Check 2 — `ML_ENSEMBLE` / `Dixon-Coles` rows
+These appear as `model_architecture` values (`ML_ENSEMBLE`, `DIXON_COLES`) in `model_calibration`, `value_signals`, `computed_values`. Live: `model_calibration`, `scoring_anchor`, `model_selection_anchor`, `value_signals`, `computed_values`, `matches`, `paper_models`, `posted_signals` all have RLS on and **no** INSERT/UPDATE/DELETE/TRUNCATE for `anon`/`authenticated`; public read preserved where intended (`model_calibration_read`, `scoring_anchor_read` = SELECT true). `model_selection_anchor` is intentionally fail-closed (no policy; advisor INFO). **Pass.**
+
+### Check 3 — `computeValues.js` client guard
+`getClient()` is required lazily inside `main()` (computeValues.js:868), and `lib/supabaseClient.js` throws a clear error on missing `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` at startup. The client is a stateless HTTP (PostgREST) client — there is no persistent connection to drop; a transient failure surfaces as a returned `{error}`, which each helper turns into a thrown error, caught by the `main().catch` handler that logs and exits 1 (the secondary-signal insert is additionally wrapped in try/catch, line 1028). Minor note: `updateBetOfDay` (lines 836–847) and the `team_statistics`/`referee_stats`/`team_elo` lookups (755–774) ignore `error`, so a transient failure silently yields empty/no-op results rather than a crash. Not a crash risk; consider checking `error` there. **Pass (no crash path).**
+
+### Other advisor items (informational)
+15 functions with mutable `search_path`; 15 `SECURITY DEFINER` functions executable by `anon` (incl. `preview_*_ids`, `model_record`, `model_detail`, `fixture_board`) — confirm each is intended public, otherwise revoke EXECUTE.
+
+---
+
 > **RE-VERIFIED AGAINST PRODUCTION, 27 Sep 2026.** Same standing rule as the
 > 24 Aug pass below: a migration is what someone intended, the live table is
 > what is true, so every claim in this update was checked against the
