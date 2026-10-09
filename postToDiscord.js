@@ -25,6 +25,8 @@
  *   node postToDiscord.js weekly    The record card from performance_band.
  *   node postToDiscord.js trends    #hit-rates: goals form for the next 24h of
  *                                   fixtures (settled scores only, no prices).
+ *   node postToDiscord.js edge      #edge-table: clubs against their own
+ *                                   closing prices this season (weekly).
  *   node postToDiscord.js movers    #market-pulse: biggest median 1X2 price
  *                                   moves, open vs now. Never names a best
  *                                   book, a fair price or a gap.
@@ -50,6 +52,7 @@
  *   DISCORD_WEBHOOK_RECORD               #weekly-record
  *   DISCORD_WEBHOOK_HITRATES             #hit-rates
  *   DISCORD_WEBHOOK_PULSE                #market-pulse
+ *   DISCORD_WEBHOOK_EDGE                 #edge-table
  *   DISCORD_DAILY_CAP        default 12  signal posts per channel per UTC day
  *   DRY_RUN=1                            compose and print, never send or claim
  */
@@ -64,8 +67,9 @@ const {
   signalPost, resultPost, weeklyRecordPost, threadName, ComposeRefusal,
 } = require('./lib/discordCompose');
 const { postWebhook, postWebhookFiles, deleteWebhookMessage, channelEnabled } = require('./lib/discordClient');
-const { trendsPost, trendSections, moversPost, moverRows } = require('./lib/discordDigest');
-const { trendsCard, moversCard } = require('./lib/discordCards');
+const { trendsPost, trendSections, moversPost, moverRows, edgePost, edgeFinding } = require('./lib/discordDigest');
+const { trendsCard, moversCard, edgeCard } = require('./lib/discordCards');
+const { edgeSummary, divisionLabel } = require('./lib/edgeTable');
 const { pageAll, inChunks } = require('./lib/pagedRead');
 
 const DRY_RUN = process.env.DRY_RUN === '1';
@@ -295,7 +299,7 @@ async function runMovers(supabase) {
 // ── Admin: delete posts the bot made (workflow_dispatch only) ────────────
 const WEBHOOK_FOR = {
   signals: 'DISCORD_WEBHOOK_SIGNALS', results: 'DISCORD_WEBHOOK_RESULTS', record: 'DISCORD_WEBHOOK_RECORD',
-  hitrates: 'DISCORD_WEBHOOK_HITRATES', pulse: 'DISCORD_WEBHOOK_PULSE',
+  hitrates: 'DISCORD_WEBHOOK_HITRATES', pulse: 'DISCORD_WEBHOOK_PULSE', edge: 'DISCORD_WEBHOOK_EDGE',
 };
 
 async function runDelete() {
@@ -311,6 +315,38 @@ async function runDelete() {
   return { deleted: DRY_RUN ? 0 : ids.length };
 }
 
+/**
+ * #edge-table, weekly: the current season's clubs against their own closing
+ * prices (settled_match_prices, migration 083). The season is the newest one
+ * settled_match_seasons lists, so a new season arrives without an edit;
+ * DISCORD_EDGE_SEASON overrides it (e.g. 2025/26 to check a finished season).
+ */
+async function runEdge(supabase) {
+  let season = process.env.DISCORD_EDGE_SEASON?.trim();
+  if (!season) {
+    const { data, error } = await supabase.from('settled_match_seasons').select('season');
+    if (error) throw new Error(`settled_match_seasons: ${error.message}`);
+    season = [...new Set((data ?? []).map(r => r.season))].sort().pop();
+  }
+  if (!season) { console.log('[postToDiscord] edge: no season on record, no post'); return { posted: 0 }; }
+  const rows = await pageAll(() => supabase.from('settled_match_prices')
+    .select('id, div, country, season, match_date, home_team, away_team, ftr, close_home, close_draw, close_away')
+    .eq('season', season), 'id', 'edge season');
+  const s = edgeSummary(rows);
+  console.log(`[postToDiscord] edge ${season}: ${rows.length} matches, ${s.unpriceable} unpriceable, ${s.ranked} clubs ranked, `
+    + `${s.clearNominal} past |z|>=2 (chance ~${s.expectedByChance.toFixed(1)}), bar ${s.bar?.toFixed(3) ?? 'n/a'} cleared by ${s.clearBar}`);
+  const check = process.env.DISCORD_EDGE_CHECK?.trim();
+  if (check) {
+    const { buildEdgeTable } = require('./lib/edgeTable');
+    for (const t of buildEdgeTable(rows).teams.filter(t => t.team === check)) {
+      console.log(`[postToDiscord] edge check ${t.team} ${t.div}: ${t.wins}-${t.draws}-${t.losses} `
+        + `units ${t.profitUnits.toFixed(2)} roi ${t.roiPercent.toFixed(1)}% edge ${t.edgePoints.toFixed(2)} z ${t.z?.toFixed(3)}`);
+    }
+  }
+  return postDigest(edgePost(s, season, divisionLabel), process.env.DISCORD_WEBHOOK_EDGE, 'edge',
+    () => edgeCard(s, { season, label: divisionLabel, finding: edgeFinding(s) }));
+}
+
 async function run(mode = process.argv[2] ?? 'signals') {
   console.log(`\n[postToDiscord] ${new Date().toISOString()} mode=${mode}${DRY_RUN ? ' [DRY RUN]' : ''}`);
   if (!channelEnabled() && !DRY_RUN) {
@@ -324,6 +360,7 @@ async function run(mode = process.argv[2] ?? 'signals') {
   if (mode === 'weekly') return runWeekly(supabase);
   if (mode === 'trends') return runTrends(supabase);
   if (mode === 'movers') return runMovers(supabase);
+  if (mode === 'edge') return runEdge(supabase);
   throw new Error(`unknown mode "${mode}"`);
 }
 

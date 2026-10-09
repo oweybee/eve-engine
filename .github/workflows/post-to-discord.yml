@@ -18,17 +18,26 @@ on:
     - cron: '13 8 * * 1'           # weekly record, Monday 08:13 UTC
     - cron: '5 7 * * *'            # trends to #hit-rates, daily 07:05 UTC
     - cron: '35 9,12,17 * * *'     # movers to #market-pulse, 3x daily
+    - cron: '27 8 * * 1'           # edge table to #edge-table, Monday 08:27 UTC
   workflow_dispatch:
     inputs:
       mode:
-        description: 'signals | results | weekly | trends | movers | delete'
+        description: 'signals | results | weekly | trends | movers | edge | delete'
         type: choice
-        options: [signals, results, weekly, trends, movers, delete]
+        options: [signals, results, weekly, trends, movers, edge, delete]
         default: signals
+      edge_season:
+        description: 'edge only: season to post, e.g. 2025/26 (blank = newest)'
+        type: string
+        default: ''
+      edge_check:
+        description: 'edge only: print one club's full row in the log'
+        type: string
+        default: ''
       delete_channel:
         description: 'delete only: which webhook posted it'
         type: choice
-        options: [hitrates, pulse, results, record, signals]
+        options: [hitrates, pulse, edge, results, record, signals]
         default: hitrates
       delete_ids:
         description: 'delete only: message ids, comma separated'
@@ -67,6 +76,7 @@ jobs:
           elif [ "${{ github.event.schedule }}" = "13 8 * * 1" ]; then echo "m=weekly" >> "$GITHUB_OUTPUT";
           elif [ "${{ github.event.schedule }}" = "5 7 * * *" ]; then echo "m=trends" >> "$GITHUB_OUTPUT";
           elif [ "${{ github.event.schedule }}" = "35 9,12,17 * * *" ]; then echo "m=movers" >> "$GITHUB_OUTPUT";
+          elif [ "${{ github.event.schedule }}" = "27 8 * * 1" ]; then echo "m=edge" >> "$GITHUB_OUTPUT";
           else echo "m=signals" >> "$GITHUB_OUTPUT"; fi
 
       - name: Post
@@ -79,6 +89,9 @@ jobs:
           DISCORD_WEBHOOK_RECORD:    ${{ secrets.DISCORD_WEBHOOK_RECORD }}
           DISCORD_WEBHOOK_HITRATES:  ${{ secrets.DISCORD_WEBHOOK_HITRATES }}
           DISCORD_WEBHOOK_PULSE:     ${{ secrets.DISCORD_WEBHOOK_PULSE }}
+          DISCORD_WEBHOOK_EDGE:      ${{ secrets.DISCORD_WEBHOOK_EDGE }}
+          DISCORD_EDGE_SEASON:       ${{ inputs.edge_season }}
+          DISCORD_EDGE_CHECK:        ${{ inputs.edge_check }}
           DISCORD_DAILY_CAP:         ${{ vars.DISCORD_DAILY_CAP }}
           DELETE_CHANNEL:            ${{ inputs.delete_channel }}
           DELETE_IDS:                ${{ inputs.delete_ids }}
