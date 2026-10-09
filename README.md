@@ -12,20 +12,25 @@ to run on your local machine.
 
 ## What runs
 
-`.github/workflows/run-engine.yml` runs on two triggers:
+`.github/workflows/engine.yml` is the live pipeline. It has **no GitHub
+`schedule:`**. Its clock is Supabase pg_cron job `trigger-engine-every-5min`,
+which calls the `trigger-engine` edge function
+(`supabase/functions/trigger-engine`) every 5 minutes; the function dispatches
+`engine.yml` on `main` and writes an `engine_runs` row that
+`reconcile_engine_runs()` later grades as produced / idle / silent.
 
 | Trigger | When |
 | --- | --- |
-| `schedule` | Every 10 minutes — `cron: '*/10 * * * *'` |
+| pg_cron -> `trigger-engine` -> `workflow_dispatch` | Every 5 minutes (pinned in `migrations/136`) |
 | `workflow_dispatch` | On demand, whenever you click **Run workflow** |
 
-Each run, on an `ubuntu-latest` runner with Node.js 22:
+A run takes 8 to 14 minutes and the concurrency group keeps one pending, so the
+engine runs back to back and about 4 in 10 dispatches end `cancelled` without
+starting. That is expected. Each run plans the day, loops ingest + compute +
+snapshot, then posts, settles, and fetches match details. See the header of
+`engine.yml` for the step list and time budget.
 
-1. Checks out the repo
-2. Installs dependencies (`npm install`)
-3. Runs `node ingestOdds.js` — fetches odds → Supabase
-4. Runs `node computeValues.js` — computes edges + records value signals
-5. Runs `node fetchResults.js` — settles results + refreshes performance summary
+The old `run-engine.yml` (disabled since 25 Jun 2026) was deleted on 9 Oct 2026.
 
 A **second** workflow, `.github/workflows/run-inplay.yml`, runs the in-play
 pipeline on a tighter cadence (`*/5`). See "In-play signals" below.
@@ -779,7 +784,7 @@ row still says `scheduled`, closing the leak at the source.
    - **ELO ladder** — `computeElo.js` walks completed `matches` chronologically
      with the trainer's exact rule (`lib/elo.js`: K=30 / home-adv 80 / default
      1500) and upserts `team_elo`. It runs after `fetchResults.js` in
-     `run-engine.yml`.
+     `engine.yml`.
    - **Feature builder** — `lib/halftimeFeatures.js` assembles the 32-feature
      vector in the exact training order (`supermodel_halftime_v2_features.json`)
      from `team_statistics` (form), `team_elo`, league OHE and live state.

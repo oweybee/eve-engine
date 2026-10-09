@@ -2,13 +2,15 @@
 # MaxEdge EVE Engine  —  live odds pipeline
 #
 # Budget: 75,000 API req/day
-#   96 jobs/day × up to 4 ingest loops × ~12 fixtures = ~4,608 req/day (6%)
+#   ~170 runs/day (pg_cron dispatch, back to back) x plan-gated ingest.
+#   API-Football spend follows engine_plan, not the run count.
 #   Odds refresh every ~55 seconds across the loop window.
 #
 # CADENCE RULE, learned the hard way on 6 Aug 2026:
-#   bounded loop (≤420s)  <  timeout-minutes (12)  <  cron interval (15 min)
+#   bounded loop + tail  <  timeout-minutes (15)
 # Break that ordering and runs are killed mid-flight, which shows up as
 # 'cancelled' and writes nothing — indistinguishable from a quiet slate.
+# The start cadence is NOT set in this file: see the note on `on:` below.
 #
 # Pipeline per job:
 #   (Betfair secondary markets — corners/cards/O-U/BTTS — are ingested from a UK
@@ -28,83 +30,38 @@
 name: MaxEdge EVE Engine
 
 on:
-  schedule:
-    # EVERY 15 MINUTES, AND THE INTERVAL MUST EXCEED THE JOB DURATION.
-    #
-    # This was '*/5' against a job that measured 616s (10m16s) — twice its own
-    # window. Eight of the last eight runs before this change ended
-    # 'cancelled' and the board went stale for an hour at a time.
-    #
-    # The proximate killer was `timeout-minutes: 10`, not the concurrency
-    # group: the runs died between 610s and 633s, mid fetchMatchDetails, which
-    # is the timeout to the second. That distinction is worth keeping, because
-    # 'cancelled' in the run list looks like queue pressure and sends you to
-    # the wrong knob. The queue was a real second-order problem — a job longer
-    # than its interval guarantees a backlog, and only one run may sit pending
-    # per group — but fixing the schedule alone would not have saved a single
-    # run.
-    #
-    # So all three now agree: bounded loop < timeout < cron interval. A
-    # 5-minute schedule that never completes is slower than a 15-minute one
-    # that does.
-    #
-    # The budget, measured on run 31102483691:
-    #   setup (checkout, node, npm, planDay)     12s
-    #   live odds loop            now bounded  ≤300s (+72s overshoot, see below)
-    #   tail (api, board, integrity, settle…)    16s
-    #   fetch match details       now capped   ≤120s
-    #   team stats + referees     now capped   ≤120s
-    #   ────────────────────────────────────────────
-    #   worst case                             ~640s  (10m40s)
-    #   typical (measured 31104035153)         ~506s  (8m26s)
-    #
-    # The loop budget is checked BETWEEN iterations, so it can overshoot by one
-    # iteration's work (~72s) — it cannot stop mid-compute. The two tail caps
-    # are real step timeouts and cannot overshoot.
-    #
-    # An earlier version of this budget was wrong because it was measured on a
-    # run whose tail had been SKIPPED after the loop failed, which made the
-    # tail look like ~92s when fetchTeamStats alone can run 349s+. Measure the
-    # budget on a run that actually finished.
-    #
-    # Against timeout-minutes: 12 and a 15-minute window, that is slack at both
-    # ends. If the loop budget or the tail grows, RAISE THE TIMEOUT AND WIDEN
-    # THE CRON TOGETHER — the failure is silent either way, because a killed
-    # run writes nothing and looks identical to a quiet slate.
-    #
-    # Cadence is not really set here anyway: ingestOdds.js self-gates against
-    # engine_plan.next_run_at, so it pulls when it is due regardless of how
-    # often the workflow starts. The loop exists to poll across the window.
-    # EVERY 20 MINUTES. It was every 15, and three separate measurements say
-    # that was too tight:
-    #
-    #   1. THE JOB DOES NOT FIT. Typical 9m08s, worst measured 12m13s — the
-    #      07:22 run on 22 Aug was CANCELLED at the 12-minute timeout with
-    #      fetchMatchDetails unfinished. Three minutes of slack against a job
-    #      whose own worst case exceeds it is not slack.
-    #   2. GITHUB WAS NOT DELIVERING IT ANYWAY. Measured over the six hours
-    #      before the outage the runs landed at 21:01, 20:33, 19:57, 19:31,
-    #      18:56, 18:03 — a real cadence of ~30 minutes, because a high
-    #      frequency cron is the first thing dropped under load. A schedule
-    #      that is throttled to half its stated rate is a schedule nobody can
-    #      reason about.
-    #   3. IT DOUBLED THE ODDS API SPEND. Every tick invokes ingestOddsApi, so
-    #      the run count IS a credit multiplier. See lib/oddsApiBudget's daily
-    #      ledger for why the real fix is a ceiling and not a cadence — but 96
-    #      ticks a day was the number that made a per-run cap catastrophic.
-    #
-    # So all three agree again, with margin: bounded loop 7min < timeout 15min
-    # < interval 20min. Board freshness IMPROVES on the ~30 minutes that was
-    # actually being delivered.
-    #
-    # AND EDITING THIS BLOCK IS WHAT RE-REGISTERS THE SCHEDULE. engine.yml did
-    # not fire for ten hours because an expression error made the file
-    # unparseable, and it still had not fired 35 minutes after the fix while
-    # every other workflow in the repo ran on time. A change to `on.schedule`
-    # on the default branch is the documented way to make GitHub pick a
-    # schedule back up.
-    - cron: '*/20 * * * *'
-
+  # NO `schedule:` HERE, ON PURPOSE. THE CLOCK IS pg_cron.
+  #
+  # Supabase pg_cron job `trigger-engine-every-5min` POSTs to the
+  # `trigger-engine` edge function every 5 minutes, and that function
+  # dispatches this workflow on main (source: supabase/functions/trigger-engine,
+  # schedule pinned in migrations/136). It has been the real clock since late
+  # June, and it lived only in the database, which is why the 7 Oct
+  # state-of-play went looking for "something outside both repos".
+  #
+  # The `*/20` that used to sit here was not doing anything. Measured 12:00 to
+  # 16:50 on 9 Oct: 59 runs of this workflow, 58 of them workflow_dispatch and
+  # ONE schedule, which was displaced before it started. A high-frequency
+  # GitHub cron is the first thing dropped under load (see the 22 Aug
+  # measurement in git history: a stated */15 delivered every ~30 min), and
+  # pg_cron does not get dropped.
+  #
+  # WHAT 5-MINUTE DISPATCH MEANS FOR A 8 TO 14 MINUTE JOB. The concurrency group
+  # below serialises runs and keeps at most one pending. So the engine runs
+  # back to back, roughly 7 completed runs an hour, and about 4 in 10
+  # dispatches are displaced while pending and end as `cancelled` having never
+  # started. Those cancellations are EXPECTED and cost nothing. A cancelled run
+  # that STARTED (non-zero duration) is the real signal; the report step below
+  # handles that case.
+  #
+  # Why that is safe on cost: ingestOdds.js self-gates on
+  # engine_plan.next_run_at (API-Football is polled when the plan says so, not
+  # when a run starts), and ingestOddsApi.js is held by the daily credit
+  # ceiling in lib/oddsApiBudget.js. The repo is public, so Actions minutes
+  # are free.
+  #
+  # To change the cadence, change the pg_cron job (new migration), not this
+  # file. Adding a `schedule:` back gives the engine two clocks again.
   workflow_dispatch:
     inputs:
       skip_ingest:
