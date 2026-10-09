@@ -61,19 +61,44 @@ test('bands at 10 / 23 / 41 / 60 — and 60 is CHOSEN, not derived', () => {
   assert.strictEqual(BAND_MIN.STRONG, undefined);
 });
 
-test('the box picks the rung and the score can only demote', () => {
-  // A perfect score outside the box buys nothing.
+test('the box picks the rung ALONE, and the score cannot touch it', () => {
+  // A perfect score outside the box still buys nothing.
   assert.strictEqual(rungFor({ odds: 2.00, edge: 0.049, mxs: 99 }), 'WATCH');
   assert.strictEqual(rungFor({ odds: 2.00, edge: 0.15,  mxs: 99 }), 'WATCH');
   assert.strictEqual(rungFor({ odds: 3.50, edge: 0.06,  mxs: 99 }), 'WATCH');
-  // A 7-9.9% row is never PRIME, however it scores.
+  // A 7-9.9% row is EDGE and never PRIME, however it scores.
   assert.strictEqual(rungFor({ odds: 2.00, edge: 0.08, mxs: 99 }), 'EDGE');
-  // Demotion inside the PRIME box.
+
+  /* ── THE DEMOTION IS GONE (owner, 9 Oct 2026) ────────────────────────────
+     Inside the box, 167 settled bets split by the band the score assigned
+     them: demoted-to-WATCH +26.66% (t 1.79), never-scored +22.51% (t 1.56),
+     promoted-to-PRIME +17.52% (t 1.00). The score was ordering the box
+     backwards, so it no longer gets a vote on a backed rung. */
   assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 60 }), 'PRIME');
-  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 59 }), 'EDGE');
-  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 40 }), 'SLIGHT');
-  // No score is not a low score.
-  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: null }), null);
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 59 }), 'PRIME', 'no demotion at the 60 line');
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 41 }), 'PRIME', 'nor anywhere above the floor');
+  /* THE FLOOR AT THE WATCH LINE SURVIVES. It has fired once in 169 in-box rows
+     ever, so it costs nothing, and it is the guard that keeps a pathological
+     row out of the broadcast channel. */
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 40 }), 'SLIGHT', 'below the floor');
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 0 }),  'NIL');
+
+  /* AND A BACKED RUNG NO LONGER NEEDS A SCORE AT ALL. 52% of signals have
+     none — the de-vig guard refuses a best-price vector with no margin — and
+     the box reads price and edge, both of which are on the row. */
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: null, calibrated: true }), 'PRIME');
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.08, mxs: undefined, calibrated: true }), 'EDGE');
+  /* ...BUT ONLY WHERE THE ARCHITECTURE HAS AN ERROR BAR AT ALL. `calibrated`
+     defaults to false, which is what keeps in-play — 871 signals from a model
+     with no row in model_calibration — out of the backed rungs entirely. */
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: null }), null, 'uncalibrated');
+
+  // BELOW the box the score is still the only gradient there is, and no score
+  // there is still null: "could not score" and "scored and found nothing" are
+  // different statements.
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.04, mxs: null }), null);
+  assert.strictEqual(rungFor({ odds: 6.00, edge: 0.15, mxs: null }), null);
+
   // The cap that text-sorting gets wrong: 'PRIME' < 'WATCH' alphabetically.
   assert.strictEqual(capAtWatch('PRIME'), 'WATCH');
   assert.strictEqual(capAtWatch('SLIGHT'), 'SLIGHT');
@@ -110,11 +135,16 @@ test('isBacked takes a ROW now, and a bare score is silently false', () => {
   assert.strictEqual(isBacked(60), false);
 
   assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: 60 }), true,  'PRIME');
-  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: 41 }), true,  'demoted to EDGE');
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: 41 }), true,  'still PRIME, no demotion');
   assert.strictEqual(isBacked({ odds: 2.00, edge: 0.08, mxs: 41 }), true,  'EDGE band');
-  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: 40 }), false, 'below WATCH');
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: 40 }), false, 'below the WATCH floor');
   assert.strictEqual(isBacked({ odds: 2.00, edge: 0.04, mxs: 99 }), false, 'outside the box');
-  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: null }), false, 'unscored');
+  // UNSCORED IS BACKED NOW, and that is the point: these rows returned +22.51%
+  // over 55 settled bets and were unbroadcastable for want of a number the box
+  // never needed.
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: null, calibrated: true }), true, 'unscored, in box');
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.04, mxs: null, calibrated: true }), false, 'unscored, out of box');
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: null }), false, 'unscored, uncalibrated');
 });
 
 test('an unscorable row is null, never the bottom rung', () => {
@@ -136,7 +166,10 @@ test('two rungs are backed now, and only those two', () => {
       : false,
       shouldBack, `${rung}`);
   }
-  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: null }), false);
+  // AN UNSCORED IN-BOX ROW IS BACKED since 9 Oct 2026. The box reads price and
+  // edge; the score it lacks was never one of its inputs.
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: null }), false, 'no error bar, no backing');
+  assert.strictEqual(isBacked({ odds: 2.00, edge: 0.06, mxs: null, calibrated: true }), true);
 });
 
 /* ── The eligibility ladder, unchanged ─────────────────────────────────── */

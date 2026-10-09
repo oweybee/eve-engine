@@ -198,7 +198,7 @@ test('writes the band beside the score, from the score', () => {
   assert.strictEqual(trap.mxs_band, bandFor(trap.mxs));
   assert.strictEqual(isBacked({ odds: 2.0, edge: 0.20, mxs: trap.mxs }), false);
   assert.ok(trap.mxs_raw >= 60, 'the raw disagreement is still a big one');
-  assert.strictEqual(trap.mes_basis, 'yield_calibrated');
+  assert.strictEqual(trap.mes_basis, 'box_rung_v1');
 });
 
 test('an unmeasured architecture yields nulls, and does NOT lose the row', () => {
@@ -226,9 +226,12 @@ test('the columns it emits are 048’s, plus 039’s two, 058’s gap_basis and 
   // makes it one: migration 090 has to land BEFORE the engine deploys, or every
   // insert fails on three unknown columns. A test that only checked the score
   // would go green on a schema that cannot accept the row.
+  // `rung` JOINED THE CONTRACT on 9 Oct 2026 (migration 134). Same rule, same
+  // consequence: the column has to exist before the engine deploys or every
+  // insert fails on an unknown column.
   assert.deepStrictEqual(Object.keys(scoreSignal(row())).sort(),
     ['gap_basis', 'market_prob', 'mes_basis', 'mes_efficiency', 'model_prob',
-     'model_sigma', 'mxs', 'mxs_band', 'mxs_raw', 'prob_gap']);
+     'model_sigma', 'mxs', 'mxs_band', 'mxs_raw', 'prob_gap', 'rung']);
 });
 
 /* ── The write paths actually emit it ──────────────────────────────────── */
@@ -365,7 +368,7 @@ test('NOTHING OUTSIDE THE PRIME BOX CAN BE PRIME — and it is the BOX that says
     assert.strictEqual(c1.rows[0].mxs, 73);
     assert.strictEqual(c1.rows[0].mxs_raw, 86, 'the raw score did not move');
     assert.strictEqual(c1.rows[0].mes_efficiency, 0.85);
-    assert.strictEqual(c1.rows[0].mes_basis, 'yield_calibrated');
+    assert.strictEqual(c1.rows[0].mes_basis, 'box_rung_v1');
     assert.strictEqual(c1.rows[0].mxs_band, bandFor(c1.rows[0].mxs));
     // Both ladders on one row, and they are allowed to differ. The eligibility
     // bucket is LOWER CASE — it is a key, not the badge word the conviction
