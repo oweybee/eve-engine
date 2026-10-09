@@ -160,6 +160,13 @@ t('form counts only the last 10 completed games and needs at least 8', () => {
   assert.strictEqual(formOf('H', hist.filter(m => Number(m.id.slice(1)) < 7)), null);
 });
 
+t('each trend is its own card, footer on the last one only', () => {
+  const p = trendsPost([fx], hist);
+  assert(p.embeds.length >= 2);
+  assert(p.embeds.slice(0, -1).every(e => !e.footer));
+  assert(p.embeds.at(-1).footer.text.includes('18+'));
+});
+
 t('trends card shows counts out of games played, with no prices', () => {
   const p = trendsPost([fx], hist);
   const s = all(p);
@@ -195,8 +202,9 @@ t('fewer than 3 books is not a market move', () => {
 });
 
 t('movers card never names a book, a fair price or a gap', () => {
-  const e = moversPost(oddsRows, [fx]).embeds[0];
-  const s = [e.title, e.description, ...e.fields.flatMap(f => [f.name, f.value])].join(' ').toLowerCase();
+  const p = moversPost(oddsRows, [fx]);
+  const s = [p.content, ...p.embeds.flatMap(e => [e.title, e.description, e.footer?.text])].join(' ').toLowerCase();
+  assert(s.includes('2.95 → 3.55'));  // the away drift is this fixture's biggest move
   assert(s.includes('leeds') || s.includes('hull'));
   for (const w of ['fair', 'gap', 'value', 'b1', 'b2', 'b3', 'edge', 'prime']) assert(!s.includes(w), `movers card mentions "${w}"`);
 });
