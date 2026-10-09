@@ -14,16 +14,19 @@
  *
  * ── THREE MODES ─────────────────────────────────────────────────────────────
  *
- *   node postToDiscord.js signals   PRIME/EDGE to #plus-early at once, and to
- *                                   the public #signals forum after a delay.
+ *   node postToDiscord.js signals   PRIME/EDGE to the #signals forum the moment
+ *                                   they are detected. #signals is visible to
+ *                                   Plus members only (a Discord permission,
+ *                                   not a code path): no delays, no early tier.
+ *                                   Every Plus member sees the same post at the
+ *                                   same time, which is the owner's rule.
  *   node postToDiscord.js results   Every settled signal that went out, win or
  *                                   loss, to #results and back into its thread.
  *   node postToDiscord.js weekly    The record card from performance_band.
  *
  * ── LEDGER CHANNELS (posted_signals.channel) ────────────────────────────────
  *
- *   discord-plus     the immediate Plus post
- *   discord          the delayed public forum post (external_msg_id = thread id)
+ *   discord          the #signals forum post (external_msg_id = thread id)
  *   discord-result   the settlement post
  *
  * UNIQUE (signal_id, channel) on posted_signals means each happens once per
@@ -37,11 +40,9 @@
  *
  * Env:
  *   DISCORD_POSTING_ENABLED=1            kill switch, fails closed
- *   DISCORD_WEBHOOK_SIGNALS              public #signals (a FORUM channel)
- *   DISCORD_WEBHOOK_PLUS                 #plus-early (optional)
+ *   DISCORD_WEBHOOK_SIGNALS              #signals (a FORUM channel, Plus only)
  *   DISCORD_WEBHOOK_RESULTS              #results
  *   DISCORD_WEBHOOK_RECORD               #weekly-record
- *   DISCORD_FREE_DELAY_MIN   default 30  public delay after detection
  *   DISCORD_DAILY_CAP        default 12  signal posts per channel per UTC day
  *   DRY_RUN=1                            compose and print, never send or claim
  */
@@ -59,17 +60,16 @@ const { postWebhook, channelEnabled } = require('./lib/discordClient');
 
 const DRY_RUN = process.env.DRY_RUN === '1';
 // An unset GitHub `vars.X` arrives as an EMPTY STRING, and Number('') is 0:
-// a 0 cap would silence the channel and a 0 delay would hand the public feed
-// to everyone at once. So blank and non-numeric both mean "use the default".
+// a 0 cap would silence the channel. So blank and non-numeric both mean "use
+// the default".
 function numEnv(name, fallback) {
   const v = Number(process.env[name]);
   return process.env[name]?.trim() && Number.isFinite(v) ? v : fallback;
 }
-const FREE_DELAY_MIN = numEnv('DISCORD_FREE_DELAY_MIN', 30);
 const DAILY_CAP = numEnv('DISCORD_DAILY_CAP', 12);
 const MIN_LEAD_MIN = 10;    // never post a public signal inside 10 min of kick-off
 
-const LEDGER = { PLUS: 'discord-plus', FREE: 'discord', RESULT: 'discord-result' };
+const LEDGER = { SIGNAL: 'discord', RESULT: 'discord-result' };
 
 function getSupabase() {
   const url = process.env.SUPABASE_URL;
@@ -89,14 +89,10 @@ function eligibleSignals(signals) {
     Number(s.detected_odds) > 1 && Number.isFinite(Number(s.detected_edge))));
 }
 
-/** Which signals each audience gets on this run. Pure, so it can be tested. */
+/** Which signals post on this run. Pure, so it can be tested. */
 function plan(signals, now = Date.now()) {
-  const eligible = eligibleSignals(signals)
+  return eligibleSignals(signals)
     .filter(s => (new Date(s.kickoff_at).getTime() - now) / 60000 > MIN_LEAD_MIN);
-  return {
-    plus: eligible,
-    free: eligible.filter(s => (now - new Date(s.detected_at).getTime()) / 60000 >= FREE_DELAY_MIN),
-  };
 }
 
 async function postedToday(supabase, channel) {
@@ -108,7 +104,7 @@ async function postedToday(supabase, channel) {
   return count ?? 0;
 }
 
-async function sendBatch(supabase, rows, { channel, webhook, delayed, forum }) {
+async function sendBatch(supabase, rows, { channel, webhook, forum }) {
   if (!rows.length) return 0;
   if (!webhook) { console.log(`[postToDiscord] ${channel}: no webhook set, skipping`); return 0; }
   let sent = 0;
@@ -116,7 +112,7 @@ async function sendBatch(supabase, rows, { channel, webhook, delayed, forum }) {
   for (const s of rows) {
     if (today >= DAILY_CAP) { console.log(`[postToDiscord] ${channel}: daily cap ${DAILY_CAP} reached`); break; }
     let payload;
-    try { payload = signalPost(s, rungOf(s), { delayed }); }
+    try { payload = signalPost(s, rungOf(s)); }
     catch (err) {
       if (err instanceof ComposeRefusal) { console.warn(`[postToDiscord] ${s.id}: ${err.message}`); continue; }
       throw err;
@@ -133,16 +129,13 @@ async function sendBatch(supabase, rows, { channel, webhook, delayed, forum }) {
 
 async function runSignals(supabase) {
   const signals = await fetchRecentSignals(supabase);
-  const { plus, free } = plan(signals);
-  console.log(`[postToDiscord] ${signals.length} fetched · ${plus.length} for Plus · ${free.length} due public`);
-  const a = await sendBatch(supabase, plus, {
-    channel: LEDGER.PLUS, webhook: process.env.DISCORD_WEBHOOK_PLUS, delayed: false, forum: false,
+  const due = plan(signals);
+  console.log(`[postToDiscord] ${signals.length} fetched · ${due.length} to post`);
+  const posted = await sendBatch(supabase, due, {
+    channel: LEDGER.SIGNAL, webhook: process.env.DISCORD_WEBHOOK_SIGNALS,
+    forum: process.env.DISCORD_SIGNALS_FORUM !== '0',
   });
-  const b = await sendBatch(supabase, free, {
-    channel: LEDGER.FREE, webhook: process.env.DISCORD_WEBHOOK_SIGNALS,
-    delayed: Boolean(process.env.DISCORD_WEBHOOK_PLUS), forum: process.env.DISCORD_SIGNALS_FORUM !== '0',
-  });
-  return { posted: a + b };
+  return { posted };
 }
 
 /** Settled signals that Discord readers were shown and that have no result post yet. */
@@ -150,7 +143,7 @@ async function settledToAnnounce(supabase) {
   const since = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
   const { data: shown, error: e1 } = await supabase.from('posted_signals')
     .select('signal_id, channel, external_msg_id')
-    .in('channel', [LEDGER.PLUS, LEDGER.FREE, LEDGER.RESULT])
+    .in('channel', [LEDGER.SIGNAL, LEDGER.RESULT])
     .gte('posted_at', since);
   if (e1) throw new Error(`settledToAnnounce ledger: ${e1.message}`);
 
@@ -159,7 +152,7 @@ async function settledToAnnounce(supabase) {
     const e = byId.get(r.signal_id) ?? { shown: false, done: false, thread: null };
     if (r.channel === LEDGER.RESULT) e.done = true;
     else if (r.external_msg_id) e.shown = true;
-    if (r.channel === LEDGER.FREE && r.external_msg_id) e.thread = r.external_msg_id;
+    if (r.channel === LEDGER.SIGNAL && r.external_msg_id) e.thread = r.external_msg_id;
     byId.set(r.signal_id, e);
   }
   const ids = [...byId].filter(([, e]) => e.shown && !e.done).map(([id]) => id);

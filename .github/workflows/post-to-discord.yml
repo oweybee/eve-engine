@@ -1,8 +1,8 @@
 # MaxEdge — the Discord channel.
 #
 # Discord is our own server, not a public timeline, so the cadence can follow
-# the board: signals every 15 minutes (the public feed runs on a delay and
-# Plus gets it at once), results hourly, and the record card on Monday morning.
+# the board: signals every 15 minutes (into the Plus-only #signals forum,
+# no delay), results hourly, and the record card on Monday morning.
 #
 # THE SWITCH IS IN THE ENVIRONMENT. DISCORD_POSTING_ENABLED must be exactly '1'
 # or every mode does nothing, so the channel stops from the repo secrets.
@@ -61,10 +61,8 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           DISCORD_POSTING_ENABLED:   ${{ secrets.DISCORD_POSTING_ENABLED }}
           DISCORD_WEBHOOK_SIGNALS:   ${{ secrets.DISCORD_WEBHOOK_SIGNALS }}
-          DISCORD_WEBHOOK_PLUS:      ${{ secrets.DISCORD_WEBHOOK_PLUS }}
           DISCORD_WEBHOOK_RESULTS:   ${{ secrets.DISCORD_WEBHOOK_RESULTS }}
           DISCORD_WEBHOOK_RECORD:    ${{ secrets.DISCORD_WEBHOOK_RECORD }}
-          DISCORD_FREE_DELAY_MIN:    ${{ vars.DISCORD_FREE_DELAY_MIN }}
           DISCORD_DAILY_CAP:         ${{ vars.DISCORD_DAILY_CAP }}
           DRY_RUN:                   ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '' }}
         run: node postToDiscord.js ${{ steps.mode.outputs.m }}
