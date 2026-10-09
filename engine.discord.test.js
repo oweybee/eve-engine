@@ -112,22 +112,24 @@ t('weekly record shows yield once a band clears', () => {
   assert(all(weeklyRecordPost(cleared)).includes('+27.0%'));
 });
 
-t('public feed waits for the delay; Plus does not; nothing inside 10 min of kick-off', () => {
+t('every eligible signal posts at once: no delay, no early tier; nothing inside 10 min of kick-off', () => {
   const now = Date.parse('2026-10-08T12:10:00Z');
-  const fresh = { ...base, id: 'f', detected_at: '2026-10-08T12:05:00Z' };
+  const fresh = { ...base, id: 'f', match_id: 'm1', detected_at: '2026-10-08T12:09:00Z' };
   const old = { ...base, id: 'o', match_id: 'm2', detected_at: '2026-10-08T11:00:00Z' };
   const late = { ...base, id: 'l', match_id: 'm3', kickoff_at: '2026-10-08T12:15:00Z' };
-  const { plus, free } = plan([{ ...fresh, match_id: 'm1' }, old, late], now);
-  assert.deepStrictEqual(plus.map(s => s.id).sort(), ['f', 'o']);
-  assert.deepStrictEqual(free.map(s => s.id), ['o']);
+  assert.deepStrictEqual(plan([fresh, old, late], now).map(s => s.id).sort(), ['f', 'o']);
+});
+
+t('no post carries early-access or tier-timing copy', () => {
+  const p = all(signalPost(base, 'PRIME')).toLowerCase();
+  assert(!p.includes('saw this first') && !p.includes('early'));
 });
 
 t('non-backed and in-play rows never plan', () => {
   const now = Date.parse('2026-10-08T12:10:00Z');
   const weak = { ...base, id: 'w', match_id: 'm4', detected_edge: 0.02 };
   const live = { ...base, id: 'i', match_id: 'm5', phase: 'inplay' };
-  const { plus } = plan([weak, live], now);
-  assert.strictEqual(plus.length, 0);
+  assert.strictEqual(plan([weak, live], now).length, 0);
 });
 
 t('a blank env var falls back to the default rather than 0', () => {
