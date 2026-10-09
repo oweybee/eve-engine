@@ -320,7 +320,7 @@ async function deliver(supabase, signal, messageHash, send, dedupeSelection = tr
     // `telegramRejected` and `xRejected` mean the same thing — a well-formed
     // refusal, which is PROOF nothing was delivered. A transport failure sets
     // neither and the claim stands. See lib/xClient's header.
-    if (err && (err.telegramRejected || err.xRejected)) {
+    if (err && (err.telegramRejected || err.xRejected || err.discordRejected)) {
       await releasePost(supabase, claimId);
       return { outcome: 'refused', claimId, error: err };
     }
@@ -919,4 +919,4 @@ if (require.main === module) {
   run().catch(err => { console.error('[postToX] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { run, deliver, claimPost, fetchRecentSignals, CHANNEL, confirmPost, releasePost, loadPostedIds, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal, postTargetFor, getTelegramConfig, selectionKey, loadPostedSelectionsFor };
+module.exports = { run, deliver, rungOf, claimPost, fetchRecentSignals, CHANNEL, confirmPost, releasePost, loadPostedIds, buildMessage, isSuggested, isBroadcastable, bandOf, isMover, isInplay, chatIdForSignal, postTargetFor, getTelegramConfig, selectionKey, loadPostedSelectionsFor };
