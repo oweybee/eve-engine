@@ -233,7 +233,10 @@ async function upcomingFixtures(supabase) {
 /** Alt text for the image: the text card's lines with the markdown stripped. */
 function altText(payload) {
   return payload.embeds.map(e => `${e.title}: ${e.description}`).join(' | ')
-    .replace(/<t:\d+:t>/g, '').replace(/[`*]/g, '').replace(/\s+/g, ' ').slice(0, 1024);
+    .replace(/<t:\d+:t>/g, '').replace(/[`*]/g, '')
+    .replace(/[\u{1F7E5}\u{1F7E9}]+/gu, '')          // the 🟥/🟩 strips: counts already say it
+    .replace(/[^\p{L}\p{N}\p{P}\p{Zs}+]/gu, '')     // nothing exotic in an attachment description
+    .replace(/\s+/g, ' ').trim().slice(0, 1000);
 }
 
 /**
