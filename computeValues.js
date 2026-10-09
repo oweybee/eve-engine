@@ -353,8 +353,25 @@ function computeConsensus(oddsRows) {
     const p_novig   = anchorProb[outcome];
     const p_adj     = p_novig;
     const fair_odds = 1 / p_adj;
+    // THE EDGE IS SIGNED, AND IT WAS NOT.
+    //
+    // This read `has_edge ? … : 0`, so a price SHORTER than fair was stored as
+    // a flat 0 rather than as the negative number it is. Measured 9 Oct 2026:
+    // of 11,166 stored 1X2 legs, 9,764 were exactly 0 and NOT ONE was
+    // negative. The column could only ever say "generous" or "nothing to say",
+    // never "too short".
+    //
+    // Two things broke on that. The board could not draw a rung on 87% of
+    // legs, because the site reads an edge of exactly 0 as "no edge measured"
+    // (`h2hEdge`) and a rung is a verdict on a price. And any ranking over the
+    // column was one-sided: a longshot the model overrates showed +18%, one it
+    // underrates showed 0 instead of −18%, so only the upside of the model's
+    // own error survived into the number things were sorted by.
+    //
+    // `has_edge` keeps its meaning — the best price is longer than fair — and
+    // stays the flag every gate reads. The edge is now just the arithmetic.
     let has_edge = r.max_odds > fair_odds;
-    let edge     = has_edge ? parseFloat((p_adj * r.max_odds - 1).toFixed(6)) : 0;
+    let edge     = parseFloat((p_adj * r.max_odds - 1).toFixed(6));
 
     // Reject implausible edges: a lone stale/outlier price masquerading as value.
     if (edge > MAX_PLAUSIBLE_EDGE) {
@@ -362,6 +379,15 @@ function computeConsensus(oddsRows) {
         `[engine] dropped implausible edge ${(edge * 100).toFixed(0)}% on ${outcome} ` +
         `(best ${r.max_odds} @ ${r.max_book} vs fair ${fair_odds.toFixed(2)}) — likely stale/outlier price`
       );
+      // THE ONE PLACE A 0 STILL MEANS "DECLINED", AND DELIBERATELY SO.
+      //
+      // Everywhere else this change makes the edge signed precisely to remove
+      // that ambiguity. Here the input price is distrusted — a stale or outlier
+      // quote — so the arithmetic over it is not a measurement of anything, and
+      // writing the real +60% it produces would put a large number into a
+      // column that surfaces sort on. The acca board is the proof that a
+      // consumer will sort on this column without checking `has_edge` or
+      // `*_value` first, so the safe residue is the small one.
       has_edge = false;
       edge = 0;
     }
@@ -421,9 +447,14 @@ function computeMatch(match) {
   const fair_draw_odds = draw?.fair_odds != null ? String(draw.fair_odds.toFixed(4)) : null;
   const fair_away_odds = away?.fair_odds != null ? String(away.fair_odds.toFixed(4)) : null;
 
-  const home_edge = home?.has_edge ? home.edge : 0;
-  const draw_edge = draw?.has_edge ? draw.edge : 0;
-  const away_edge = away?.has_edge ? away.edge : 0;
+  // SIGNED, AND GATED SEPARATELY. These columns are NOT NULL, so a leg with no
+  // computed edge still writes 0 — but 0 now means "the best price is exactly
+  // fair", which is rare and true, rather than "we declined to say". What a
+  // surface may ACT on is `*_value` below, which is the gate's answer; these
+  // three are the measurement.
+  const home_edge = home?.edge ?? 0;
+  const draw_edge = draw?.edge ?? 0;
+  const away_edge = away?.edge ?? 0;
 
   // THE GATE, applied here and not only in lib/marketAnchor.js.
   //
