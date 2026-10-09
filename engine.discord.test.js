@@ -139,4 +139,73 @@ t('a blank env var falls back to the default rather than 0', () => {
   delete process.env.__T;
 });
 
+// ── Digests: #hit-rates trends and #market-pulse movers ────────────────────
+const { formOf, trendsPost, priceMoves, moversPost } = require('./lib/discordDigest');
+
+const day = i => new Date(Date.UTC(2026, 9, 1 - i, 15)).toISOString();
+// Team H: 8 games, 7 with 3+ goals and both scoring. Team A likewise.
+const hist = [];
+for (let i = 0; i < 8; i++) {
+  const big = i !== 3;
+  hist.push({ id: `h${i}`, kickoff_at: day(i), home_team_id: 'H', away_team_id: `x${i}`, goals_home: big ? 2 : 1, goals_away: big ? 1 : 0 });
+  hist.push({ id: `a${i}`, kickoff_at: day(i), home_team_id: `y${i}`, away_team_id: 'A', goals_home: big ? 2 : 0, goals_away: big ? 2 : 0 });
+}
+const fx = { id: 'F', kickoff_at: '2026-10-10T14:00:00Z', home_team_id: 'H', away_team_id: 'A',
+  home_team: { name: 'Hull' }, away_team: { name: 'Leeds' } };
+
+t('form counts only the last 8 completed games and needs at least 6', () => {
+  const f = formOf('H', hist);
+  assert.strictEqual(f.n, 8); assert.strictEqual(f.over25, 7); assert.strictEqual(f.btts, 7);
+  assert.strictEqual(formOf('H', hist.slice(0, 6)), null);
+});
+
+t('trends card shows counts out of games played, with no prices', () => {
+  const p = trendsPost([fx], hist);
+  const s = all(p);
+  assert(s.includes('7/8'));
+  assert(s.includes('Hull v Leeds'));
+  assert(!/\b\d\.\d\d\b/.test(s.replace(/<t:\d+:t>/g, '')), 'no decimal prices in a trends card');
+  assert(s.includes('18+'));
+});
+
+t('a quiet day posts nothing rather than 50/50s', () => {
+  // alternate 2-1 and 1-0: 3+ goals, both scoring and 2-or-fewer all sit at 50%
+  const flat = hist.map(m => Number(m.id.slice(1)) % 2
+    ? { ...m, goals_home: 2, goals_away: 1 } : { ...m, goals_home: 1, goals_away: 0 });
+  assert.strictEqual(trendsPost([fx], flat), null);
+});
+
+const odds = (book, at, h, d, a) => ({ id: `${book}${at}`, match_id: 'F', bookmaker: book, fetched_at: at, home_odds: h, draw_odds: d, away_odds: a });
+const oddsRows = [
+  odds('b1', '2026-10-08T10:00:00Z', 2.5, 3.4, 2.9), odds('b1', '2026-10-09T20:00:00Z', 2.1, 3.5, 3.6),
+  odds('b2', '2026-10-08T10:00:00Z', 2.4, 3.3, 3.0), odds('b2', '2026-10-09T20:00:00Z', 2.05, 3.4, 3.7),
+  odds('b3', '2026-10-08T10:00:00Z', 2.6, 3.4, 2.8), odds('b3', '2026-10-09T20:00:00Z', 2.2, 3.5, 3.5),
+  odds('b4', '2026-10-09T20:00:00Z', 2.3, 3.4, 3.2),    // one row only: this book never moved
+];
+
+t('movers use the median across books, open vs now', () => {
+  const home = priceMoves(oddsRows).find(m => m.outcome === 'home');
+  assert.strictEqual(home.open.toFixed(2), "2.45"); assert.strictEqual(home.now.toFixed(2), "2.15");
+  assert.strictEqual(home.books, 4);
+});
+
+t('fewer than 3 books is not a market move', () => {
+  assert.strictEqual(priceMoves(oddsRows.filter(r => r.bookmaker === 'b1' || r.bookmaker === 'b2')).length, 0);
+});
+
+t('movers card never names a book, a fair price or a gap', () => {
+  const e = moversPost(oddsRows, [fx]).embeds[0];
+  const s = [e.title, e.description, ...e.fields.flatMap(f => [f.name, f.value])].join(' ').toLowerCase();
+  assert(s.includes('leeds') || s.includes('hull'));
+  for (const w of ['fair', 'gap', 'value', 'b1', 'b2', 'b3', 'edge', 'prime']) assert(!s.includes(w), `movers card mentions "${w}"`);
+});
+
+t('digests never read value_signals (they go to channels everyone can see)', () => {
+  const src = require('fs').readFileSync(require.resolve('./lib/discordDigest'), 'utf8');
+  const io = require('fs').readFileSync(require.resolve('./postToDiscord'), 'utf8');
+  assert(!src.includes('value_signals'));
+  const digestIo = io.slice(io.indexOf('Daily digests'), io.indexOf('async function run('));
+  assert(!digestIo.includes('value_signals'));
+});
+
 console.log(`\n${n} passed`);
