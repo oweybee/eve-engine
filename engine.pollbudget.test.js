@@ -5,8 +5,8 @@
 'use strict';
 
 const assert = require('assert');
-const { planPolling, pollsForFixture, tierFor, dueNow, DEFAULT_TIERS,
-        FIRST_POLL_RAMP_MIN } = require('./lib/pollBudget');
+const { planPolling, pollsForFixture, pollsInWindow, tierFor, intervalFor, dueNow,
+        DEFAULT_TIERS, FIRST_POLL_RAMP_MIN } = require('./lib/pollBudget');
 
 let passed = 0;
 function test(name, fn) {
@@ -18,9 +18,50 @@ const NOW = new Date('2026-08-15T09:00:00Z');
 const inHours = h => new Date(NOW.getTime() + h * 3600_000).toISOString();
 const makeFixtures = specs => specs.map((h, i) => ({ id: `f${i}`, kickoffAt: inHours(h) }));
 
-test('pollsForFixture: full life ≈ 68 polls under default tiers', () => {
+test('pollsForFixture: full life to 72h under default tiers', () => {
   const n = pollsForFixture(72, DEFAULT_TIERS);
-  assert.strictEqual(n, 36 + 18 + 12 + 2, `got ${n}`);
+  // closing 3h@5m + dayof 9h@10m + near 36h@20m + far 24h@60m
+  assert.strictEqual(n, 36 + 54 + 108 + 24, `got ${n}`);
+});
+
+/* THE BUDGET IS A DAY. A fixture a fortnight out spends a day's worth of its
+   distant tier tomorrow, not its whole life. Pricing lifetime against a daily
+   allowance made the old ladder look 6x dearer than it was. */
+test('pollsInWindow counts only the next 24 hours, walking down the ladder', () => {
+  assert.strictEqual(pollsInWindow(300, DEFAULT_TIERS), 24 * 60 / 240);
+  // The 24h window from 30h out spans 30h -> 6h:
+  // near (12..30) 18h@20m = 54, dayof (6..12) 6h@10m = 36
+  assert.strictEqual(pollsInWindow(30, DEFAULT_TIERS), 54 + 36);
+  assert.strictEqual(pollsInWindow(2, DEFAULT_TIERS), pollsForFixture(2, DEFAULT_TIERS));
+  assert.strictEqual(pollsInWindow(0, DEFAULT_TIERS), 0);
+});
+
+test('a real fortnight fits a 75k day with no degradation', () => {
+  // 10 Oct 2026's shape: ~280 inside 48h, ~110 in days 3-7, ~380 beyond.
+  const specs = [
+    ...Array.from({ length: 160 }, (_, i) => 1 + (i % 24)),
+    ...Array.from({ length: 120 }, (_, i) => 24 + (i % 24)),
+    ...Array.from({ length: 110 }, (_, i) => 48 + (i % 120)),
+    ...Array.from({ length: 380 }, (_, i) => 168 + (i % 168)),
+  ];
+  const plan = planPolling({ fixtures: makeFixtures(specs), budget: 75000, now: NOW });
+  assert.deepStrictEqual(plan.degradations, []);
+  assert.ok(plan.cost.total < 45000, `a day should leave headroom (${plan.cost.total})`);
+});
+
+test('intervalFor re-tiers a fixture as kickoff approaches', () => {
+  assert.deepStrictEqual(intervalFor(50), { tier: 'far', everyMin: 60 });
+  assert.deepStrictEqual(intervalFor(26), { tier: 'near', everyMin: 20 });
+  assert.deepStrictEqual(intervalFor(2), { tier: 'closing', everyMin: 5 });
+  assert.strictEqual(intervalFor(-1), null);
+  assert.strictEqual(intervalFor(400), null);
+});
+
+/* EVERYTHING ON THE BOARD STAYS INSIDE THE SIX-HOUR PRICE WINDOW. The hit-rate
+   board withholds a quote older than six hours (v_best_prices); a tier slower
+   than that is a fixture that reads "No price yet" for part of every day. */
+test('no default tier is slower than the board\'s six-hour window', () => {
+  for (const t of DEFAULT_TIERS) assert.ok(t.everyMin <= 300, `${t.key} polls every ${t.everyMin}m`);
 });
 
 test('pollsForFixture: near-kickoff fixture only pays the closing tier', () => {
@@ -66,7 +107,7 @@ test('tight budget degrades far tiers FIRST, protects the closing line', () => {
   assert.ok(plan.degradations.length > 0, 'should have degraded');
   const closing = plan.tiers.find(t => t.key === 'closing');
   const far = plan.tiers.find(t => t.key === 'far');
-  assert.ok(far.everyMin > 720, 'far tier should widen');
+  assert.ok(far.everyMin > DEFAULT_TIERS.find(t => t.key === 'far').everyMin, 'far tier should widen');
   assert.strictEqual(closing.everyMin, 5, 'closing tier must stay 5m while cheaper tiers can give');
   assert.ok(plan.cost.total <= 2500, `must fit budget (${plan.cost.total})`);
 });
