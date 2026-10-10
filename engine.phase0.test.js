@@ -153,7 +153,7 @@ test('an empty due set does NOT short-circuit before the floor runs', () => {
 
 test('everything polled advances, so the floor cannot re-fire every run', () => {
   const src = read('ingestOdds.js');
-  assert(/advancePlan\(supabase, plan, pollIds\)/.test(src),
+  assert(/advancePlan\(supabase, plan, pollIds(, kickoffs)?\)/.test(src),
     'advancePlan must receive pollIds; passing dueIds leaves floor fixtures ' +
     'un-advanced and therefore due again immediately');
 });

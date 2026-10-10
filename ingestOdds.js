@@ -37,6 +37,7 @@ const https            = require('https');
 const { getClient }    = require('./lib/supabaseClient');
 const { bookmakerKey } = require('./lib/bookmakers');
 const apiQuota = require('./lib/apiFootballQuota');
+const { intervalFor, DEFAULT_TIERS } = require('./lib/pollBudget');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -126,7 +127,7 @@ async function loadPlan(supabase) {
  * Called AFTER the fixture loop completes (P1-5 fix).
  * A failed loop leaves the plan untouched so the scheduler retries.
  */
-async function advancePlan(supabase, plan, polledIds = []) {
+async function advancePlan(supabase, plan, polledIds = [], kickoffs = new Map()) {
   const nextRunAt  = new Date(Date.now() + plan.interval_minutes * 60 * 1000);
   const nextHour   = nextRunAt.getUTCHours();
   const effectiveEnd = ACTIVE_END_HOUR === 24 ? 0 : ACTIVE_END_HOUR;
@@ -141,12 +142,25 @@ async function advancePlan(supabase, plan, polledIds = []) {
   if (plan.fixture_schedule && polledIds.length) {
     scheduleUpdate = { ...plan.fixture_schedule };
     const nowMs = Date.now();
+    // RE-TIER AS IT ADVANCES. The schedule is built once a day, so a fixture
+    // used to keep its 05:00 interval until tomorrow's plan — one 50 hours out
+    // stayed on the 12-hour tier while it walked to 26 hours. Each poll now
+    // re-reads its tier from the plan's own ladder (post-degradation, so this
+    // never outspends what the plan priced). A plan written before the ladder
+    // travelled with it falls back to the default ladder.
+    const ladder = Array.isArray(scheduleUpdate._tiers) ? scheduleUpdate._tiers : DEFAULT_TIERS;
     for (const id of polledIds) {
       const cur = scheduleUpdate[String(id)];
       if (!cur?.everyMin) continue;
+      const ko = kickoffs.get(String(id));
+      const hours = ko ? (new Date(ko).getTime() - nowMs) / 3_600_000 : NaN;
+      const next = Number.isFinite(hours) ? intervalFor(hours, ladder) : null;
+      const everyMin = next?.everyMin ?? cur.everyMin;
       scheduleUpdate[String(id)] = {
         ...cur,
-        nextPollAt: new Date(nowMs + cur.everyMin * 60 * 1000).toISOString(),
+        ...(next ? { tier: next.tier } : {}),
+        everyMin,
+        nextPollAt: new Date(nowMs + everyMin * 60 * 1000).toISOString(),
       };
     }
   }
@@ -728,6 +742,10 @@ async function ingest() {
     FETCH_CONCURRENCY,
   );
 
+  /** match:book:market:line -> the quote as last confirmed. See below. */
+  const latestRows = new Map();
+  const confirmedAt = new Date().toISOString();
+
   // ── Phase 2: process results SERIALLY — the shared match/odds Maps are
   // mutated here, so this must not run concurrently.
   for (const { fixtureId, bookmakers } of fetched) {
@@ -785,6 +803,22 @@ async function ingest() {
         continue;
       }
 
+      // EVERY QUOTE WE SAW IS CONFIRMED, moved or not. `odds` only records a
+      // price when it MOVES, so a quote that held steady since yesterday reads
+      // as a day old there even though we looked at it a minute ago — and the
+      // boards withhold anything older than six hours. `odds_latest` holds the
+      // current quote per book with the time we last confirmed it, which is
+      // what "is this price fresh" actually asks. Written once for the whole
+      // run, below the loop.
+      for (const row of rows) {
+        const lk = `${matchId}:${row.bookmaker}:${row.market ?? 'h2h'}:${row.market_line ?? ''}`;
+        latestRows.set(lk, {
+          match_id: matchId, bookmaker: row.bookmaker, market: row.market ?? 'h2h',
+          market_line: row.market_line ?? null, home_odds: row.home_odds,
+          draw_odds: row.draw_odds ?? null, away_odds: row.away_odds, confirmed_at: confirmedAt,
+        });
+      }
+
       // Select rows where prices have moved — O(1) Map lookup per row.
       let fixtureInserted = 0;
       const pending = [];
@@ -839,6 +873,17 @@ async function ingest() {
     }
   }
 
+  if (!DRY_RUN && latestRows.size) {
+    const { written, failed } = await confirmLatest(supabase, [...latestRows.values()]);
+    summary.confirmed = written;
+    if (failed) {
+      // NON-FATAL. The price log above is the record; this is the freshness
+      // stamp, and losing it makes a board more cautious, never wrong.
+      console.error(`[ingest] odds_latest: ${failed} row(s) not confirmed`);
+      summary.errors++;
+    }
+  }
+
   // P1-5 fix: advancePlan runs AFTER the fixture loop.
   // If the loop threw (e.g. rate limit on fixture 3), advancePlan never fires
   // and the scheduler retries at the original next_run_at instead of marking
@@ -848,7 +893,8 @@ async function ingest() {
       // pollIds = exactly what this run polled → each advances by its own tier.
       // It was `dueIds`, which left every closing-floor fixture un-advanced and
       // therefore due again on the very next run.
-      await advancePlan(supabase, plan, pollIds);
+      const kickoffs = new Map([...resolved].map(([extId, m]) => [String(extId), m.kickoffAt]));
+      await advancePlan(supabase, plan, pollIds, kickoffs);
     } catch (err) {
       // advancePlan failure is non-fatal to the odds data already written,
       // but we must surface it — the scheduler is now in an undefined state.
@@ -885,6 +931,31 @@ async function ingest() {
  * @param {(row: object, err: object) => void} onError names a row that failed
  * @returns {Promise<{ok: object[], failed: number}>} the entries that landed
  */
+/**
+ * Upsert the current quote per (match, book, market, line) into `odds_latest`
+ * with the time it was confirmed. Chunked: one request per 500 quotes.
+ * The conflict target is a NULLS NOT DISTINCT unique constraint (migration
+ * 139), so a null `market_line` collides with itself and the plain column list
+ * is inferable — the shape migration 087 had to fix for `closing_lines`.
+ */
+async function confirmLatest(supabase, rows) {
+  let written = 0;
+  let failed = 0;
+  for (let i = 0; i < rows.length; i += 500) {
+    const slice = rows.slice(i, i + 500);
+    const { error } = await supabase
+      .from('odds_latest')
+      .upsert(slice, { onConflict: 'match_id,bookmaker,market,market_line' });
+    if (error) {
+      console.error(`  [error] odds_latest upsert: ${error.message}`);
+      failed += slice.length;
+    } else {
+      written += slice.length;
+    }
+  }
+  return { written, failed };
+}
+
 async function insertOddsRows(supabase, matchId, entries, onError) {
   if (!entries.length) return { ok: [], failed: 0 };
 
@@ -934,7 +1005,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  ingest, extractH2hRows, extractTotalsRows, extractBttsRows, oddsHaveMoved,
+  ingest, extractH2hRows, extractTotalsRows, extractBttsRows, oddsHaveMoved, confirmLatest,
   insertOddsRows,
   isHalfLine,
   chunk, IN_CHUNK,

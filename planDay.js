@@ -295,6 +295,12 @@ function calcPlan(fixtures, today) {
       tier: s2.tier, everyMin: s2.everyMin, nextPollAt: s2.nextPollAt,
     };
   }
+  // THE LADDER TRAVELS WITH THE PLAN, so `ingestOdds` can re-tier a fixture as
+  // it walks toward kickoff during the day rather than holding the interval it
+  // had at 05:00. It is the ladder AFTER any budget degradation, so re-tiering
+  // never spends faster than the plan priced. Fixture ids are numeric; this key
+  // cannot collide with one, and every reader indexes by fixture id.
+  fixtureSchedule._tiers = budgetPlan.tiers;
   // The loop must wake at least as often as the tightest tier so closing-line
   // polls aren't missed; runs_planned is now an upper bound, not a hard budget.
   const tightest = Math.min(...budgetPlan.tiers.map(t => t.everyMin));

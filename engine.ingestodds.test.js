@@ -23,7 +23,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { insertOddsRows, extractTotalsRows, isHalfLine, chunk, IN_CHUNK } = require('./ingestOdds');
+const { insertOddsRows, extractTotalsRows, isHalfLine, chunk, IN_CHUNK, confirmLatest } = require('./ingestOdds');
 
 /** A supabase double recording every insert call and its payload shape. */
 function insertSpy({ failBatch = false, failRows = new Set() } = {}) {
@@ -218,4 +218,25 @@ test('a chunk of 36-char UUIDs stays well under 2KB of URL', () => {
   const worst = chunk(Array.from({ length: 419 }, () => uuid))[0]
     .map(encodeURIComponent).join(',').length;
   assert.ok(worst < 2048, `${worst} bytes`);
+});
+
+/* EVERY QUOTE SEEN IS CONFIRMED, moved or not (migration 139). `odds` only
+   records a MOVE, so a steady price read as a day old there and the boards
+   withheld it. confirmLatest stamps each quote in odds_latest, in chunks, on
+   the NULLS NOT DISTINCT key, and a failed chunk is counted, never thrown. */
+test('confirmLatest upserts in 500-row chunks on the natural key', async () => {
+  const calls = [];
+  const sb = { from: (t) => ({ upsert: async (rows, opts) => { calls.push({ t, n: rows.length, opts }); return { error: null }; } }) };
+  const rows = Array.from({ length: 1200 }, (_, i) => ({ match_id: 'm', bookmaker: `b${i}` }));
+  const r = await confirmLatest(sb, rows);
+  assert.deepStrictEqual(calls.map(c => c.n), [500, 500, 200]);
+  assert.ok(calls.every(c => c.t === 'odds_latest' && c.opts.onConflict === 'match_id,bookmaker,market,market_line'));
+  assert.deepStrictEqual(r, { written: 1200, failed: 0 });
+});
+
+test('confirmLatest counts a failed chunk and keeps going', async () => {
+  let i = 0;
+  const sb = { from: () => ({ upsert: async () => ({ error: i++ === 0 ? { message: 'boom' } : null }) }) };
+  const r = await confirmLatest(sb, Array.from({ length: 700 }, () => ({})));
+  assert.deepStrictEqual(r, { written: 200, failed: 500 });
 });
