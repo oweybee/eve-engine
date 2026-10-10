@@ -1,0 +1,48 @@
+# MaxEdge — post the /in-play tracker's flags to the Plus-only #in-play
+# Discord channel as matches happen. See postInplayFlags.js.
+#
+# Each run polls itself for up to 25 minutes (every 3 minutes) and stops as
+# soon as nothing is in play, so the cron only has to keep a run alive. The
+# shared Discord kill switch applies: DISCORD_POSTING_ENABLED must be '1'.
+
+name: In-play flags to Discord
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'One pass, print the posts, send nothing'
+        type: boolean
+        default: true
+
+concurrency:
+  group: inplay-flags
+  cancel-in-progress: false
+
+jobs:
+  flags:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Check the rules
+        run: node engine.inplayflags.test.js
+
+      - name: Post flags
+        env:
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DISCORD_POSTING_ENABLED:   ${{ secrets.DISCORD_POSTING_ENABLED }}
+          DISCORD_WEBHOOK_INPLAY:    ${{ secrets.DISCORD_WEBHOOK_INPLAY }}
+          INPLAY_FLAGS_POLL_SEC:     ${{ vars.INPLAY_FLAGS_POLL_SEC }}
+          DRY_RUN:                   ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '' }}
+        run: node postInplayFlags.js
