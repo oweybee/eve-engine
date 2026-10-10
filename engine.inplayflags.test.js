@@ -2,7 +2,8 @@
 // lib/inplayFlags — which tracker flags are new, and what a post may say.
 
 const assert = require('assert');
-const { flagKey, postable, newFlags, flagPost, MAX_FLAGS_PER_MATCH, LATEST_MINUTE } = require('./lib/inplayFlags');
+const { flagKey, postable, newFlags, flagPost, withCard, MAX_FLAGS_PER_MATCH, LATEST_MINUTE } = require('./lib/inplayFlags');
+const { teamMark } = require('./lib/discordCards');
 
 let n = 0;
 const t = (name, fn) => { fn(); n++; console.log(`ok ${n} ${name}`); };
@@ -70,4 +71,19 @@ t('banned words refuse the post rather than soften it', () => {
   assert.throws(() => flagPost(match(), flag('pressure', 'home', { detail: 'A guaranteed goal is coming.' })));
 });
 
+
+t('the card rides as the embed image and the text survives', () => {
+  const p = withCard(flagPost(match(), flag('red-card', 'away')), 'flag.png');
+  assert.strictEqual(p.embeds[0].image.url, 'attachment://flag.png');
+  assert(p.embeds[0].description.includes('Arsenal 0–1 Chelsea'));
+  assert.deepStrictEqual(p.allowed_mentions, { parse: [] });
+});
+
+t('crests are replaced by a three-letter mark', () => {
+  assert.strictEqual(teamMark('Tottenham'), 'TOT');
+  assert.strictEqual(teamMark('Manchester United'), 'MU');
+  assert.strictEqual(teamMark('Toronto FC'), 'TOR');
+  assert.strictEqual(teamMark('CF Montreal'), 'MON');
+  assert.strictEqual(teamMark(''), '?');
+});
 console.log(`\n${n} passed`);

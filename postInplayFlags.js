@@ -25,13 +25,34 @@
  *   DISCORD_POSTING_ENABLED      must be exactly '1', the shared kill switch
  *   INPLAY_FLAGS_LOOP_MIN        how long one run lives (default 25)
  *   INPLAY_FLAGS_POLL_SEC        seconds between passes (default 180)
+ *   INPLAY_FLAGS_CARD            '0' posts text only (default: square image card)
  *   SITE_URL                     default https://www.maxedge.live
  *   DRY_RUN=1                    read and print, post nothing, write nothing
  */
 
 const { createClient } = require('@supabase/supabase-js');
-const { postWebhook, channelEnabled } = require('./lib/discordClient');
-const { newFlags, flagPost } = require('./lib/inplayFlags');
+const { postWebhook, postWebhookFiles, channelEnabled } = require('./lib/discordClient');
+const { flagCard } = require('./lib/discordCards');
+const { newFlags, flagPost, withCard } = require('./lib/inplayFlags');
+
+/** Card off with INPLAY_FLAGS_CARD=0; any other value (or unset) draws it. */
+const CARD_ON = process.env.INPLAY_FLAGS_CARD !== '0';
+
+/**
+ * Post the square card with the embed; if the card cannot be drawn, post the
+ * text embed alone. A failed render must never cost the post itself.
+ */
+async function send(webhook, match, flag, payload) {
+  if (!CARD_ON) return postWebhook(webhook, payload);
+  let png = null;
+  try { png = await flagCard(match, flag); }
+  catch (e) { console.log(`[inplayFlags] card render failed (${e.message}), posting text only`); }
+  if (!png) return postWebhook(webhook, payload);
+  return postWebhookFiles(webhook, withCard(payload, 'flag.png'), [{
+    name: 'flag.png', data: png, type: 'image/png',
+    description: `${match.homeTeam} ${match.homeGoals}-${match.awayGoals} ${match.awayTeam}. ${flag.title}. ${flag.detail ?? ''}`,
+  }]);
+}
 
 const SITE_URL = (process.env.SITE_URL || 'https://www.maxedge.live').replace(/\/$/, '');
 const LOOP_MIN = Number(process.env.INPLAY_FLAGS_LOOP_MIN) || 25;
@@ -81,7 +102,7 @@ async function pass(supabase, webhook) {
       throw new Error(`inplay_flag_posts claim: ${claimErr.message}`);
     }
     try {
-      const res = await postWebhook(webhook, payload);
+      const res = await send(webhook, match, flag, payload);
       sent++;
       if (res?.message_id) {
         await supabase.from('inplay_flag_posts').update({ external_msg_id: res.message_id })
