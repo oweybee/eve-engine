@@ -1,0 +1,56 @@
+# MaxEdge — keep the Plus role in the Discord in step with each linked
+# member's plan. See syncDiscordRoles.js and lib/discordRoles.js.
+#
+# It follows the DATABASE (discord_role_targets, migration 138), never Stripe
+# events, so a missed webhook is corrected on the next run.
+#
+# THE SWITCH IS IN THE ENVIRONMENT. DISCORD_ROLE_SYNC_ENABLED must be exactly
+# '1' or the job reads everything and changes nothing.
+
+name: Discord Plus role sync
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Read and print, change nothing'
+        type: boolean
+        default: true
+      force:
+        description: 'Lift the mass-revoke guard for this run'
+        type: boolean
+        default: false
+
+concurrency:
+  group: discord-roles
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Check the rules
+        run: node engine.discordroles.test.js
+
+      - name: Sync
+        env:
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DISCORD_BOT_TOKEN:         ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_GUILD_ID:          ${{ vars.DISCORD_GUILD_ID }}
+          DISCORD_PLUS_ROLE_ID:      ${{ vars.DISCORD_PLUS_ROLE_ID }}
+          DISCORD_ROLE_SYNC_ENABLED: ${{ secrets.DISCORD_ROLE_SYNC_ENABLED }}
+          DISCORD_ROLE_FORCE:        ${{ (github.event_name == 'workflow_dispatch' && inputs.force) && '1' || '' }}
+          DRY_RUN:                   ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '' }}
+        run: node syncDiscordRoles.js
