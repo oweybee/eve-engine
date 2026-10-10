@@ -268,11 +268,15 @@ test('suggested but scored below the backing line is NOT broadcast', () => {
   assert.strictEqual(isSuggested(watch), true, 'the box still suggests it');
   assert.strictEqual(isBroadcastable(watch), false, 'but the score demoted it out');
 
-  // And in the PRIME box the line is 60: a 52 there is demoted to EDGE, which
-  // is still backed — so the same score means different things in the two boxes.
-  const demoted = { ...primeSignal, mxs: 52, mxs_band: 'WATCH' };
-  assert.strictEqual(rungFor({ odds: 2.2, edge: 0.06, mxs: 52 }), 'EDGE');
-  assert.strictEqual(isBroadcastable(demoted), true);
+  /* ── THE 60 LINE IS GONE (owner, 9 Oct 2026) ────────────────────────────
+     A 52 in the PRIME box used to demote to EDGE. It does not any more: the
+     box picks the backed rung on its own, because the demotion was ordering
+     the box backwards. Across every in-box row ever written, those scoring
+     60+ returned +17.31% and those scoring 41-59 returned +28.66%, so the
+     line was promoting the worse half. The floor at 41 stays. */
+  const notDemoted = { ...primeSignal, mxs: 52, mxs_band: 'WATCH' };
+  assert.strictEqual(rungFor({ odds: 2.2, edge: 0.06, mxs: 52 }), 'PRIME');
+  assert.strictEqual(isBroadcastable(notDemoted), true);
 });
 
 test('suggested but UNSCORABLE is not broadcast either', () => {
