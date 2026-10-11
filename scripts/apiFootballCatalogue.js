@@ -13,8 +13,8 @@
  * The local `.env` holds a placeholder for API_FOOTBALL_KEY (the real key is a
  * repo secret), and api-football.com's documentation sits behind a bot
  * challenge, so the only place the real catalogue can be observed is a runner.
- * This prints it. It is the twin of scripts/oddsApiCatalogue.js, which exists
- * for the same reason against the other provider.
+ * This prints it. It was the twin of scripts/oddsApiCatalogue.js, which did
+ * the same job for The Odds API and went with that provider on 11 Oct 2026.
  *
  * Phase 0 of CLAUDE_CODE_PROMPT_core_markets says it directly: do not name bet
  * ids from memory or from documentation. This is how you stop doing that.

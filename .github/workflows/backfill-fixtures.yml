@@ -57,8 +57,8 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
       # Only used to print the credits-per-league-day division in the summary.
-      ODDS_API_MONTHLY_CREDITS:  ${{ vars.ODDS_API_MONTHLY_CREDITS || '100000' }}
-      ODDS_API_RESERVE:          ${{ vars.ODDS_API_RESERVE || '2000' }}
+      ODDS_MONTHLY_CREDITS:      ${{ vars.ODDS_MONTHLY_CREDITS || '100000' }}
+      ODDS_CREDIT_RESERVE:       ${{ vars.ODDS_CREDIT_RESERVE || '2000' }}
 
     steps:
       - name: Checkout

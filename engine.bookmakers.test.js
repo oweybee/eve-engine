@@ -59,7 +59,7 @@ test('NO WRITER MAY FORMAT A NAME — the ratchet', () => {
   // That is what persisted `Bet365` into a column of keys. A writer may call
   // bookmakerKey; it may never call bookmakerLabel.
   for (const f of ['computeValues.js', 'computeApiValues.js', 'ingestOdds.js',
-                   'ingestOddsApi.js', 'computeInplay.js']) {
+                   'computeInplay.js']) {
     if (!fs.existsSync(f)) continue;
     const src = fs.readFileSync(f, 'utf8');
     assert.ok(!/function formatBookName/.test(src),

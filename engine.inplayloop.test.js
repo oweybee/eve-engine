@@ -42,7 +42,9 @@ const yamlNum = key => {
 console.log('the pipeline the loop runs');
 test('every script the workflow used to run as its own step is still run', () => {
   const cmds = loop.STEPS.map(s => s.cmd);
-  for (const f of ['ingestLiveOdds.js', 'computeInplayValues.js', 'ingestOddsApi.js',
+  // `ingestOddsApi.js` was on this list and is deliberately off it: The Odds
+  // API was removed on 11 Oct 2026 after a 401 from 10 Oct 14:31.
+  for (const f of ['ingestLiveOdds.js', 'computeInplayValues.js',
                    'fetchLiveStats.js', 'captureInplaySeries.js', 'postToX.js']) {
     assert.ok(cmds.includes(f), `${f} dropped out of the loop`);
   }
@@ -61,10 +63,19 @@ test('ORDER is the workflow\'s: price and state before values, values before the
   assert.ok(at('computeInplayValues.js') < at('postToX.js'),
     'nothing can be posted before it is computed');
 });
-test('only the metered step is on the slower clock', () => {
+/* ── ONE CLOCK, BECAUSE THE METERED STEP IS GONE (11 Oct 2026) ─────────────
+   The multi-book in-play step was the only metered one and it read The Odds
+   API, removed after a 401 from 10 Oct 14:31. A metered step reappearing
+   without its own clock would spend a per-call budget at the core cadence,
+   which is the mistake the old note on ODDS_API_INTERVAL_SECONDS described. */
+test('no step is metered, so no step needs a slower clock', () => {
   const metered = loop.STEPS.filter(s => s.metered).map(s => s.cmd);
-  assert.deepStrictEqual(metered, ['ingestOddsApi.js'],
-    'The Odds API is the only step that costs credits per call');
+  assert.deepStrictEqual(metered, [],
+    'a per-call-cost step needs its own interval; add one before adding the step');
+});
+test('nothing in the loop reads The Odds API', () => {
+  assert.ok(!loop.STEPS.some(s => /oddsApi/i.test(s.cmd)),
+    'the provider is API-Football only');
 });
 
 console.log('the two settings that are not arbitrary');
@@ -97,8 +108,6 @@ test('the workflow timeout EXCEEDS LOOP_MINUTES — being killed is not stopping
 test('the pass interval is the real cadence, and it is minutes not hours', () => {
   assert.ok(loop.PASS_INTERVAL_SECONDS <= 300,
     'in-play edges close in minutes; this is what decides coverage');
-  assert.ok(loop.ODDS_API_INTERVAL_SECONDS > loop.PASS_INTERVAL_SECONDS,
-    'the metered step must be slower than the core loop, not equal to it');
 });
 
 console.log('the workflow');

@@ -2,7 +2,7 @@
  * backfillSeasonFixtures.js — load WHOLE-SEASON fixture lists into `matches`.
  *
  * WHY
- * The Odds API is a monthly credit pool, and lib/oddsApiBudget.js paces spend
+ * An odds feed is usually a monthly credit pool paced against league-days,
  * against "league-days" — how many (league, day) pairs the month actually holds.
  * That denominator is only as good as the fixture calendar in the database. Until
  * now the DB only knew about the next few days (planDay fetches date-by-date), so
@@ -257,10 +257,14 @@ async function main() {
   // The point of the exercise: the monthly quota division, from real football.
   const byMonth = leagueDaysByMonth(allFixtures);
   if (byMonth.size) {
-    const credits = parseInt(process.env.ODDS_API_MONTHLY_CREDITS || '100000', 10);
-    const reserve = parseInt(process.env.ODDS_API_RESERVE || '2000', 10);
+    // A LEAGUE-DAY IS STILL THE UNIT WORTH COUNTING, even though the feed
+    // that billed in them is gone (11 Oct 2026): it is how any odds provider
+    // prices, so this stays as the sizing figure for the next one. The
+    // divisor is a plain default rather than The Odds API's own plan.
+    const credits = parseInt(process.env.ODDS_MONTHLY_CREDITS || '100000', 10);
+    const reserve = parseInt(process.env.ODDS_CREDIT_RESERVE || '2000', 10);
     const spendable = Math.max(0, credits - reserve);
-    console.log(`\n[backfill] LEAGUE-DAYS PER MONTH (the Odds API billing unit — one`);
+    console.log(`\n[backfill] LEAGUE-DAYS PER MONTH (the usual odds billing unit — one`);
     console.log(`           (league, date) pair, since a league request is priced the`);
     console.log(`           same whether it returns 1 fixture or 10):\n`);
     console.log(`           month     league-days   credits/league-day @ ${spendable.toLocaleString()}`);
