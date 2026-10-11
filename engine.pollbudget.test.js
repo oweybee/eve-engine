@@ -6,6 +6,7 @@
 
 const assert = require('assert');
 const { planPolling, pollsForFixture, pollsInWindow, tierFor, intervalFor, dueNow,
+        nextPollForCycle, FEED_CYCLE,
         DEFAULT_TIERS, FIRST_POLL_RAMP_MIN } = require('./lib/pollBudget');
 
 let passed = 0;
@@ -193,3 +194,69 @@ test('a tier tighter than the ramp keeps its own interval', () => {
 });
 
 console.log(`\npoll budget tests: ${passed} passed${process.exitCode ? ' (with failures)' : ''}`);
+
+
+/* ── POLL WHEN THE FEED UPDATES (11 Oct 2026) ─────────────────────────────
+   API-Football refreshes pre-match odds about every 3 hours. Once a change
+   anchors the cycle we sleep through the gap and watch the window the next
+   batch is due in. */
+{
+  const T0 = Date.parse('2026-10-11T12:00:00Z');
+  const M = 60_000;
+  const at = mins => T0 + mins * M;
+
+  test('cycle: no change seen yet -> plain tier interval', () => {
+    const r = nextPollForCycle({ nowMs: at(0), hoursToKickoff: 2, tierEveryMin: 5, lastFeedChangeMs: NaN });
+    assert.strictEqual(r.mode, 'tier');
+    assert.strictEqual(r.nextPollAtMs, at(5));
+  });
+
+  test('cycle: just after a change, wait, but never longer than the safety poll', () => {
+    const r = nextPollForCycle({ nowMs: at(0), hoursToKickoff: 2, tierEveryMin: 5, lastFeedChangeMs: at(0) });
+    assert.strictEqual(r.mode, 'cycle-wait');
+    assert.strictEqual(r.nextPollAtMs, at(FEED_CYCLE.safetyMin));
+  });
+
+  test('cycle: the last wait lands exactly at the start of the watch window', () => {
+    const watchStart = FEED_CYCLE.cycleMin - FEED_CYCLE.leadMin;
+    const r = nextPollForCycle({ nowMs: at(watchStart - 20), hoursToKickoff: 2, tierEveryMin: 5, lastFeedChangeMs: at(0) });
+    assert.strictEqual(r.mode, 'cycle-wait');
+    assert.strictEqual(r.nextPollAtMs, at(watchStart));
+  });
+
+  test('cycle: inside the watch window poll every run', () => {
+    const r = nextPollForCycle({ nowMs: at(FEED_CYCLE.cycleMin), hoursToKickoff: 2, tierEveryMin: 5, lastFeedChangeMs: at(0) });
+    assert.strictEqual(r.mode, 'cycle-watch');
+    assert.ok(r.everyMin <= 1);
+  });
+
+  test('cycle: an update that never came falls back to the tier ladder', () => {
+    const late = FEED_CYCLE.cycleMin + FEED_CYCLE.watchMaxMin + 1;
+    const r = nextPollForCycle({ nowMs: at(late), hoursToKickoff: 2, tierEveryMin: 10, lastFeedChangeMs: at(0) });
+    assert.strictEqual(r.mode, 'cycle-lost');
+    assert.strictEqual(r.nextPollAtMs, at(late + 10));
+  });
+
+  test('cycle: beyond the horizon the ladder is already coarser, leave it alone', () => {
+    const r = nextPollForCycle({ nowMs: at(0), hoursToKickoff: 100, tierEveryMin: 120, lastFeedChangeMs: at(0) });
+    assert.strictEqual(r.mode, 'tier');
+  });
+
+  test('cycle: everyMin is always next - now, so the closing floor can derive the last poll', () => {
+    for (const mins of [0, 60, 169, 175, 230]) {
+      const r = nextPollForCycle({ nowMs: at(mins), hoursToKickoff: 3, tierEveryMin: 5, lastFeedChangeMs: at(0) });
+      assert.strictEqual(r.nextPollAtMs - r.everyMin * M, at(mins));
+    }
+  });
+
+  test('cycle: over a 3h cycle it polls far less than every 5 minutes', () => {
+    let now = at(0), polls = 0, last = at(0);
+    while (now < at(FEED_CYCLE.cycleMin)) {
+      const r = nextPollForCycle({ nowMs: now, hoursToKickoff: 2.5, tierEveryMin: 5, lastFeedChangeMs: last });
+      now = Math.max(r.nextPollAtMs, now + 5 * M); // engine runs every 5 min
+      polls++;
+    }
+    assert.ok(polls < 12, `polls in one cycle: ${polls} (flat 5-min = 36)`);
+  });
+}
+console.log(`\ncycle tests done: ${passed} passed so far`);

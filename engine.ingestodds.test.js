@@ -23,7 +23,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { insertOddsRows, extractTotalsRows, isHalfLine, chunk, IN_CHUNK, confirmLatest } = require('./ingestOdds');
+const { insertOddsRows, extractTotalsRows, isHalfLine, chunk, IN_CHUNK, confirmLatest, prefetchLastOdds } = require('./ingestOdds');
 
 /** A supabase double recording every insert call and its payload shape. */
 function insertSpy({ failBatch = false, failRows = new Set() } = {}) {
@@ -239,4 +239,34 @@ test('confirmLatest counts a failed chunk and keeps going', async () => {
   const sb = { from: () => ({ upsert: async () => ({ error: i++ === 0 ? { message: 'boom' } : null }) }) };
   const r = await confirmLatest(sb, Array.from({ length: 700 }, () => ({})));
   assert.deepStrictEqual(r, { written: 200, failed: 500 });
+});
+
+/* ── THE PREFETCH WAS CAPPED AT 1,000 ROWS (11 Oct 2026) ──────────────────
+   Most keys looked never-seen, so every quote was re-inserted every poll:
+   17k odds rows on 7 Oct, 466k on 10 Oct. The exact read returns one jsonb
+   value; without migration 141 it falls back to odds_latest, never to the
+   capped read. */
+test('prefetch reads the exact last price per key through the rpc', async () => {
+  const calls = [];
+  const sb = {
+    rpc: async (name, args) => { calls.push([name, args.p_match_ids.length]);
+      return { data: [{ match_id: 'm1', bookmaker: 'bet365', market: 'h2h', market_line: null, home_odds: 3.2 }], error: null }; },
+    from: () => { throw new Error('must not read odds directly'); },
+  };
+  const m = await prefetchLastOdds(sb, ['m1']);
+  assert.deepStrictEqual(calls, [['odds_last_per_key', 1]]);
+  assert.strictEqual(m.get('m1:bet365:h2h:').home_odds, 3.2);
+});
+
+test('prefetch falls back to odds_latest when the rpc is not deployed', async () => {
+  const q = { select() { return q; }, in() { return q; }, order() { return q; },
+              range: async () => ({ data: [{ match_id: 'm1', bookmaker: 'bet365', market: 'h2h', market_line: null, home_odds: 3.1 }], error: null }) };
+  let tables = [];
+  const sb = {
+    rpc: async () => ({ data: null, error: { message: 'Could not find the function public.odds_last_per_key in the schema cache' } }),
+    from: t => { tables.push(t); return q; },
+  };
+  const m = await prefetchLastOdds(sb, ['m1']);
+  assert.deepStrictEqual(tables, ['odds_latest']);
+  assert.strictEqual(m.get('m1:bet365:h2h:').home_odds, 3.1);
 });
