@@ -73,7 +73,21 @@ const SETTLE_MS = Number(process.env.HOMEPAGE_SETTLE_MS || 25_000)
  * @param {{ pickState: string|null, apiPriced: number|null }} x
  * @returns {{ ok: boolean, code: string, message: string }}
  */
-function verdict({ pickState, apiPriced }) {
+function verdict({ pickState, apiPriced, fixtures = null, railLoading = false }) {
+  // THE REDESIGNED HOMEPAGE HAS NO PICK CARD (11 Oct 2026). `HomeRebuilt` is
+  // what production serves behind `isRedesigned('home')`, and it leads with
+  // rails instead. Its Fixtures rail carries `data-home-rail="fixtures"`, and
+  // real cards inside it are the same answer the pick card used to give: a
+  // stranger is being shown football. Before this, the alarm looked only for
+  // `data-pick-state`, found nothing on the new page, and failed every hour
+  // on a page that was working.
+  if (typeof fixtures === 'number' && fixtures > 0) {
+    return {
+      ok: true,
+      code: 'ok',
+      message: `${fixtures} fixture card(s) are on screen for an anonymous visitor.`,
+    }
+  }
   // A DRAWN PICK IS THE PAGE WORKING, and so is an honest "no pick today".
   // §1.2 is explicit that some days there is nothing, and migration 124 made
   // that rare rather than impossible — an alarm that fired on it would be an
@@ -100,7 +114,9 @@ function verdict({ pickState, apiPriced }) {
   // never produced the product, which is the 5 Sep incident exactly.
   const stuck = pickState === 'loading'
     ? 'The free-pick card is STILL LOADING'
-    : 'The free-pick card is not on the page at all'
+    : railLoading
+      ? 'The fixtures rail is STILL LOADING'
+      : 'Neither the free-pick card nor any fixture card is on the page at all'
   if (apiPriced == null) {
     return {
       ok: false,
@@ -143,6 +159,19 @@ function readPickState() {
   return el ? el.getAttribute('data-pick-state') : null
 }
 
+/* The redesigned homepage's Fixtures rail. `data-home-rail` is declared by
+   components/board/rebuild/home/sections.tsx (Rail) and HomeView, pinned by
+   components/board/rebuild/home/home.test.jsx. Counts the CARDS, so an empty
+   rail is 0, and reports the skeleton separately so "still loading" and
+   "nothing here" stay different answers. */
+function readHomeRail() {
+  const rail = document.querySelector('[data-home-rail="fixtures"]')
+  return {
+    fixtures: rail ? rail.children.length : null,
+    railLoading: !!document.querySelector('[data-home-rail="fixtures-loading"]'),
+  }
+}
+
 async function readPage() {
   const { chromium } = require('playwright')
   // TWO ENVIRONMENTS, TWO WAYS TO FIND A BROWSER. This repo's other Playwright
@@ -168,14 +197,17 @@ async function readPage() {
     // whatever it is still saying, which is the state this exists to catch.
     const deadline = Date.now() + SETTLE_MS
     let pickState = null
+    let rail = { fixtures: null, railLoading: false }
     for (;;) {
       pickState = await page.evaluate(readPickState)
+      rail = await page.evaluate(readHomeRail)
       if (pickState === 'pick' || pickState === 'none' || pickState === 'error') break
+      if (typeof rail.fixtures === 'number' && rail.fixtures > 0) break
       if (Date.now() > deadline) break
       await page.waitForTimeout(1_000)
     }
 
-    return { status, pickState }
+    return { status, pickState, ...rail }
   } finally {
     await browser.close()
   }
@@ -224,10 +256,13 @@ async function main() {
   }
 
   const apiPriced = await readApi()
-  const v = verdict({ pickState: page.pickState, apiPriced })
+  const v = verdict({
+    pickState: page.pickState, apiPriced, fixtures: page.fixtures, railLoading: page.railLoading,
+  })
 
   console.log(`base            ${BASE}`)
   console.log(`pick card       ${page.pickState ?? '(absent)'}`)
+  console.log(`fixtures rail   ${page.fixtures ?? (page.railLoading ? '(loading)' : '(absent)')}`)
   console.log(`api priced      ${apiPriced == null ? '(not checked)' : apiPriced}`)
   console.log('')
 
@@ -242,6 +277,6 @@ async function main() {
   process.exit(1)
 }
 
-module.exports = { verdict, readPickState }
+module.exports = { verdict, readPickState, readHomeRail }
 
 if (require.main === module) main()
