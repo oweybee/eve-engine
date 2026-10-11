@@ -29,7 +29,7 @@
  *   X_INPLAY_ENABLED             '1' also posts the alert flags to X (own switch)
  *   X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET
  *   X_INPLAY_DAILY_CAP           X posts per UK day (default 6)
- *   X_INPLAY_LEAGUES             API-Football league ids for X (default: big 9)
+ *   X_INPLAY_LEAGUES             API-Football league ids for X (default: 14 leagues, see lib/inplayFlagsX)
  *   SITE_URL                     default https://www.maxedge.live
  *   DRY_RUN=1                    read and print, post nothing, write nothing
  */
