@@ -1,11 +1,13 @@
 # MaxEdge — post the /in-play tracker's flags to the Plus-only #in-play
-# Discord channel as matches happen. See postInplayFlags.js.
+# Discord channel as matches happen, and the alert flags from the big
+# competitions to X. See postInplayFlags.js and lib/inplayFlagsX.js.
 #
 # Each run polls itself for up to 25 minutes (every 3 minutes) and stops as
 # soon as nothing is in play, so the cron only has to keep a run alive. The
 # shared Discord kill switch applies: DISCORD_POSTING_ENABLED must be '1'.
+# X has its own: X_INPLAY_ENABLED must be '1', and the four X_* keys set.
 
-name: In-play flags to Discord
+name: In-play flags
 
 on:
   # GitHub's own cron is not a cadence here: on 11 Oct this fired at 02:05,
@@ -53,5 +55,12 @@ jobs:
           DISCORD_POSTING_ENABLED:   ${{ secrets.DISCORD_POSTING_ENABLED }}
           DISCORD_WEBHOOK_INPLAY:    ${{ secrets.DISCORD_WEBHOOK_INPLAY }}
           INPLAY_FLAGS_POLL_SEC:     ${{ vars.INPLAY_FLAGS_POLL_SEC }}
+          X_INPLAY_ENABLED:          ${{ secrets.X_INPLAY_ENABLED }}
+          X_API_KEY:                 ${{ secrets.X_API_KEY }}
+          X_API_SECRET:              ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN:            ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET:     ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          X_INPLAY_DAILY_CAP:        ${{ vars.X_INPLAY_DAILY_CAP }}
+          X_INPLAY_LEAGUES:          ${{ vars.X_INPLAY_LEAGUES }}
           DRY_RUN:                   ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '' }}
         run: node postInplayFlags.js

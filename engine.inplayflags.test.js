@@ -2,7 +2,8 @@
 // lib/inplayFlags — which tracker flags are new, and what a post may say.
 
 const assert = require('assert');
-const { flagKey, postable, newFlags, flagPost, MAX_FLAGS_PER_MATCH, LATEST_MINUTE } = require('./lib/inplayFlags');
+const { flagKey, postable, newFlags, flagPost, withCard, MAX_FLAGS_PER_MATCH, LATEST_MINUTE } = require('./lib/inplayFlags');
+const { teamMark } = require('./lib/discordCards');
 
 let n = 0;
 const t = (name, fn) => { fn(); n++; console.log(`ok ${n} ${name}`); };
@@ -68,6 +69,61 @@ t('a post never names a price, a stake or a pick', () => {
 
 t('banned words refuse the post rather than soften it', () => {
   assert.throws(() => flagPost(match(), flag('pressure', 'home', { detail: 'A guaranteed goal is coming.' })));
+});
+
+
+t('the card rides as the embed image and the text survives', () => {
+  const p = withCard(flagPost(match(), flag('red-card', 'away')), 'flag.png');
+  assert.strictEqual(p.embeds[0].image.url, 'attachment://flag.png');
+  assert(p.embeds[0].description.includes('Arsenal 0–1 Chelsea'));
+  assert.deepStrictEqual(p.allowed_mentions, { parse: [] });
+});
+
+t('crests are replaced by a three-letter mark', () => {
+  assert.strictEqual(teamMark('Tottenham'), 'TOT');
+  assert.strictEqual(teamMark('Manchester United'), 'MU');
+  assert.strictEqual(teamMark('Toronto FC'), 'TOR');
+  assert.strictEqual(teamMark('CF Montreal'), 'MON');
+  assert.strictEqual(teamMark(''), '?');
+});
+
+const { xEligible, xFlagText, FRAMES, DEFAULT_LEAGUES } = require('./lib/inplayFlagsX');
+const { skeletonOf, mayPost } = require('./lib/xGuard');
+
+t('X takes only alert flags from listed leagues, matched by id', () => {
+  const L = new Set(DEFAULT_LEAGUES);
+  assert(xEligible(flag('red-card', 'away'), '39', L));
+  assert(xEligible(flag('fav-trailing', 'home'), 39, L));
+  assert(!xEligible(flag('pressure', 'home'), '39', L));
+  assert(!xEligible(flag('goals-due', null), '39', L));
+  assert(!xEligible(flag('red-card', 'away'), '235', L));   // Russian "Premier League"
+  assert(!xEligible(flag('red-card', 'away'), '71', L));    // Brazilian "Serie A"
+  assert(!xEligible(flag('red-card', 'away'), null, L));
+});
+
+t('X text: facts, footer, no link, and every frame a different shape', () => {
+  const m = match({ minute: 78, homeGoals: 1, awayGoals: 0, homeTeam: 'Manchester United', awayTeam: 'Tottenham' });
+  const f = flag('red-card', 'away', { detail: "Rodrigo Bentancur sent off (78'). Tottenham down to 10 men." });
+  const shapes = new Set();
+  for (let i = 0; i < FRAMES.length; i++) {
+    const s = xFlagText(m, f, i);
+    assert(s.endsWith('18+ | begambleaware | Live match facts, not advice'));
+    assert(s.includes('Manchester United 1-0 Tottenham'));
+    assert(!/https?:|maxedge\.live/i.test(s));
+    assert(s.length <= 280, `frame ${i} is ${s.length} chars`);
+    shapes.add(skeletonOf(s));
+  }
+  assert.strictEqual(shapes.size, FRAMES.length);
+  // More frames than the guard's window, or the channel deadlocks.
+  assert(FRAMES.length > 4);
+});
+
+t('the guard always finds a free frame after four posts', () => {
+  const m = match(); const f = flag('fav-trailing', 'home', { detail: 'Arsenal were 60% to win before kick-off and trail 0-1.' });
+  const recent = [0, 1, 2, 3].map(i => skeletonOf(xFlagText(m, f, i)));
+  const env = { X_POSTING_ENABLED: '1', X_DAILY_CAP: '6' };
+  const free = FRAMES.map((_, i) => mayPost({ text: xFlagText(m, f, i), recentSkeletons: recent, postedToday: 4, env }).ok);
+  assert(free.filter(Boolean).length >= 2);
 });
 
 console.log(`\n${n} passed`);
