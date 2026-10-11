@@ -1,0 +1,90 @@
+name: Site monitors
+
+# MOVED HERE FROM eve-frontend ON 11 OCT 2026.
+#
+# GitHub stopped starting jobs in the private eve-frontend repo ("recent
+# account payments have failed or your spending limit needs to be increased"),
+# so both of its monitors had been failing in ~4 seconds without ever running.
+# This repo is public, and Actions minutes are free on a public repo. Neither
+# check needs the frontend's code: they look at maxedge.live the way a visitor
+# does.
+#
+#   homepage-alive    every hour   opens / in a real browser as an anonymous
+#                                  visitor and counts the games on the board
+#   deploy-freshness  every 6h     checks the cached pages are still rebuilding
+#
+# A failed scheduled run turns the Actions tab red and GitHub emails the repo
+# owner; `::error::` puts the verdict on the run summary.
+on:
+  schedule:
+    - cron: '41 * * * *'      # homepage-alive
+    - cron: '17 */6 * * *'    # deploy-freshness
+  workflow_dispatch:
+    inputs:
+      check:
+        description: 'Which check to run'
+        type: choice
+        options: [both, homepage-alive, deploy-freshness]
+        default: both
+      base_url:
+        description: 'Origin to check'
+        required: false
+        default: 'https://maxedge.live'
+
+permissions:
+  contents: read
+
+jobs:
+  homepage-alive:
+    name: Is a stranger shown any football?
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '41 * * * *') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.check != 'deploy-freshness')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Playwright only, in a scratch directory: the engine's own dependencies
+      # have nothing to do with this check, and installing them would give the
+      # alarm one more way to go quiet.
+      - name: Install Playwright
+        run: |
+          mkdir -p "$RUNNER_TEMP/pw" && cd "$RUNNER_TEMP/pw"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund playwright@1.62.1
+          npx playwright install --with-deps chromium
+
+      - name: Is the homepage showing anybody any football?
+        env:
+          NODE_PATH: ${{ runner.temp }}/pw/node_modules
+          HOMEPAGE_BASE_URL: ${{ github.event.inputs.base_url || 'https://maxedge.live' }}
+          # Optional. With them the check can say WHICH layer failed. The anon
+          # key is the publishable one that already ships in the site's bundle.
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node scripts/monitors/homepage-alive.js
+
+  deploy-freshness:
+    name: Are the live pages still regenerating?
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '17 */6 * * *') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.check != 'homepage-alive')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # No install at all: built-in fetch against a public site.
+      - name: Check deploy freshness
+        env:
+          FRESHNESS_BASE_URL: ${{ github.event.inputs.base_url || 'https://maxedge.live' }}
+        run: node scripts/monitors/deploy-freshness.js
