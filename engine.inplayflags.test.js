@@ -126,4 +126,31 @@ t('the guard always finds a free frame after four posts', () => {
   assert(free.filter(Boolean).length >= 2);
 });
 
+
+const { xFresh, xPriority, eventMinute } = require('./lib/inplayFlagsX');
+
+t('X timing: a red card is news for 10 minutes, nothing goes out after 70', () => {
+  const red = flag('red-card', 'home', { detail: "Pablo Marin sent off (66'). Real Sociedad down to 10 men." });
+  assert.strictEqual(eventMinute(red), 66);
+  assert.strictEqual(eventMinute({ detail: "X sent off (90+2')." }), 92);
+  assert(xFresh(match({ minute: 70, period: '2H' }), red));
+  assert(!xFresh(match({ minute: 83, period: '2H' }), red));          // the 11 Oct post
+  const early = flag('red-card', 'home', { detail: "Y sent off (54')." });
+  assert(!xFresh(match({ minute: 67, period: '2H' }), early));        // 13 minutes late
+  const fav = flag('fav-trailing', 'away');
+  assert(xFresh(match({ minute: 31, period: '1H' }), fav));
+  assert(!xFresh(match({ minute: 72, period: '2H' }), fav));
+  assert(xFresh(match({ minute: 45, period: 'HT' }), fav));
+  assert(!xFresh(match({ minute: null, period: '1H' }), fav));
+});
+
+t('X order: favourite behind first, then earliest', () => {
+  const items = [
+    { match: match({ minute: 20 }), flag: flag('red-card', 'home') },
+    { match: match({ minute: 60 }), flag: flag('fav-trailing', 'home') },
+    { match: match({ minute: 30 }), flag: flag('fav-trailing', 'away') },
+  ].sort(xPriority);
+  assert.deepStrictEqual(items.map(i => `${i.flag.kind}:${i.match.minute}`), ['fav-trailing:30', 'fav-trailing:60', 'red-card:20']);
+});
+
 console.log(`\n${n} passed`);
