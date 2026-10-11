@@ -66,19 +66,17 @@ const LOOP_MINUTES = parseFloat(process.env.INPLAY_LOOP_MINUTES || '50');
 const PASS_INTERVAL_SECONDS = parseFloat(process.env.INPLAY_PASS_INTERVAL_SECONDS || '60');
 
 /**
- * The Odds API step is metered and the others are not, so it gets its own,
- * slower clock. At a 60-second core cadence it would otherwise fire ~50x per
- * GitHub tick where it used to fire once; its own budget guard would throttle
- * that, but spending the guard is not the same as not needing it. The live
- * price and the clock come from API-Football, which is what has to be fast.
+ * EVERY STEP IS ON ONE CLOCK (11 Oct 2026). The multi-book in-play step was
+ * the only metered one and it read The Odds API, which is gone: the key was
+ * rejected with a 401 from 10 Oct 14:31 and the provider decision is
+ * API-Football only. The live price and the clock come from API-Football,
+ * which is what has to be fast.
  */
-const ODDS_API_INTERVAL_SECONDS = parseFloat(process.env.INPLAY_ODDS_API_INTERVAL_SECONDS || '600');
-
 /** Per-script wall clock. A hung child must not eat the pass it is inside. */
 const STEP_TIMEOUT_SECONDS = parseFloat(process.env.INPLAY_STEP_TIMEOUT_SECONDS || '180');
 
 /**
- * The pipeline, in order. `metered` marks the step on the slower clock.
+ * The pipeline, in order. One clock: there is no metered step any more.
  *
  * ORDER IS LOAD-BEARING and is the workflow's own: the price and match state
  * are ingested first, values computed against them, and only then is the chart
@@ -88,7 +86,6 @@ const STEP_TIMEOUT_SECONDS = parseFloat(process.env.INPLAY_STEP_TIMEOUT_SECONDS 
 const STEPS = [
   { name: 'live odds + match state', cmd: 'ingestLiveOdds.js' },
   { name: 'compute in-play values',  cmd: 'computeInplayValues.js' },
-  { name: 'odds api (multi-book)',   cmd: 'ingestOddsApi.js', args: ['--inplay'], metered: true },
   { name: 'live match statistics',   cmd: 'fetchLiveStats.js' },
   { name: 'in-play market series',   cmd: 'captureInplaySeries.js' },
   { name: 'post in-play signals',    cmd: 'postToX.js' },
@@ -139,13 +136,12 @@ function runStep(step) {
   });
 }
 
-async function onePass(supabase, { meteredDue }) {
+async function onePass(supabase) {
   const live = await anythingLive(supabase);
   if (!live) { console.log('[loop] nothing in the live window — skipping the pass'); return { skipped: true, failures: 0 }; }
 
   let failures = 0;
   for (const step of STEPS) {
-    if (step.metered && !meteredDue) { console.log(`[loop] skip ${step.name} (metered, next in its own window)`); continue; }
     const code = await runStep(step);
     if (code !== 0) { failures++; console.error(`[loop] ${step.name} exited ${code} — continuing`); }
   }
@@ -157,20 +153,18 @@ async function main(watchdog) {
   const loopUntil = ONCE ? 0 : started + LOOP_MINUTES * 60_000;
 
   console.log(`[loop] in-play loop — ${ONCE ? 'single pass' : `${LOOP_MINUTES}m, a pass every ${PASS_INTERVAL_SECONDS}s`}` +
-              `, metered steps every ${ODDS_API_INTERVAL_SECONDS}s, step timeout ${STEP_TIMEOUT_SECONDS}s`);
+              `, step timeout ${STEP_TIMEOUT_SECONDS}s`);
   // Before the client, so --dry-run needs no credentials and can be run
   // anywhere to read back the plan.
   if (DRY) { console.log(`[loop] --dry-run: would run ${STEPS.map(s => s.cmd).join(' → ')}`); return; }
   const supabase = getClient();
 
-  let pass = 0, skipped = 0, failures = 0, lastMetered = 0;
+  let pass = 0, skipped = 0, failures = 0;
   for (;;) {
     pass++;
-    const meteredDue = (Date.now() - lastMetered) >= ODDS_API_INTERVAL_SECONDS * 1000;
     watchdog?.stage(`pass ${pass}`);
-    console.log(`[loop] pass ${pass} at ${new Date().toISOString()}${meteredDue ? ' (metered due)' : ''}`);
-    const r = await onePass(supabase, { meteredDue });
-    if (meteredDue && !r.skipped) lastMetered = Date.now();
+    console.log(`[loop] pass ${pass} at ${new Date().toISOString()}`);
+    const r = await onePass(supabase);
     if (r.skipped) skipped++;
     failures += r.failures;
 
@@ -200,4 +194,4 @@ if (require.main === module) {
     .catch(err => { watchdog.finish(); console.error('[loop] fatal:', err.message); process.exit(1); });
 }
 
-module.exports = { STEPS, LOOP_MINUTES, PASS_INTERVAL_SECONDS, ODDS_API_INTERVAL_SECONDS, anythingLive };
+module.exports = { STEPS, LOOP_MINUTES, PASS_INTERVAL_SECONDS, anythingLive };

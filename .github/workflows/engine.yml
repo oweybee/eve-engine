@@ -55,10 +55,8 @@ on:
   # handles that case.
   #
   # Why that is safe on cost: ingestOdds.js self-gates on
-  # engine_plan.next_run_at (API-Football is polled when the plan says so, not
-  # when a run starts), and ingestOddsApi.js is held by the daily credit
-  # ceiling in lib/oddsApiBudget.js. The repo is public, so Actions minutes
-  # are free.
+  # engine_plan.next_run_at — API-Football is polled when the plan says so,
+  # not when a run starts. The repo is public, so Actions minutes are free.
   #
   # To change the cadence, change the pg_cron job (new migration), not this
   # file. Adding a `schedule:` back gives the engine two clocks again.
@@ -125,14 +123,6 @@ jobs:
       LAMBDA_BOARD_ENABLED:      'false'
       # onnxruntime-node postinstall fetches CUDA extras we don't need
       ONNXRUNTIME_NODE_INSTALL_CUDA: 'skip'
-      # The Odds API — UK soft-book BREADTH (complements API-Football).
-      # Sized for the 100k-credit tier; the guard stops at ODDS_API_RESERVE.
-      ODDS_API_KEY:              ${{ secrets.ODDS_API_KEY }}
-      ODDS_API_REGIONS:          ${{ vars.ODDS_API_REGIONS || 'uk' }}
-      ODDS_API_MARKETS_PREMATCH: ${{ vars.ODDS_API_MARKETS_PREMATCH || 'h2h,totals' }}
-      ODDS_API_MARKETS_INPLAY:   ${{ vars.ODDS_API_MARKETS_INPLAY || 'h2h' }}
-      ODDS_API_RESERVE:          ${{ vars.ODDS_API_RESERVE || '2000' }}
-      ODDS_API_MONTHLY_CREDITS:  ${{ vars.ODDS_API_MONTHLY_CREDITS || '100000' }}
       SHARPNESS_MULTI_BOOK:      ${{ vars.SHARPNESS_MULTI_BOOK  }}
       SHARPNESS_SINGLE_BOOK:     ${{ vars.SHARPNESS_SINGLE_BOOK }}
       MULTI_BOOK_THRESHOLD:      ${{ vars.MULTI_BOOK_THRESHOLD  }}
@@ -177,22 +167,11 @@ jobs:
       # ordering meant the soft books were always one tick stale: computeValues
       # priced from whatever was in `odds` when the loop started, and the Odds
       # API rows landed afterwards, so the best price a reader saw came from
-      # the previous cycle's book set. Measured 22 Aug 2026, the first day this
-      # feed produced anything: of 183 fixtures priced at 07:57, ZERO had a
-      # best price at one of the 17 newly-arrived books — every one of them had
-      # been written to `odds` minutes earlier and none had reached a
-      # computation. The breadth was in the database and out of the product.
-      #
-      # Sequence now: API-Football ingest and The Odds API ingest both land,
-      # THEN compute prices against the full board, then snapshot. The loop
-      # still re-ingests API-Football on each of its iterations — that is the
-      # frequency half and it is unchanged; this step is the breadth half and
-      # once per tick is what it is paced for.
-      - name: Ingest odds — The Odds API (soft-book breadth)
-        id: odds_api
-        continue-on-error: true
-        run: node ingestOddsApi.js
-
+      # THE BREADTH HALF IS GONE (11 Oct 2026). This note used to explain the
+      # ordering between two providers: The Odds API for breadth, API-Football
+      # for frequency. The Odds API was removed after its key was rejected with
+      # a 401 from 10 Oct 14:31 and the provider decision settled on
+      # API-Football alone. One ingest, one clock.
       - name: Live odds loop (ingest -> compute -> snapshot)
         id: ingest_loop
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_ingest != 'true' }}
@@ -398,7 +377,6 @@ jobs:
           add () { [ "$2" = "failure" ] && BAD="${BAD}\n- $1"; return 0; }
           add "plan (planDay.js)"                                   "${{ steps.plan.outcome }}"
           add "ingest-loop (ingestOdds + computeValues + snapshot)"  "${{ steps.ingest_loop.outcome }}"
-          add "odds-api breadth (ingestOddsApi.js)"                  "${{ steps.odds_api.outcome }}"
           add "integrity (verifyIntegrity.js)"                       "${{ steps.integrity.outcome }}"
           add "post-signals (postToX.js)"                            "${{ steps.post.outcome }}"
           add "settle-results (fetchResults.js)"                     "${{ steps.results.outcome }}"
