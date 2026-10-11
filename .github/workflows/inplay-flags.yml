@@ -8,6 +8,15 @@
 name: In-play flags to Discord
 
 on:
+  # GitHub's own cron is not a cadence here: on 11 Oct this fired at 02:05,
+  # 08:56 and then not again through a full Sunday afternoon of football. The
+  # engine run is dispatched every 5 minutes by the trigger-engine Supabase
+  # cron and is reliable, so each finished engine run starts this one. The
+  # concurrency group keeps one run polling and at most one queued, so this
+  # costs nothing extra while a run is already alive (public repo, free minutes).
+  workflow_run:
+    workflows: ['MaxEdge EVE Engine']
+    types: [completed]
   schedule:
     - cron: '*/15 * * * *'
   workflow_dispatch:
