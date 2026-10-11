@@ -37,7 +37,7 @@ const https            = require('https');
 const { getClient }    = require('./lib/supabaseClient');
 const { bookmakerKey } = require('./lib/bookmakers');
 const apiQuota = require('./lib/apiFootballQuota');
-const { intervalFor, DEFAULT_TIERS } = require('./lib/pollBudget');
+const { intervalFor, nextPollForCycle, DEFAULT_TIERS } = require('./lib/pollBudget');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -127,7 +127,7 @@ async function loadPlan(supabase) {
  * Called AFTER the fixture loop completes (P1-5 fix).
  * A failed loop leaves the plan untouched so the scheduler retries.
  */
-async function advancePlan(supabase, plan, polledIds = [], kickoffs = new Map()) {
+async function advancePlan(supabase, plan, polledIds = [], kickoffs = new Map(), changedIds = new Set()) {
   const nextRunAt  = new Date(Date.now() + plan.interval_minutes * 60 * 1000);
   const nextHour   = nextRunAt.getUTCHours();
   const effectiveEnd = ACTIVE_END_HOUR === 24 ? 0 : ACTIVE_END_HOUR;
@@ -155,12 +155,23 @@ async function advancePlan(supabase, plan, polledIds = [], kickoffs = new Map())
       const ko = kickoffs.get(String(id));
       const hours = ko ? (new Date(ko).getTime() - nowMs) / 3_600_000 : NaN;
       const next = Number.isFinite(hours) ? intervalFor(hours, ladder) : null;
-      const everyMin = next?.everyMin ?? cur.everyMin;
+      const tierEveryMin = next?.everyMin ?? cur.everyMin;
+      // CYCLE-AWARE: see nextPollForCycle in lib/pollBudget.js. A change seen
+      // this run re-anchors the cycle; otherwise the last anchor carries.
+      const lastFeedChangeAt = changedIds.has(String(id))
+        ? new Date(nowMs).toISOString()
+        : (cur.lastFeedChangeAt ?? null);
+      const cyc = nextPollForCycle({
+        nowMs, hoursToKickoff: hours, tierEveryMin,
+        lastFeedChangeMs: lastFeedChangeAt ? new Date(lastFeedChangeAt).getTime() : NaN,
+      });
       scheduleUpdate[String(id)] = {
         ...cur,
         ...(next ? { tier: next.tier } : {}),
-        everyMin,
-        nextPollAt: new Date(nowMs + everyMin * 60 * 1000).toISOString(),
+        everyMin: cyc.everyMin,
+        mode: cyc.mode,
+        lastFeedChangeAt,
+        nextPollAt: new Date(cyc.nextPollAtMs).toISOString(),
       };
     }
   }
@@ -251,28 +262,64 @@ async function prefetchLastOdds(supabase, matchIds) {
   if (!matchIds.length) return new Map();
 
   const since48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+  const keyOf = row => `${row.match_id}:${row.bookmaker}:${row.market}:${row.market_line ?? ''}`;
 
-  // DESC order WITHIN each chunk: the first occurrence of a key is the most
-  // recent row for it. Keys never span chunks, because a chunk holds whole
-  // match ids, so chunking cannot split a key's history across two queries.
-  // Key includes market_line so different lines of the same market don't
-  // collide — which now matters a great deal more, since the totals extractor
-  // writes every half line rather than 2.5 alone.
+  // ── THIS READ WAS CAPPED AT 1,000 ROWS, AND THE CAP FED ITSELF ─────────────
+  //
+  // It selected every `odds` row for the chunk in the last 48h and kept the
+  // first per key. PostgREST returns at most 1,000 rows and says nothing, so
+  // most (book, market, line) keys were never seen, `oddsHaveMoved(undefined)`
+  // said true, and the quote was inserted again on EVERY poll. More rows made
+  // the truncation worse, which made more rows: 17k `odds` rows on 7 Oct 2026,
+  // 466k on 10 Oct. `odds` stopped being a price-change log, and every reader
+  // that treats it as one (CLV, takeability, closing lines) read noise.
+  //
+  // `odds_last_per_key` (migration 141) does the latest-per-key reduction in
+  // Postgres and returns ONE jsonb value, which the row cap does not apply to.
+  // Until 141 is applied, fall back to `odds_latest` (one row per key, so a
+  // paged read is small). That baseline is "last seen" rather than "last
+  // stored", which can let a run of 0.01 steps go unrecorded; acceptable for a
+  // fallback, and far better than re-inserting everything.
   const map = new Map();
+  let usedFallback = false;
   for (const slice of chunk(matchIds)) {
-    const { data, error } = await supabase
-      .from('odds')
-      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-      .in('match_id', slice)
-      .gte('fetched_at', since48h)
-      .order('fetched_at', { ascending: false });
-    if (error) throw new Error(`prefetchLastOdds: ${error.message}`);
-    for (const row of data ?? []) {
-      const key = `${row.match_id}:${row.bookmaker}:${row.market}:${row.market_line ?? ''}`;
-      if (!map.has(key)) map.set(key, row);
+    let rows = null;
+    if (!usedFallback) {
+      const { data, error } = await supabase.rpc('odds_last_per_key',
+        { p_match_ids: slice, p_since: since48h });
+      if (!error) rows = Array.isArray(data) ? data : [];
+      else if (/odds_last_per_key|function|schema cache/i.test(error.message)) usedFallback = true;
+      else throw new Error(`prefetchLastOdds: ${error.message}`);
+    }
+    if (rows === null) rows = await readLatestFallback(supabase, slice);
+    for (const row of rows) {
+      const k = keyOf(row);
+      if (!map.has(k)) map.set(k, row);
     }
   }
+  if (usedFallback) {
+    console.warn('[ingest] odds_last_per_key unavailable (migration 141 not applied?) — ' +
+                 'move detection is using odds_latest');
+  }
   return map;
+}
+
+async function readLatestFallback(supabase, matchIds) {
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from('odds_latest')
+      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, confirmed_at')
+      .in('match_id', matchIds)
+      .order('match_id', { ascending: true })
+      .order('bookmaker', { ascending: true })
+      .order('market', { ascending: true })
+      .order('market_line', { ascending: true, nullsFirst: true })
+      .range(from, from + 999);
+    if (error) throw new Error(`prefetchLastOdds fallback: ${error.message}`);
+    out.push(...(data ?? []));
+    if (!data || data.length < 1000) return out;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -744,6 +791,9 @@ async function ingest() {
 
   /** match:book:market:line -> the quote as last confirmed. See below. */
   const latestRows = new Map();
+  /** Fixtures whose prices CHANGED this run: a new feed batch. Drives the
+   *  cycle-aware schedule in advancePlan. A first-ever quote is not a change. */
+  const changedIds = new Set();
   const confirmedAt = new Date().toISOString();
 
   // ── Phase 2: process results SERIALLY — the shared match/odds Maps are
@@ -827,6 +877,7 @@ async function ingest() {
         const last = lastOddsMap.get(key);
 
         if (!oddsHaveMoved(last, row)) continue;
+        if (last) changedIds.add(extIdStr);
 
         if (DRY_RUN) {
           console.log(`    [dry-run] ${row.market} ${row.bookmaker} H=${row.home_odds} D=${row.draw_odds} A=${row.away_odds}`);
@@ -894,7 +945,7 @@ async function ingest() {
       // It was `dueIds`, which left every closing-floor fixture un-advanced and
       // therefore due again on the very next run.
       const kickoffs = new Map([...resolved].map(([extId, m]) => [String(extId), m.kickoffAt]));
-      await advancePlan(supabase, plan, pollIds, kickoffs);
+      await advancePlan(supabase, plan, pollIds, kickoffs, changedIds);
     } catch (err) {
       // advancePlan failure is non-fatal to the odds data already written,
       // but we must surface it — the scheduler is now in an undefined state.
@@ -1006,7 +1057,7 @@ if (require.main === module) {
 
 module.exports = {
   ingest, extractH2hRows, extractTotalsRows, extractBttsRows, oddsHaveMoved, confirmLatest,
-  insertOddsRows,
+  insertOddsRows, prefetchLastOdds,
   isHalfLine,
   chunk, IN_CHUNK,
 };
