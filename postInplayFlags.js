@@ -29,6 +29,7 @@
  *   X_INPLAY_ENABLED             '1' also posts the alert flags to X (own switch)
  *   X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET
  *   X_INPLAY_DAILY_CAP           X posts per UK day (default 6)
+ *   X_INPLAY_RED_CAP             of which red cards (default 3)
  *   X_INPLAY_LEAGUES             API-Football league ids for X (default: 14 leagues, see lib/inplayFlagsX)
  *   SITE_URL                     default https://www.maxedge.live
  *   DRY_RUN=1                    read and print, post nothing, write nothing
@@ -38,7 +39,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { postWebhook, postWebhookFiles, channelEnabled } = require('./lib/discordClient');
 const { flagCard } = require('./lib/discordCards');
 const { newFlags, flagPost, withCard } = require('./lib/inplayFlags');
-const { xEligible, xFlagText, leaguesFrom, FRAMES } = require('./lib/inplayFlagsX');
+const { xEligible, xFresh, xPriority, xFlagText, leaguesFrom, FRAMES } = require('./lib/inplayFlagsX');
 const { postTweet, uploadImage, getXConfig } = require('./lib/xClient');
 const { mayPost } = require('./lib/xGuard');
 
@@ -46,6 +47,8 @@ const { mayPost } = require('./lib/xGuard');
 const xEnabled = () => process.env.X_INPLAY_ENABLED === '1';
 const X_DAILY_CAP = Number(process.env.X_INPLAY_DAILY_CAP) || 6;
 const X_MAX_PER_PASS = 2;
+/** Red cards per UK day on X, so favourite-behind flags keep room. */
+const X_RED_DAILY_CAP = Number(process.env.X_INPLAY_RED_CAP) || 3;
 
 /** Card off with INPLAY_FLAGS_CARD=0; any other value (or unset) draws it. */
 const CARD_ON = process.env.INPLAY_FLAGS_CARD !== '0';
@@ -155,13 +158,15 @@ async function xLedger(supabase, matchIds) {
       posted.get(r.match_id).add(r.flag_key);
     }
   }
-  const { count, error: cErr } = await supabase.from('inplay_flag_x_posts')
-    .select('match_id', { count: 'exact', head: true }).gte('posted_at', ukDayStart().toISOString());
+  const { data: todayRows, error: cErr } = await supabase.from('inplay_flag_x_posts')
+    .select('flag_key').gte('posted_at', ukDayStart().toISOString());
   if (cErr) throw new Error(`inplay_flag_x_posts count: ${cErr.message}`);
+  const count = (todayRows ?? []).length;
+  const reds = (todayRows ?? []).filter(r => String(r.flag_key).startsWith('red-card')).length;
   const { data: recent, error: rErr } = await supabase.from('inplay_flag_x_posts')
     .select('skeleton').order('posted_at', { ascending: false }).limit(8);
   if (rErr) throw new Error(`inplay_flag_x_posts recent: ${rErr.message}`);
-  return { posted, today: count ?? 0, recent: (recent ?? []).map(r => r.skeleton).filter(Boolean) };
+  return { posted, today: count, reds, recent: (recent ?? []).map(r => r.skeleton).filter(Boolean) };
 }
 
 async function leagueIds(supabase, matchIds) {
@@ -191,7 +196,9 @@ async function xPass(supabase, tracker) {
   if (ctx.today >= X_DAILY_CAP) { console.log(`[inplayFlags:x] daily cap ${ctx.today}/${X_DAILY_CAP}`); return 0; }
   const allowed = leaguesFrom();
   const todo = newFlags(tracker, ctx.posted)
-    .filter(({ match, flag }) => xEligible(flag, leagues.get(match.id), allowed))
+    .filter(({ match, flag }) => xEligible(flag, leagues.get(match.id), allowed) && xFresh(match, flag))
+    .filter(({ flag }) => flag.kind !== 'red-card' || ctx.reds < X_RED_DAILY_CAP)
+    .sort(xPriority)
     .slice(0, X_MAX_PER_PASS);
   console.log(`[inplayFlags:x] ${todo.length} flag(s) for X, ${ctx.today}/${X_DAILY_CAP} today`);
 
@@ -216,6 +223,7 @@ async function xPass(supabase, tracker) {
       const mediaId = await uploadImage(png);
       const res = await postTweet(pick.text, { mediaIds: [mediaId] });
       sent++; ctx.today++; ctx.recent.unshift(pick.skeleton);
+      if (flag.kind === 'red-card') ctx.reds++;
       await supabase.from('inplay_flag_x_posts').update({ external_msg_id: res.message_id })
         .eq('match_id', match.id).eq('flag_key', key);
     } catch (e) {
