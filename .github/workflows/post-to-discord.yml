@@ -12,13 +12,11 @@
 name: Post to Discord
 
 on:
-  schedule:
-    - cron: '7,22,37,52 * * * *'   # signals
-    - cron: '41 * * * *'           # results
-    - cron: '13 8 * * 1'           # weekly record, Monday 08:13 UTC
-    - cron: '5 7 * * *'            # trends to #hit-rates, daily 07:05 UTC
-    - cron: '35 9,12,17 * * *'     # movers to #market-pulse, 3x daily
-    - cron: '27 8 * * 1'           # edge table to #edge-table, Monday 08:27 UTC
+  # NO `schedule:` HERE, ON PURPOSE. GitHub delivered ~15 of ~120 scheduled
+  # runs a day and never once the daily trends or Monday ticks, so the clock
+  # is pg_cron -> the trigger-discord edge function -> workflow_dispatch
+  # (migrations/145). Do not add a schedule back: the digests have no dedupe
+  # and two clocks would double-post.
   workflow_dispatch:
     inputs:
       mode:
