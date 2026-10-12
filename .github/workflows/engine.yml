@@ -287,10 +287,31 @@ jobs:
 
       # Freeze pre-match goal expectations (λ) for upcoming matches — the anchor
       # for the in-play win-probability engine (computeInplayValues Stage 3).
+      # ── THE SECOND BIGGEST STEP, AND THE ONLY UNBOUNDED ONE (11 Oct) ────
+      #
+      # Measured across the four most recent runs, median seconds per step:
+      #
+      #   528  Live odds loop            (self-bounded by LOOP_BUDGET_SECONDS)
+      #   231  Capture in-play baselines (no bound at all)
+      #    65  everything else together
+      #   ---
+      #   827  against timeout-minutes: 15
+      #
+      # Seventy-three seconds of margin, and this step held the only part of
+      # it that nothing was watching. The run examined on 11 Oct was killed in
+      # "Team statistics & referee tendencies" two steps later, having spent
+      # 263s here. `continue-on-error` does not help: it catches a FAILURE,
+      # and running long is not failing.
+      #
+      # Five minutes is roughly twice the median, so an ordinary run never
+      # meets it and a pathological one stops instead of taking the steps
+      # below with it. A step that ends on its own timeout is named in the
+      # health report; a job that dies takes the report with it.
       - name: Capture in-play baselines
         id: baseline
         if: ${{ !cancelled() }}
         continue-on-error: true
+        timeout-minutes: 5
         run: node captureBaseline.js
 
       # Daily forward-test ledger for the suggested accumulators (idempotent).
