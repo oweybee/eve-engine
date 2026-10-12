@@ -69,4 +69,17 @@ t('a season with fewer than two ranked clubs posts nothing', () => {
   assert.strictEqual(edgePost(edgeSummary([m(1, 'A', 'B', 'H')]), '2026/27', divisionLabel), null);
 });
 
+t('two feed spellings of one club tally as one row under its display name', () => {
+  const { buildEdgeTable } = require('./lib/edgeTable');
+  const m = (h, a, ftr) => ({ season: 'X', div: 'E2', home_team: h, away_team: a, ftr,
+    close_home: 2.1, close_draw: 3.4, close_away: 3.5 });
+  const { teams } = buildEdgeTable([m('Sheffield Wed', 'Luton', 'H'), m('Luton', 'Sheffield Weds', 'A'),
+    m('For Sittard', 'Ajax', 'D')]);
+  const wed = teams.filter(t => /Sheffield/.test(t.team));
+  assert.strictEqual(wed.length, 1);
+  assert.strictEqual(wed[0].team, 'Sheffield Wednesday');
+  assert.strictEqual(wed[0].wins, 2);
+  assert.ok(teams.some(t => t.team === 'Fortuna Sittard'));
+});
+
 console.log(`\n${n} passed`);
