@@ -22,7 +22,7 @@
 #     2. computeValues.js — Kaunitz edge detection; price-change signals
 #     3. captureSnapshot.js — odds time-series for charts
 #   Once per job:
-#     5. postToX.js          — Telegram: VALUE / RUBY / ODDS MOVEMENT alerts
+#     5. postToX.js          — Telegram alerts: RETIRED, off unless vars.TELEGRAM_POSTING_ENABLED == '1'
 #     6. fetchResults.js     — settle completed fixtures
 #     7. fetchMatchDetails.js — lineups + stats
 # ────────────────────────────────────────────────────────────────────────────
@@ -263,9 +263,16 @@ jobs:
         continue-on-error: true
         run: node verifyIntegrity.js
 
-      - name: Post signals
+      # TELEGRAM IS RETIRED (owner, 10 Oct 2026: Discord is the community's
+      # home now). This step was still posting ~25-55 signals a day into the
+      # retired channel, with 0 linked members, while X got 6 a day. It is OFF
+      # unless the repo VARIABLE `TELEGRAM_POSTING_ENABLED` is exactly '1'
+      # (Settings -> Secrets and variables -> Actions -> Variables), so it can
+      # come back without a code change. Nothing else reads the 'telegram'
+      # rows in posted_signals; Discord and X post from their own workflows.
+      - name: Post signals (Telegram, retired)
         id: post
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_post != 'true' }}
+        if: ${{ vars.TELEGRAM_POSTING_ENABLED == '1' && (github.event_name != 'workflow_dispatch' || inputs.skip_post != 'true') }}
         run: node postToX.js
 
       - name: Settle results
