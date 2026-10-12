@@ -64,7 +64,7 @@ begin
       ('discord-trends',  '5 7 * * *',          'trends'),
       ('discord-movers',  '35 9,12,17 * * *',   'movers'),
       ('discord-weekly',  '13 8 * * 1',         'weekly'),
-      ('discord-edge',    '27 8 * * 1',         'edge')
+      ('discord-edge',    '27 8 * * 2',         'edge')
     ) as t(name, sched, mode)
   loop
     perform cron.schedule(j.name, j.sched, format($c$
