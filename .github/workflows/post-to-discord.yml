@@ -74,7 +74,7 @@ jobs:
           elif [ "${{ github.event.schedule }}" = "13 8 * * 1" ]; then echo "m=weekly" >> "$GITHUB_OUTPUT";
           elif [ "${{ github.event.schedule }}" = "5 7 * * *" ]; then echo "m=trends" >> "$GITHUB_OUTPUT";
           elif [ "${{ github.event.schedule }}" = "35 9,12,17 * * *" ]; then echo "m=movers" >> "$GITHUB_OUTPUT";
-          elif [ "${{ github.event.schedule }}" = "27 8 * * 1" ]; then echo "m=edge" >> "$GITHUB_OUTPUT";
+          elif [ "${{ github.event.schedule }}" = "27 8 * * 2" ]; then echo "m=edge" >> "$GITHUB_OUTPUT";
           else echo "m=signals" >> "$GITHUB_OUTPUT"; fi
 
       - name: Post

@@ -28,6 +28,11 @@ on:
     # fixtures ahead. Offset off the hour so it does not queue behind the
     # engine's own cron.
     - cron: '20 6,23 * * *'
+    # Monday 17:20 UTC, an extra chance at the weekend. football-data usually
+    # posts the weekend's results during Monday (Aug 2026: both weekends landed
+    # between the Monday morning and Monday night runs), and the #edge-table
+    # card goes out Tuesday 08:27 UTC, so this gives it two runs to catch it.
+    - cron: '20 17 * * 1'
   workflow_dispatch:
     inputs:
       season:
