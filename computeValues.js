@@ -55,6 +55,9 @@ const ANCHOR_BOOK = 'pinnacle';
 // which is the authority — imported rather than re-listed so the two cannot
 // drift. Pinnacle is absent because it is the anchor.
 const BETTABLE_SET = new Set(BETTABLE_BOOKS);
+// Books that may SET a best price: the panel minus the non-UK books. See
+// lib/marketAnchor NON_UK_BOOKS. The panel still counts for the floor.
+const TAKEABLE_SET = new Set(ma.TAKEABLE_BOOKS);
 
 // DEVIG_MARGIN is GONE. It shaved 2% off the consensus probability as a safety
 // buffer against the consensus's own error. There is nothing to buy back from a
@@ -297,6 +300,7 @@ function computeConsensus(oddsRows) {
     // claim that this price is available to them; a price at a book they
     // cannot open makes the claim false.
     const validRows = bettableRows.filter(r => {
+      if (!TAKEABLE_SET.has(r.bookmaker)) return false;
       const v = parseFloat(r[field]);
       return Number.isFinite(v) && v > 1.0 && v < 1000;
     });
