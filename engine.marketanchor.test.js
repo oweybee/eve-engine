@@ -350,5 +350,21 @@ test('the scorecard is hidden below 6pp, where the two are statistically tied', 
   assert.strictEqual(veto.scorecardVisible(undefined), false);
 });
 
+test('a non-UK book never sets the best price (Man City v PSG, 14 Oct 2026)', () => {
+  // dafabet 2.21 was the only quote above the 2.10 fair line; every UK book
+  // sat between 1.95 and 2.07. The board badged EDGE +5.4% on it.
+  const r = ma.bestBettablePrice([
+    { bookmaker: 'dafabet', odds: 2.21 }, { bookmaker: 'sbo', odds: 2.04 },
+    { bookmaker: 'marathonbet', odds: 2.03 }, { bookmaker: 'betano', odds: 2.07 },
+    { bookmaker: 'bet365', odds: 2.00 }, { bookmaker: 'williamhill', odds: 1.95 },
+  ]);
+  assert.strictEqual(r.book, 'betano');
+  assert.strictEqual(r.price, 2.07);
+  for (const b of ma.NON_UK_BOOKS) {
+    assert.ok(ma.BETTABLE_BOOKS.includes(b), `${b} stays in the panel count`);
+    assert.ok(!ma.TAKEABLE_BOOKS.includes(b), `${b} can never be the price`);
+  }
+});
+
 console.log(`\n${failed === 0 ? '✓' : '✗'} market anchor + veto: ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);
