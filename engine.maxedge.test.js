@@ -384,9 +384,11 @@ test('NOTHING OUTSIDE THE PRIME BOX CAN BE PRIME — and it is the BOX that says
       c1.rows[0].signal_category.toLowerCase());
   });
 
-  // The same row with no de-vigged probability to hand: it must still be
-  // INSERTED, carrying no verdict. Losing a signal because the panel was
-  // incomplete would be a worse failure than not scoring it.
+  // The same row with no de-vigged probability to hand. This used to assert the
+  // row was still INSERTED with a null verdict; the owner reversed that on
+  // 15 Oct 2026 after 121 such MARKET_ANCHORED rows reached production (the
+  // "Market Steamer" cohort — an arbitrage best-price panel nothing can
+  // de-vig). A MARKET_ANCHORED detection now produces a scored row or no row.
   const c1b = captureClient();
   await insertValueSignals(c1b, [{
     match_id: '00000000-0000-0000-0000-000000000003',
@@ -397,13 +399,61 @@ test('NOTHING OUTSIDE THE PRIME BOX CAN BE PRIME — and it is the BOX that says
     odds_fetched_at: new Date().toISOString(),
     _kickoff_at: new Date(Date.now() + 6 * 3600e3).toISOString(),
     _mktDevig: { home: null, draw: null, away: null },
+    _mktDevigReason: { home: 'no margin to remove — overround 0.9830 is at or below 1', draw: null, away: null },
   }], 'prematch', 'MARKET_ANCHORED');
 
-  test('an un-de-viggable panel still writes the row, with a null verdict', () => {
-    assert.strictEqual(c1b.rows.length, 1, 'the signal is not lost');
-    assert.strictEqual(c1b.rows[0].mxs, null);
-    assert.strictEqual(c1b.rows[0].market_prob, null);
-    assert.strictEqual(c1b.rows[0].gap_basis, null);
+  test('an un-de-viggable MARKET_ANCHORED panel writes NO row', () => {
+    assert.strictEqual(c1b.rows.length, 0, 'an unscored MARKET_ANCHORED row was written');
+  });
+
+  // The property itself, over both writers: every MARKET_ANCHORED row that
+  // reaches value_signals carries model_prob and mxs, or none is written.
+  const { unscoredReason } = require('./computeValues');
+  test('unscoredReason: scored MARKET_ANCHORED passes, unscored names its reason', () => {
+    assert.strictEqual(unscoredReason('MARKET_ANCHORED', { model_prob: 0.45, market_prob: 0.44, mxs: 60 }), null);
+    assert.match(unscoredReason('MARKET_ANCHORED', { model_prob: null, market_prob: null, mxs: null }, 'overround 0.98'),
+      /no de-vigged market probability — overround 0\.98/);
+    assert.ok(unscoredReason('MARKET_ANCHORED', { model_prob: 0.45, market_prob: 0.44, mxs: null }));
+    // Architectures with no measured sigma keep writing unscored rows on purpose.
+    assert.strictEqual(unscoredReason('LAMBDA_MC', { model_prob: null, mxs: null }), null);
+    assert.strictEqual(unscoredReason('INPLAY_DIXON_COLES', { model_prob: 0.4, mxs: null }), null);
+  });
+
+  const c1c = captureClient();
+  await insertSecondarySignals(c1c, [{
+    match_id: '00000000-0000-0000-0000-000000000004',
+    outcome: 'over', market: 'totals', market_line: 2.5,
+    detected_odds: 1.91, detected_edge: 0.048,
+    bookmaker: 'bet365', model_architecture: 'MARKET_ANCHORED',
+    market_prob: null,
+    kickoff_at: new Date(Date.now() + 9 * 3600e3).toISOString(),
+  }], 'prematch');
+
+  test('the secondary path writes no unscored MARKET_ANCHORED row either', () => {
+    assert.strictEqual(c1c.rows.length, 0);
+  });
+
+  // And a steamer-shaped detection that CAN be de-vigged — late, a big edge,
+  // the same h2h path — is written with every score column filled.
+  const c1d = captureClient();
+  await insertValueSignals(c1d, [{
+    match_id: '00000000-0000-0000-0000-000000000005',
+    home_value: true, home_edge: 0.0543,
+    best_home_odds: 2.21, best_home_book: 'dafabet',
+    all_home_odds: { dafabet: 2.21, pinnacle: 2.10, bet365: 2.05, unibet: 2.08 },
+    _bookmakerCount: 10,
+    odds_fetched_at: new Date().toISOString(),
+    _kickoff_at: new Date(Date.now() + 3.9 * 3600e3).toISOString(),
+    _mktDevig: { home: 0.455, draw: null, away: null },
+  }], 'prematch', 'MARKET_ANCHORED');
+
+  test('a late, wide MARKET_ANCHORED detection is written scored', () => {
+    assert.strictEqual(c1d.rows.length, 1);
+    const r = c1d.rows[0];
+    for (const col of ['model_prob', 'market_prob', 'prob_gap', 'model_sigma', 'gap_basis',
+                       'mxs', 'mxs_raw', 'mxs_band', 'mes_basis', 'mes_efficiency']) {
+      assert.ok(r[col] != null, `${col} is null on a scorable steamer-shaped row`);
+    }
   });
 
   const c2 = captureClient();

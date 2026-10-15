@@ -405,6 +405,11 @@ function computeConsensus(oddsRows) {
       // panel was not a complete market, which makes the row unscorable rather
       // than scored against a margin-carrying number.
       p_mkt_devig: bestDevig.fair?.[outcome] ?? null,
+      // Why `p_mkt_devig` is null, when it is — devigProbs' own reason, e.g.
+      // "no margin to remove — overround 0.9830 is at or below 1". Carried so
+      // the signal writer can say WHY it declined a row rather than just that
+      // it did.
+      p_mkt_devig_reason: bestDevig.fair ? null : (bestDevig.reason ?? 'best-price panel could not be de-vigged'),
     };
   }
 
@@ -560,6 +565,11 @@ function computeMatch(match) {
       draw: draw?.p_mkt_devig ?? null,
       away: away?.p_mkt_devig ?? null,
     },
+    _mktDevigReason: {
+      home: home?.p_mkt_devig_reason ?? null,
+      draw: draw?.p_mkt_devig_reason ?? null,
+      away: away?.p_mkt_devig_reason ?? null,
+    },
   };
 
   return { skipped: false, row, hasValue: home_value || draw_value || away_value, match, consensus };
@@ -581,6 +591,31 @@ async function upsertComputedValues(supabase, rows) {
     .upsert(dbRows, { onConflict: 'match_id,model_architecture' });
 
   if (error) throw new Error(`upsertComputedValues: ${error.message}`);
+}
+
+/**
+ * Architectures that must never write a row they could not score. Only
+ * MARKET_ANCHORED for now: its sigma is measured, so an empty verdict can only
+ * mean the market side was missing. Architectures with NO measured sigma still
+ * write unscored rows on purpose — the write-layer guard
+ * (trg_score_needs_measured_sigma) records why, and a disqualified model has to
+ * keep accumulating settled results to ever re-qualify.
+ */
+const SCORE_REQUIRED = new Set(['MARKET_ANCHORED']);
+
+/**
+ * Why a scored candidate must not be inserted, or null when it may be.
+ * @param arch      the row's model_architecture
+ * @param scored    scoreSignal()'s output for the row
+ * @param mktReason devigProbs' refusal reason for the market side, if any
+ */
+function unscoredReason(arch, scored, mktReason = null) {
+  if (!SCORE_REQUIRED.has(arch)) return null;
+  if (scored?.model_prob != null && scored?.mxs != null) return null;
+  if (scored?.market_prob == null) {
+    return `no de-vigged market probability — ${mktReason ?? 'market side missing'}`;
+  }
+  return 'scoreSignal returned no score';
 }
 
 /**
@@ -641,6 +676,7 @@ async function insertValueSignals(
         // `scoreSignal` will return a null verdict rather than fall back to the
         // margin-carrying `1/odds`.
         market_prob:        row._mktDevig?.[outcome] ?? null,
+        _mktReason:         row._mktDevigReason?.[outcome] ?? null,
         _edge:              edge,
         _odds:              row[`best_${outcome}_odds`],
       });
@@ -719,6 +755,7 @@ async function insertValueSignals(
   const toInsert = [];
   let skippedSamePrice = 0;
   let skippedExisting = 0;
+  const unscored = new Map();
 
   for (const c of candidates) {
     const key      = `${c.match_id}|${c.outcome}`;
@@ -742,7 +779,7 @@ async function insertValueSignals(
     const is_mover = lastOdds != null;
     const signal_category = categoryFor({ odds: curOdds, edge: c._edge });
 
-    const { _edge, _odds, ...signalRow } = c;
+    const { _edge, _odds, _mktReason, ...signalRow } = c;
     // THE VERDICT, FROZEN AT DETECTION (migration 048's four columns, plus the
     // two probabilities from 039). Nothing wrote any of these until 6 Aug 2026,
     // so every row detected after 048's backfill carried a NULL score and the
@@ -750,12 +787,34 @@ async function insertValueSignals(
     // hold. Storing it here is also the more correct of the two options: this is
     // what the signal was actually judged against, and the market moves.
     const scored = scoreSignal({ ...signalRow, detected_odds: curOdds, detected_edge: c._edge });
+
+    // NO SCORE, NO ROW (15 Oct 2026, owner ruling — reverses "an
+    // un-de-viggable panel still writes the row"). MARKET_ANCHORED has a
+    // measured sigma, so the only way `scoreSignal` comes back empty here is
+    // that the market side is missing: almost always the best-price panel
+    // summing to <= 1 (an arbitrage across books, commonest close to kickoff),
+    // which `devigProbs` correctly refuses. Those rows were inserted with an
+    // edge and no verdict — 121 of them by 15 Oct, labelled "Market Steamer" at
+    // settlement whenever they beat the close — and every read path then had to
+    // remember to drop them. The edge itself was measured against a panel that
+    // is not a market, so there is nothing honest to keep. Skip and say why.
+    const reason = unscoredReason(signalRow.model_architecture, scored, _mktReason);
+    if (reason) {
+      unscored.set(reason, (unscored.get(reason) ?? 0) + 1);
+      console.log(
+        `[value_signals] skip ${c.match_id} ${c.outcome} @ ${curOdds} ` +
+        `(${signalRow.model_architecture}, edge ${c._edge}): ${reason}`
+      );
+      continue;
+    }
     toInsert.push({ ...signalRow, ...scored, signal_category, is_mover });
   }
 
   console.log(
     `[value_signals] candidates=${candidates.length}` +
-    ` skipped_same_price=${skippedSamePrice} skipped_existing=${skippedExisting} to_insert=${toInsert.length}`
+    ` skipped_same_price=${skippedSamePrice} skipped_existing=${skippedExisting}` +
+    ` skipped_unscored=${[...unscored.values()].reduce((a, b) => a + b, 0)}` +
+    ` to_insert=${toInsert.length}`
   );
 
   if (!toInsert.length) return 0;
@@ -836,6 +895,18 @@ async function insertSecondarySignals(supabase, candidates, phase = 'prematch') 
   const toInsert = [];
   for (const c of candidates) {
     if (seen.has(key(c))) continue;
+    // The same rule as the 1X2 path: a MARKET_ANCHORED row that cannot be
+    // scored is not written. Checked before the key is claimed, so a later
+    // scorable candidate for the same selection is not shut out by it.
+    const scored = scoreSignal(c);
+    const reason = unscoredReason(c.model_architecture, scored);
+    if (reason) {
+      console.log(
+        `[secondary] skip ${c.match_id} ${c.market} ${c.outcome} @ ${c.detected_odds} ` +
+        `(${c.model_architecture}, edge ${c.detected_edge}): ${reason}`
+      );
+      continue;
+    }
     seen.add(key(c));
     // `model_prob` IS a column, and has been since migration 039. This line
     // read `const { model_prob, ...rest } = c;  // model_prob is internal, not a
@@ -848,7 +919,7 @@ async function insertSecondarySignals(supabase, candidates, phase = 'prematch') 
     // mxs / mxs_band all exist.
     toInsert.push({
       ...c,
-      ...scoreSignal(c),
+      ...scored,
       phase,
       detected_mes:    null,             // frontend computes risk-adjusted MES
       signal_category: categoryFor({ odds: c.detected_odds, edge: c.detected_edge }),
@@ -1095,6 +1166,8 @@ module.exports = {
   computeMatch,
   upsertComputedValues,
   insertValueSignals,
+  unscoredReason,
+  SCORE_REQUIRED,
   insertSecondarySignals,
   fetchStatsLookups,
   updateBetOfDay,
