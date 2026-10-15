@@ -22,7 +22,7 @@ const sm            = require('./lib/secondaryMarkets');
 const { beginWatchdog } = require('./lib/watchdog');
 const { bookmakerKey } = require('./lib/bookmakers');
 const { categoryFor } = require('./lib/signalTier');
-const { scoreSignal } = require('./lib/maxedge');
+const { scoreSignal, GAP_BASIS } = require('./lib/maxedge');
 const { shinDevig } = require('./lib/devig');
 // The whole module, not just the book list: `gate()` is applied to every
 // outcome below so the engine, the match-card API and the backtest all read
@@ -404,12 +404,18 @@ function computeConsensus(oddsRows) {
       // the market side of every score written off this row. Null when the
       // panel was not a complete market, which makes the row unscorable rather
       // than scored against a margin-carrying number.
-      p_mkt_devig: bestDevig.fair?.[outcome] ?? null,
-      // Why `p_mkt_devig` is null, when it is — devigProbs' own reason, e.g.
-      // "no margin to remove — overround 0.9830 is at or below 1". Carried so
-      // the signal writer can say WHY it declined a row rather than just that
-      // it did.
-      p_mkt_devig_reason: bestDevig.fair ? null : (bestDevig.reason ?? 'best-price panel could not be de-vigged'),
+      // The market side, and which vector it came from. On an ordinary panel
+      // this is the best-price de-vig above (basis 'devigged'); on an
+      // arbitrage panel it falls back per `marketSide` below.
+      ...(() => {
+        const m = marketSide({ raw, outcome, bestDevig, outcomes: OUTCOMES });
+        return {
+          p_mkt_devig:        m.prob,
+          p_mkt_basis:        m.basis,
+          p_mkt_arb:          m.isArbPanel,
+          p_mkt_devig_reason: m.reason,
+        };
+      })(),
     };
   }
 
@@ -570,6 +576,16 @@ function computeMatch(match) {
       draw: draw?.p_mkt_devig_reason ?? null,
       away: away?.p_mkt_devig_reason ?? null,
     },
+    _mktBasis: {
+      home: home?.p_mkt_basis ?? null,
+      draw: draw?.p_mkt_basis ?? null,
+      away: away?.p_mkt_basis ?? null,
+    },
+    _mktArb: {
+      home: home?.p_mkt_arb ?? false,
+      draw: draw?.p_mkt_arb ?? false,
+      away: away?.p_mkt_arb ?? false,
+    },
   };
 
   return { skipped: false, row, hasValue: home_value || draw_value || away_value, match, consensus };
@@ -591,6 +607,98 @@ async function upsertComputedValues(supabase, rows) {
     .upsert(dbRows, { onConflict: 'match_id,model_architecture' });
 
   if (error) throw new Error(`upsertComputedValues: ${error.message}`);
+}
+
+/**
+ * THE MARKET SIDE WHEN THE BEST-PRICE PANEL IS AN ARBITRAGE (15 Oct 2026).
+ *
+ * The best price per outcome across books can sum to <= 1 — an arb across
+ * books, commonest close to kickoff — and `devigProbs` correctly refuses to
+ * remove a margin that is not there. Those detections were being written with
+ * no score (121 MARKET_ANCHORED rows by 15 Oct), and the settled record says
+ * they are the strongest cohort the architecture has: n=105, no-vig CLV
+ * +6.4%, 94% beat the close, against n=558, +2.6%, 78% for scored rows. So the
+ * market side is taken from a vector that DOES carry a margin, in order:
+ *
+ *   a) 'advised_book_line' — the advised book's own full 1X2 line, Shin
+ *      de-vigged. The book whose price we are quoting, judged by its own line.
+ *   b) 'median_panel'      — the median price per outcome across the bettable
+ *      books quoting all three outcomes (at least MEDIAN_PANEL_MIN_BOOKS).
+ *   c) nothing             — prob null, and the writer skips the row.
+ *
+ * EACH STEP MUST ALSO BE COHERENT against the price we quote: fair_prob ×
+ * best_odds may not exceed 1 (+ numeric(6,4) rounding), or
+ * `trg_score_needs_coherent_market_prob` strips the score in the database and
+ * an unscored row reaches the table anyway. An incoherent step falls through.
+ *
+ * The anchor probability and the edge are untouched — this only chooses the
+ * `market_prob` handed to the same `scoreSignal`.
+ *
+ * @returns {{prob:number|null, basis:string|null, isArbPanel:boolean, reason:string|null}}
+ */
+const MEDIAN_PANEL_MIN_BOOKS = 3;
+
+function median(xs) {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+function coherent(prob, odds) {
+  // Mirrors the trigger: allowance = 1 + 0.00005 * odds, on the value as stored.
+  const stored = Math.round(prob * 1e4) / 1e4;
+  return stored * odds <= 1 + 0.00005 * odds;
+}
+
+function marketSide({ raw, outcome, bestDevig, outcomes = ['home', 'draw', 'away'] }) {
+  if (bestDevig?.fair) {
+    const p = bestDevig.fair[outcome];
+    return Number.isFinite(p)
+      ? { prob: p, basis: GAP_BASIS, isArbPanel: false, reason: null }
+      : { prob: null, basis: null, isArbPanel: false, reason: 'best-price panel could not be de-vigged' };
+  }
+  // Only an ARBITRAGE panel falls back. An incomplete panel (a missing leg)
+  // is not a market at any book, and stays unscored as before.
+  if (!bestDevig?.arbitrage) {
+    return { prob: null, basis: null, isArbPanel: false,
+             reason: bestDevig?.reason ?? 'best-price panel could not be de-vigged' };
+  }
+  const tried = [`best-price panel: ${bestDevig.reason}`];
+  const price = raw[outcome]?.max_odds;
+
+  // a) the advised book's own full line
+  const book = raw[outcome]?.max_book;
+  const line = {};
+  for (const o of outcomes) line[o] = raw[o]?.allOdds?.[book];
+  if (book && outcomes.every(o => Number.isFinite(line[o]) && line[o] > 1)) {
+    const d = ma.devigProbs(line, outcomes);
+    const p = d.fair?.[outcome];
+    if (Number.isFinite(p) && coherent(p, price)) {
+      return { prob: p, basis: 'advised_book_line', isArbPanel: true, reason: null };
+    }
+    tried.push(`${book}'s own line: ${d.fair ? `incoherent (${p.toFixed(4)} x ${price})` : d.reason}`);
+  } else {
+    tried.push(`${book ?? 'advised book'} quotes no full 1X2 line`);
+  }
+
+  // b) the median panel over books quoting all three outcomes
+  const books = Object.keys(raw[outcomes[0]]?.allOdds ?? {})
+    .filter(b => outcomes.every(o => Number.isFinite(raw[o]?.allOdds?.[b])));
+  if (books.length >= MEDIAN_PANEL_MIN_BOOKS) {
+    const vec = {};
+    for (const o of outcomes) vec[o] = median(books.map(b => raw[o].allOdds[b]));
+    const d = ma.devigProbs(vec, outcomes);
+    const p = d.fair?.[outcome];
+    if (Number.isFinite(p) && coherent(p, price)) {
+      return { prob: p, basis: 'median_panel', isArbPanel: true, reason: null };
+    }
+    tried.push(`median panel (${books.length} books): ${d.fair ? `incoherent (${p.toFixed(4)} x ${price})` : d.reason}`);
+  } else {
+    tried.push(`median panel: ${books.length} book(s) quote all three, need ${MEDIAN_PANEL_MIN_BOOKS}`);
+  }
+
+  // c) nothing de-viggable
+  return { prob: null, basis: null, isArbPanel: true, reason: tried.join('; ') };
 }
 
 /**
@@ -677,6 +785,10 @@ async function insertValueSignals(
         // margin-carrying `1/odds`.
         market_prob:        row._mktDevig?.[outcome] ?? null,
         _mktReason:         row._mktDevigReason?.[outcome] ?? null,
+        _mktBasis:          row._mktBasis?.[outcome] ?? null,
+        // Every row states it, so a bulk insert never relies on a column
+        // default (PostgREST sends NULL for a key one row lacks).
+        is_arb_panel:       row._mktArb?.[outcome] === true,
         _edge:              edge,
         _odds:              row[`best_${outcome}_odds`],
       });
@@ -779,7 +891,7 @@ async function insertValueSignals(
     const is_mover = lastOdds != null;
     const signal_category = categoryFor({ odds: curOdds, edge: c._edge });
 
-    const { _edge, _odds, _mktReason, ...signalRow } = c;
+    const { _edge, _odds, _mktReason, _mktBasis, ...signalRow } = c;
     // THE VERDICT, FROZEN AT DETECTION (migration 048's four columns, plus the
     // two probabilities from 039). Nothing wrote any of these until 6 Aug 2026,
     // so every row detected after 048's backfill carried a NULL score and the
@@ -807,6 +919,11 @@ async function insertValueSignals(
       );
       continue;
     }
+    // The SAME scoreSignal and the same maths; only the label says which
+    // vector the market side was de-vigged from. scoreSignal stamps
+    // 'devigged' whenever it scores, which is right for the best-price panel
+    // and wrong for a fallback, so a fallback names itself.
+    if (_mktBasis && _mktBasis !== GAP_BASIS) scored.gap_basis = _mktBasis;
     toInsert.push({ ...signalRow, ...scored, signal_category, is_mover });
   }
 
@@ -1168,6 +1285,8 @@ module.exports = {
   insertValueSignals,
   unscoredReason,
   SCORE_REQUIRED,
+  marketSide,
+  MEDIAN_PANEL_MIN_BOOKS,
   insertSecondarySignals,
   fetchStatsLookups,
   updateBetOfDay,
