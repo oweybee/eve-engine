@@ -280,6 +280,19 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_results != 'true' }}
         run: node fetchResults.js
 
+      # MARKET_ANCHORED_TOTALS — the Pinnacle-anchored rule on over/under,
+      # PAPER-TRADED ONLY (migration 150). Writes `paper_trades` and nothing
+      # else: no value_signals, no board, no Record, no broadcast. Logs every
+      # fresh half-goal-line hit at first sight and settles completed ones.
+      # Never gates the pipeline. Publishing is a separate owner decision after
+      # paper_trade_gate() says PASS.
+      - name: Paper-trade totals (MARKET_ANCHORED_TOTALS)
+        id: paper_totals
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node paperTradeTotals.js
+
       # ELO ladder feeds the in-play half-time supermodel (computeInplayValues
       # Stage 2). Self-gates on ELO_REFRESH_HOURS so it only fully recomputes a
       # few times a day, not every 5-minute tick.
@@ -408,6 +421,7 @@ jobs:
           add "integrity (verifyIntegrity.js)"                       "${{ steps.integrity.outcome }}"
           add "post-signals (postToX.js)"                            "${{ steps.post.outcome }}"
           add "settle-results (fetchResults.js)"                     "${{ steps.results.outcome }}"
+          add "paper-totals (paperTradeTotals.js)"                   "${{ steps.paper_totals.outcome }}"
           add "elo ladder (computeElo.js)"                           "${{ steps.elo.outcome }}"
           add "in-play baselines (captureBaseline.js)"               "${{ steps.baseline.outcome }}"
           add "suggested accas (recordAccas.js)"                     "${{ steps.accas.outcome }}"
