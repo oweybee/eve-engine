@@ -384,26 +384,171 @@ test('NOTHING OUTSIDE THE PRIME BOX CAN BE PRIME — and it is the BOX that says
       c1.rows[0].signal_category.toLowerCase());
   });
 
-  // The same row with no de-vigged probability to hand: it must still be
-  // INSERTED, carrying no verdict. Losing a signal because the panel was
-  // incomplete would be a worse failure than not scoring it.
-  const c1b = captureClient();
-  await insertValueSignals(c1b, [{
-    match_id: '00000000-0000-0000-0000-000000000003',
-    home_value: true, home_edge: 0.09,
-    best_home_odds: 2.20, best_home_book: 'bet365',
-    all_home_odds: { bet365: 2.20, pinnacle: 2.14, williamhill: 2.10, unibet: 2.12 },
-    _bookmakerCount: 18,
+  // ── ARBITRAGE PANELS (15 Oct 2026). The best price per outcome across books
+  // sums to <= 1, so the best-price vector cannot be de-vigged. The market side
+  // falls back to (a) the advised book's own line, (b) the median panel, and
+  // only then (c) no row. Driven through computeConsensus -> computeMatch ->
+  // insertValueSignals, the real path, not a hand-built row.
+  const { computeMatch, marketSide } = require('./computeValues');
+  const now = Date.now();
+  const kick = new Date(now + 3.9 * 3600e3).toISOString();
+  const quote = (bookmaker, h, d, a) => ({
+    bookmaker, market: 'h2h', home_odds: h, draw_odds: d, away_odds: a,
+    fetched_at: new Date(now - 60e3).toISOString(),
+  });
+  const matchWith = (id, books) => ({
+    id, kickoff_at: kick, status: 'scheduled',
+    odds: [quote('pinnacle', 2.10, 3.80, 3.60), ...books],
+  });
+  const insertFrom = async match => {
+    const r = computeMatch(match);
+    const c = captureClient();
+    if (r && !r.skipped) await insertValueSignals(c, [r.row], 'prematch', 'MARKET_ANCHORED');
+    return { r, rows: c.rows };
+  };
+
+  // (a) bet365 quotes a full line and holds the best home price; the panel's
+  // best draw and away come from other books and together form an arb.
+  const advised = await insertFrom(matchWith('00000000-0000-0000-0000-0000000000a1', [
+    quote('bet365',      2.40, 3.40, 3.00),   // its own line: overround 1.044
+    quote('williamhill', 2.05, 4.40, 3.30),
+    quote('skybet',      2.08, 3.90, 3.70),
+    quote('paddypower',  2.06, 3.85, 3.25),
+    quote('unibet_uk',   2.07, 3.80, 3.30),
+    quote('betvictor',   2.04, 3.75, 3.28),
+  ]));
+
+  test('arb panel, advised book quotes a full line -> scored row, advised_book_line', () => {
+    assert.ok(advised.r && !advised.r.skipped, 'computeMatch produced a row');
+    const home = advised.rows.find(x => x.outcome === 'home');
+    assert.ok(home, 'the home signal was written');
+    assert.strictEqual(home.gap_basis, 'advised_book_line');
+    assert.strictEqual(home.is_arb_panel, true);
+    assert.strictEqual(home.bookmaker, 'bet365');
+    for (const col of ['model_prob', 'market_prob', 'prob_gap', 'model_sigma',
+                       'mxs', 'mxs_raw', 'mxs_band', 'mes_basis', 'mes_efficiency']) {
+      assert.ok(home[col] != null, `${col} is null`);
+    }
+    // Coherent, so the database trigger cannot strip it.
+    assert.ok(home.market_prob * home.detected_odds <= 1 + 0.00005 * home.detected_odds);
+  });
+
+  test('the edge is still the anchor against the best price, untouched by the fallback', () => {
+    const home = advised.rows.find(x => x.outcome === 'home');
+    const anchorHome = advised.r.row.mes_breakdown.home.p_adj;
+    assert.ok(Math.abs(home.detected_edge - (anchorHome * 2.40 - 1)) < 1e-6);
+  });
+
+  // (b) the advised book quotes the home price only, so there is no line of
+  // its own; four books quote all three, and the best home price sits close
+  // enough to their median to be coherent against it.
+  const median = await insertFrom(matchWith('00000000-0000-0000-0000-0000000000b1', [
+    quote('bet365',      2.21, null, null),
+    quote('williamhill', 2.19, 4.40, 3.30),
+    quote('skybet',      2.18, 3.90, 3.80),
+    quote('paddypower',  2.20, 3.85, 3.25),
+    quote('unibet_uk',   2.19, 3.80, 3.30),
+    quote('betvictor',   2.18, 3.75, 3.28),
+  ]));
+
+  test('arb panel, advised book has no full line -> scored row, median_panel', () => {
+    const home = median.rows.find(x => x.outcome === 'home');
+    assert.ok(home, 'the home signal was written');
+    assert.strictEqual(home.gap_basis, 'median_panel');
+    assert.strictEqual(home.is_arb_panel, true);
+    assert.ok(home.model_prob != null && home.mxs != null);
+  });
+
+  // (c) the advised book has no line AND its price is far enough above the
+  // median that the median line would be incoherent -> nothing de-viggable.
+  const nothing = await insertFrom(matchWith('00000000-0000-0000-0000-0000000000c1', [
+    quote('bet365',      2.60, null, null),
+    quote('williamhill', 2.05, 4.40, 3.30),
+    quote('skybet',      2.08, 3.90, 3.80),
+    quote('paddypower',  2.06, 3.85, 3.25),
+    quote('unibet_uk',   2.07, 3.80, 3.30),
+    quote('betvictor',   2.04, 3.75, 3.28),
+  ]));
+
+  test('arb panel with nothing de-viggable -> no row', () => {
+    assert.strictEqual(nothing.rows.filter(x => x.outcome === 'home').length, 0);
+  });
+
+  test('marketSide names every step it tried when it gives up', () => {
+    const m = marketSide({
+      raw: {
+        home: { max_odds: 2.6, max_book: 'bet365', allOdds: { bet365: 2.6, a: 2.0, b: 2.0, c: 2.0 } },
+        draw: { max_odds: 4.4, max_book: 'a', allOdds: { a: 4.4, b: 3.8, c: 3.8 } },
+        away: { max_odds: 3.8, max_book: 'b', allOdds: { a: 3.3, b: 3.8, c: 3.3 } },
+      },
+      outcome: 'home',
+      bestDevig: { fair: null, arbitrage: true, reason: 'no margin to remove — overround 0.8758 is at or below 1' },
+    });
+    assert.strictEqual(m.prob, null);
+    assert.strictEqual(m.isArbPanel, true);
+    assert.match(m.reason, /best-price panel/);
+    assert.match(m.reason, /bet365 quotes no full 1X2 line/);
+    assert.match(m.reason, /median panel \(3 books\): incoherent/);
+  });
+
+  test('an ordinary panel keeps the devigged basis and is not flagged', () => {
+    const m = marketSide({ raw: {}, outcome: 'home',
+      bestDevig: { fair: { home: 0.44, draw: 0.27, away: 0.29 }, arbitrage: false } });
+    assert.deepStrictEqual(m, { prob: 0.44, basis: 'devigged', isArbPanel: false, reason: null });
+  });
+
+  test('every 1X2 row states is_arb_panel, so a bulk insert never sends NULL', () => {
+    assert.strictEqual(c1.rows[0].is_arb_panel, false);
+  });
+
+  // The property itself, over both writers: every MARKET_ANCHORED row that
+  // reaches value_signals carries model_prob and mxs, or none is written.
+  const { unscoredReason } = require('./computeValues');
+  test('unscoredReason: scored MARKET_ANCHORED passes, unscored names its reason', () => {
+    assert.strictEqual(unscoredReason('MARKET_ANCHORED', { model_prob: 0.45, market_prob: 0.44, mxs: 60 }), null);
+    assert.match(unscoredReason('MARKET_ANCHORED', { model_prob: null, market_prob: null, mxs: null }, 'overround 0.98'),
+      /no de-vigged market probability — overround 0\.98/);
+    assert.ok(unscoredReason('MARKET_ANCHORED', { model_prob: 0.45, market_prob: 0.44, mxs: null }));
+    // Architectures with no measured sigma keep writing unscored rows on purpose.
+    assert.strictEqual(unscoredReason('LAMBDA_MC', { model_prob: null, mxs: null }), null);
+    assert.strictEqual(unscoredReason('INPLAY_DIXON_COLES', { model_prob: 0.4, mxs: null }), null);
+  });
+
+  const c1c = captureClient();
+  await insertSecondarySignals(c1c, [{
+    match_id: '00000000-0000-0000-0000-000000000004',
+    outcome: 'over', market: 'totals', market_line: 2.5,
+    detected_odds: 1.91, detected_edge: 0.048,
+    bookmaker: 'bet365', model_architecture: 'MARKET_ANCHORED',
+    market_prob: null,
+    kickoff_at: new Date(Date.now() + 9 * 3600e3).toISOString(),
+  }], 'prematch');
+
+  test('the secondary path writes no unscored MARKET_ANCHORED row either', () => {
+    assert.strictEqual(c1c.rows.length, 0);
+  });
+
+  // And a steamer-shaped detection that CAN be de-vigged — late, a big edge,
+  // the same h2h path — is written with every score column filled.
+  const c1d = captureClient();
+  await insertValueSignals(c1d, [{
+    match_id: '00000000-0000-0000-0000-000000000005',
+    home_value: true, home_edge: 0.0543,
+    best_home_odds: 2.21, best_home_book: 'dafabet',
+    all_home_odds: { dafabet: 2.21, pinnacle: 2.10, bet365: 2.05, unibet: 2.08 },
+    _bookmakerCount: 10,
     odds_fetched_at: new Date().toISOString(),
-    _kickoff_at: new Date(Date.now() + 6 * 3600e3).toISOString(),
-    _mktDevig: { home: null, draw: null, away: null },
+    _kickoff_at: new Date(Date.now() + 3.9 * 3600e3).toISOString(),
+    _mktDevig: { home: 0.455, draw: null, away: null },
   }], 'prematch', 'MARKET_ANCHORED');
 
-  test('an un-de-viggable panel still writes the row, with a null verdict', () => {
-    assert.strictEqual(c1b.rows.length, 1, 'the signal is not lost');
-    assert.strictEqual(c1b.rows[0].mxs, null);
-    assert.strictEqual(c1b.rows[0].market_prob, null);
-    assert.strictEqual(c1b.rows[0].gap_basis, null);
+  test('a late, wide MARKET_ANCHORED detection is written scored', () => {
+    assert.strictEqual(c1d.rows.length, 1);
+    const r = c1d.rows[0];
+    for (const col of ['model_prob', 'market_prob', 'prob_gap', 'model_sigma', 'gap_basis',
+                       'mxs', 'mxs_raw', 'mxs_band', 'mes_basis', 'mes_efficiency']) {
+      assert.ok(r[col] != null, `${col} is null on a scorable steamer-shaped row`);
+    }
   });
 
   const c2 = captureClient();
