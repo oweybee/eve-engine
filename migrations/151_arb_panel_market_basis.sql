@@ -1,5 +1,11 @@
--- 150: an arbitrage best-price panel gets a market side from a vector that has
+-- 151: an arbitrage best-price panel gets a market side from a vector that has
 -- a margin, and says which one.
+--
+-- APPLIED AS 150 (15 Oct 2026, schema_migrations name
+-- '150_arb_panel_market_basis', version 20261015135852). Renumbered to 151 in
+-- the repo when #158's 150_market_anchored_totals_paper_trade.sql reached main
+-- first; it was also applied first (20261015135636). Same statements, same
+-- database — the 059 precedent.
 --
 -- WHY (15 Oct 2026). 121 MARKET_ANCHORED value_signals carried an edge and no
 -- score: the best price per outcome across books summed to <= 1 (an arb across
@@ -37,7 +43,7 @@ alter table public.value_signals
   add column if not exists is_arb_panel boolean not null default false;
 
 comment on column public.value_signals.is_arb_panel is
-  'True when the best-price panel at detection had overround <= 1, so market_prob came from a fallback vector named in gap_basis (migration 150). Not backfilled: rows before 150 read false.';
+  'True when the best-price panel at detection had overround <= 1, so market_prob came from a fallback vector named in gap_basis (migration 151, applied as 150). Not backfilled: rows before 150 read false.';
 
 do $$
 declare n int;
@@ -45,7 +51,7 @@ begin
   -- Nothing existing may have moved: no row carries a new basis or the flag.
   select count(*) into n from public.value_signals
    where is_arb_panel or gap_basis in ('advised_book_line', 'median_panel');
-  if n <> 0 then raise exception '150: % existing rows already carry a new basis/flag', n; end if;
+  if n <> 0 then raise exception '151: % existing rows already carry a new basis/flag', n; end if;
 end $$;
 
 commit;
