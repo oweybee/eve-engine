@@ -63,7 +63,8 @@ t('a post carries the score, the clock and the flag sentence, and links the matc
 t('a post never names a price, a stake or a pick', () => {
   const p = flagPost(match(), flag('pressure', 'home', { detail: 'Arsenal: 6 shots on target to 1, still behind at 0–1.' }));
   const e = p.embeds[0];
-  const s = `${e.title} ${e.description} ${e.footer.text}`.toLowerCase();   // not the url: maxedge.live
+  // The brand's address (maxedge.live, also in the footer) is not an "edge" claim, so it is removed first.
+  const s = `${e.title} ${e.description} ${e.footer.text}`.toLowerCase().replace(/maxedge\.live\S*/g, '');
   for (const w of ['bet now', 'back ', 'stake', 'edge', 'value', 'odds']) assert(!s.includes(w), `post mentions "${w}"`);
 });
 
