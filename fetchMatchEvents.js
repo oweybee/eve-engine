@@ -60,6 +60,9 @@ async function pending(supabase) {
   const done = new Set();
   for (const ids of chunk(out.map(m => String(m.external_id)), 200)) {
     const { data, error } = await supabase.from('match_event_fetches').select('fixture_id').in('fixture_id', ids);
+    // MIGRATION 152 NOT APPLIED YET: the table does not exist. Say so and stop
+    // cleanly rather than spend calls on rows we cannot write.
+    if (error && /PGRST205|42P01|does not exist|schema cache/i.test(`${error.code} ${error.message}`)) return null;
     if (error) throw new Error(`match_event_fetches: ${error.message}`);
     for (const r of data ?? []) done.add(String(r.fixture_id));
   }
@@ -71,6 +74,7 @@ async function main() {
   const supabase = getClient();
   const started = Date.now();
   const todo = await pending(supabase);
+  if (todo === null) { console.log('[events] match_event_fetches does not exist — apply migration 152. Nothing asked.'); return; }
   console.log(`[events] ${todo.length} finished match(es) in the last ${DAYS} day(s) not yet asked`);
 
   const matchByExt = new Map(todo.map(m => [String(m.external_id), m.id]));
