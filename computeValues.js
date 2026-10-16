@@ -164,19 +164,46 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled'], op
     ? opts.oddsMaxAgeMinutes * 60_000
     : ODDS_MAX_AGE_HOURS * 3_600_000;
   const freshCutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  //
+  // KEYSET ON fetched_at, NOT OFFSET ON id. `id` is a random uuid, so
+  // `order by id` cannot come off idx_odds_fetched_at: every page re-read the
+  // WHOLE window (~28k rows on 16 Oct) and sorted it to return 1,000, and a
+  // walk of N pages did that N times. Each page cost 50-190ms idle; under
+  // load one went past the 8s statement_timeout PostgREST runs under
+  // (authenticator role) and killed the tick. That was about half of all
+  // engine runs from 15 Oct 23:00 BST. Walking forward on fetched_at reads
+  // 1,000 rows straight off the index (~2ms a page).
+  //
+  // Ties: the next page starts AT the last fetched_at (gte, not gt) so rows
+  // sharing that timestamp across the boundary are not skipped, and `seen`
+  // drops the overlap. A page made entirely of one timestamp could never
+  // advance; the largest tie measured over 7 days was 67 rows, so that is a
+  // throw, not a case to handle.
   const oddsData = [];
+  const seen = new Set();
   const ODDS_PAGE = 1000;
-  for (let from = 0; ; from += ODDS_PAGE) {
+  let cursor = freshCutoff;
+  for (;;) {
     const { data, error: oddsError } = await supabase
       .from('odds')
-      .select('match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
-      .gte('fetched_at', freshCutoff)
+      .select('id, match_id, bookmaker, market, market_line, home_odds, draw_odds, away_odds, fetched_at')
+      .gte('fetched_at', cursor)
+      .order('fetched_at', { ascending: true })
       .order('id', { ascending: true })
-      .range(from, from + ODDS_PAGE - 1);
+      .limit(ODDS_PAGE);
     if (oddsError) throw new Error(`fetchMatchesForComputation[odds]: ${oddsError.message}`);
     if (!data?.length) break;
-    for (const o of data) if (matchIds.has(o.match_id)) oddsData.push(o);
+    for (const o of data) {
+      if (seen.has(o.id)) continue;
+      seen.add(o.id);
+      if (matchIds.has(o.match_id)) oddsData.push(o);
+    }
     if (data.length < ODDS_PAGE) break;
+    const last = data[data.length - 1].fetched_at;
+    if (last === data[0].fetched_at) {
+      throw new Error(`fetchMatchesForComputation[odds]: ${ODDS_PAGE}+ rows share fetched_at ${last}; keyset cannot advance`);
+    }
+    cursor = last;
   }
 
   const oddsByMatch = {};
