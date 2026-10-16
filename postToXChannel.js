@@ -45,6 +45,7 @@ const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { fetchRecentSignals, deliver, isBroadcastable, isMover, isInplay } = require('./postToX');
 const { compose, valueBody, VARIANTS, ComposeRefusal } = require('./lib/xCompose');
+const { selectionLabelForSignal } = require('./lib/selectionLabel');
 const { mayPost, skeletonOf, channelEnabled } = require('./lib/xGuard');
 const { postTweet, getXConfig } = require('./lib/xClient');
 
@@ -112,7 +113,9 @@ function bodyFor(signal, variant) {
     home: signal.match?.home_team?.name ?? '?',
     away: signal.match?.away_team?.name ?? '?',
     league: signal.match?.league?.name ?? null,
-    selection: signal.outcome,
+    // In words, never the raw key: 'home' or 'dc_1x' is not a selection a
+    // reader can act on. lib/selectionLabel mirrors public.selection_label().
+    selection: selectionLabelForSignal(signal),
     odds: parseFloat(signal.detected_odds),
     ev: parseFloat(signal.detected_edge),
     book: signal.bookmaker ?? null,
