@@ -1,0 +1,49 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — goals and cards for finished matches (the /results timeline)
+#
+# Owner, 16 Oct 2026: the Results page carries scorers and goal minutes, at
+# one extra API-Football ask per finished match. In practice it is far less:
+# `/fixtures?ids=` returns 20 fixtures with their events per call, and a
+# fixture is marked asked in `match_event_fetches` so it is never asked twice.
+# A day of ~60 finished matches is ~3 requests against a 75,000 allowance.
+#
+# Every 30 minutes is plenty — this is a record, not news. Dispatch with
+# days=14 once to backfill.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Match Events
+
+on:
+  schedule:
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'How many days back to look'
+        default: '2'
+
+concurrency:
+  group: match-events-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  events:
+    name: Fetch match events
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm install --no-audit --no-fund
+      - name: Fetch events
+        run: node fetchMatchEvents.js --days=${{ inputs.days || '2' }}
