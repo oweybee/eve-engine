@@ -212,7 +212,10 @@ t('fewer than 3 books is not a market move', () => {
 
 t('movers card never names a book, a fair price or a gap', () => {
   const p = moversPost(oddsRows, [fx]);
-  const s = [p.content, ...p.embeds.flatMap(e => [e.title, e.description, e.footer?.text])].join(' ').toLowerCase();
+  // The brand's own address (maxedge.live, now in every footer) is not an "edge" claim, so it is
+  // removed before the word check; every other mention of edge still fails.
+  const s = [p.content, ...p.embeds.flatMap(e => [e.title, e.description, e.footer?.text])].join(' ').toLowerCase()
+    .replace(/maxedge\.live\S*/g, '');
   assert(s.includes('2.95 → 3.55'));  // the away drift is this fixture's biggest move
   assert(s.includes('leeds') || s.includes('hull'));
   for (const w of ['fair', 'gap', 'value', 'b1', 'b2', 'b3', 'edge', 'prime']) assert(!s.includes(w), `movers card mentions "${w}"`);
