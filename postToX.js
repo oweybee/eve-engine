@@ -42,6 +42,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { formatLiveState } = require('./lib/inplay');
 const { liveState, adjustLambdaForCards } = require('./lib/inplayState');
 const { bookmakerLabel } = require('./lib/bookmakers');
+const { selectionLabelForSignal } = require('./lib/selectionLabel');
 const { classifyTier, dedupeConflicts, isBacked, rungFor } = require('./lib/signalTier');
 const { scoreSignal } = require('./lib/maxedge');
 const { isPublished, withheldReason, mayBroadcastInplay, inplayDisclosure, inplayLabel,
@@ -544,9 +545,13 @@ function buildMessage(signal) {
   const home    = signal.match?.home_team?.name ?? 'Home';
   const away    = signal.match?.away_team?.name ?? 'Away';
   const league  = signal.match?.league?.name ?? '';
-  // Underscores in outcomes (e.g. BTTS_YES) are Markdown italic delimiters and
-  // break Telegram's parser — render them as spaces ("BTTS YES").
-  const outcome = signal.outcome.toUpperCase().replace(/_/g, ' ');
+  // The selection in words, from lib/selectionLabel: the one formatter the
+  // Discord poster and the X channel also read, mirroring the database's
+  // selection_label(). It printed `OVER @ 1.90` with no line and no market
+  // before, which on corners or cards says nothing about what is counted, and
+  // it could not name a double chance or a handicap side at all. Underscores
+  // are Telegram's italic delimiter; the helper never emits one.
+  const outcome = selectionLabelForSignal(signal).replace(/_/g, ' ');
   const odds    = signal.detected_odds.toFixed(2);
   const edgePct = (signal.detected_edge * 100).toFixed(1);
   // detected_mes is null on every row the engine writes now (§2.4 — the
@@ -574,9 +579,6 @@ function buildMessage(signal) {
     const state = formatLiveState(
       signal.match?.goals_home, signal.match?.goals_away, signal.match?.minute
     );
-    const marketLabel = signal.market && signal.market !== 'h2h'
-      ? `${signal.market.toUpperCase()}${signal.market_line != null ? ` ${signal.market_line}` : ''} · `
-      : '';
 
     // A MAN ADVANTAGE IS WHY THE PRICE MOVED, so it goes above the price
     // rather than being left for the reader to infer. lib/inplayState is the
@@ -599,7 +601,7 @@ function buildMessage(signal) {
       `🔴 *${state}*`,
       cardLine,
       ``,
-      `${marketLabel}*${outcome}* @ *${odds}*`,
+      `*${outcome}* @ *${odds}*`,
       `_${book}_ · EV *+${edgePct}%*${mes}`,
       ``,
       // The two things a live reader needs and a pre-match reader does not.

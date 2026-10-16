@@ -109,7 +109,7 @@ test('an UNREPORTED card draws no line at all — absent is not "none"', () => {
 test('the totals form names the market and the line', () => {
   const m = buildMessage(sig({ market: 'totals', market_line: 2.5, outcome: 'over',
     model_architecture: 'SECOND_HALF_SNIPER' }));
-  assert.ok(/TOTALS 2\.5/.test(m), '"OVER" alone says nothing about what is being counted');
+  assert.ok(/Over 2\.5 goals/.test(m), '"OVER" alone says nothing about what is being counted');
   assert.ok(/Second-half goals/.test(m), 'and the reader-facing model name, not the enum');
   assert.ok(!/SECOND_HALF_SNIPER/.test(m), 'never render the raw enum');
 });
@@ -132,7 +132,7 @@ test('and the live feed is named as a FEED, not as a bookmaker nobody has heard 
 });
 test('an underscore in an OUTCOME is still handled — the older half of the same bug', () => {
   const m = buildMessage(sig({ outcome: 'btts_yes' }));
-  assert.ok(/BTTS YES/.test(m));
+  assert.ok(/Both teams to score: Yes/.test(m), 'the selection in words, from lib/selectionLabel');
   assert.strictEqual((m.match(/_/g) || []).length % 2, 0);
 });
 
