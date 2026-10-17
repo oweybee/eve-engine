@@ -45,7 +45,7 @@ test('every script the workflow used to run as its own step is still run', () =>
   // `ingestOddsApi.js` was on this list and is deliberately off it: The Odds
   // API was removed on 11 Oct 2026 after a 401 from 10 Oct 14:31.
   for (const f of ['ingestLiveOdds.js', 'computeInplayValues.js',
-                   'fetchLiveStats.js', 'captureInplaySeries.js', 'postToX.js']) {
+                   'fetchLiveStats.js', 'captureInplaySeries.js']) {
     assert.ok(cmds.includes(f), `${f} dropped out of the loop`);
   }
 });
@@ -60,8 +60,9 @@ test('ORDER is the workflow\'s: price and state before values, values before the
     'values must be computed against a price that has just been ingested');
   assert.ok(at('computeInplayValues.js') < at('captureInplaySeries.js'),
     'the chart must not record a tick the signals never saw');
-  assert.ok(at('computeInplayValues.js') < at('postToX.js'),
-    'nothing can be posted before it is computed');
+});
+test('Telegram is off: the loop no longer runs the Telegram poster (17 Oct 2026)', () => {
+  assert.ok(!loop.STEPS.some(s => s.cmd === 'postToX.js'), 'postToX.js is back in the in-play loop');
 });
 /* ── ONE CLOCK, BECAUSE THE METERED STEP IS GONE (11 Oct 2026) ─────────────
    The multi-book in-play step was the only metered one and it read The Odds

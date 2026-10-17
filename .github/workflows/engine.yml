@@ -22,7 +22,7 @@
 #     2. computeValues.js — Kaunitz edge detection; price-change signals
 #     3. captureSnapshot.js — odds time-series for charts
 #   Once per job:
-#     5. postToX.js          — Telegram alerts: RETIRED, off unless vars.TELEGRAM_POSTING_ENABLED == '1'
+#     5. postToX.js          — Telegram alerts: OFF (17 Oct 2026), step removed
 #     6. fetchResults.js     — settle completed fixtures
 #     7. fetchMatchDetails.js — lineups + stats
 # ────────────────────────────────────────────────────────────────────────────
@@ -112,8 +112,6 @@ jobs:
       BETFAIR_APP_KEY:           ${{ secrets.BETFAIR_APP_KEY }}
       BETFAIR_USERNAME:          ${{ secrets.BETFAIR_USERNAME }}
       BETFAIR_PASSWORD:          ${{ secrets.BETFAIR_PASSWORD }}
-      TELEGRAM_BOT_TOKEN:        ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID:          ${{ secrets.TELEGRAM_CHAT_ID }}
       ACTIVE_START_HOUR:         '0'
       ACTIVE_END_HOUR:           '24'
       DAILY_REQUEST_BUDGET:      ${{ vars.DAILY_REQUEST_BUDGET || '75000' }}
@@ -263,17 +261,10 @@ jobs:
         continue-on-error: true
         run: node verifyIntegrity.js
 
-      # TELEGRAM IS RETIRED (owner, 10 Oct 2026: Discord is the community's
-      # home now). This step was still posting ~25-55 signals a day into the
-      # retired channel, with 0 linked members, while X got 6 a day. It is OFF
-      # unless the repo VARIABLE `TELEGRAM_POSTING_ENABLED` is exactly '1'
-      # (Settings -> Secrets and variables -> Actions -> Variables), so it can
-      # come back without a code change. Nothing else reads the 'telegram'
-      # rows in posted_signals; Discord and X post from their own workflows.
-      - name: Post signals (Telegram, retired)
-        id: post
-        if: ${{ vars.TELEGRAM_POSTING_ENABLED == '1' && (github.event_name != 'workflow_dispatch' || inputs.skip_post != 'true') }}
-        run: node postToX.js
+      # TELEGRAM IS OFF (owner, 17 Oct 2026: "cut off telegram altogether").
+      # The "Post signals (Telegram, retired)" step is removed, the Telegram
+      # secrets are no longer passed to this job, and postToX.js itself refuses
+      # to post unless TELEGRAM_POSTING_ENABLED is '1' in its environment.
 
       - name: Settle results
         id: results
@@ -419,7 +410,6 @@ jobs:
           add "plan (planDay.js)"                                   "${{ steps.plan.outcome }}"
           add "ingest-loop (ingestOdds + computeValues + snapshot)"  "${{ steps.ingest_loop.outcome }}"
           add "integrity (verifyIntegrity.js)"                       "${{ steps.integrity.outcome }}"
-          add "post-signals (postToX.js)"                            "${{ steps.post.outcome }}"
           add "settle-results (fetchResults.js)"                     "${{ steps.results.outcome }}"
           add "paper-totals (paperTradeTotals.js)"                   "${{ steps.paper_totals.outcome }}"
           add "elo ladder (computeElo.js)"                           "${{ steps.elo.outcome }}"
