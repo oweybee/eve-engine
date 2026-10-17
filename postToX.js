@@ -917,7 +917,20 @@ async function run() {
   return summary;
 }
 
+/* ── TELEGRAM IS OFF (owner, 17 Oct 2026: "cut off telegram altogether") ──
+   The workflow gate (`vars.TELEGRAM_POSTING_ENABLED`) only covered the engine
+   job. The in-play loop ran this file every tick with the Telegram secrets in
+   its environment, and this file posts PRE-MATCH signals too, so ~170 posts
+   went out in the three days to 17 Oct, including a Betano-priced Millwall
+   PRIME the site never showed. The gate now lives HERE, where every caller
+   passes through it: unless TELEGRAM_POSTING_ENABLED is exactly '1' in the
+   process environment, running this file posts nothing. The module's exports
+   are untouched, because the Discord and X posters build on them. */
 if (require.main === module) {
+  if (process.env.TELEGRAM_POSTING_ENABLED !== '1') {
+    console.log('[postToX] Telegram posting is off (TELEGRAM_POSTING_ENABLED is not 1). Nothing sent.');
+    process.exit(0);
+  }
   run().catch(err => { console.error('[postToX] fatal:', err.message); process.exit(1); });
 }
 

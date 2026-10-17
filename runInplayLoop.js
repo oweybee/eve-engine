@@ -88,7 +88,7 @@ const STEPS = [
   { name: 'compute in-play values',  cmd: 'computeInplayValues.js' },
   { name: 'live match statistics',   cmd: 'fetchLiveStats.js' },
   { name: 'in-play market series',   cmd: 'captureInplaySeries.js' },
-  { name: 'post in-play signals',    cmd: 'postToX.js' },
+  // postToX.js (Telegram) is gone from the loop: Telegram is off (17 Oct 2026).
 ];
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));

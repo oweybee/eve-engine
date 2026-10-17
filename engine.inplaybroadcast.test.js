@@ -179,12 +179,11 @@ test('getTelegramConfig falls back to the main token when no in-play bot is set'
     }
   }
 });
-test('the workflow passes the in-play bot token, or the secret is inert', () => {
-  // The secret existed in the repo for 14 minutes doing nothing because the
-  // workflow did not forward it. A secret nothing reads is indistinguishable
-  // from a secret that is wrong.
-  assert.ok(/TELEGRAM_INPLAY_BOT_TOKEN:\s*\$\{\{\s*secrets\.TELEGRAM_INPLAY_BOT_TOKEN\s*\}\}/.test(wf),
-    'run-inplay.yml must forward secrets.TELEGRAM_INPLAY_BOT_TOKEN');
+test('Telegram is off: the in-play workflow passes no Telegram secret (17 Oct 2026)', () => {
+  // Inverted from "the workflow forwards the in-play bot token". Telegram was
+  // cut off altogether; a job that still carried the token could post again
+  // the moment anything re-added the poster to the loop.
+  assert.ok(!/secrets\.TELEGRAM_/.test(wf), 'run-inplay.yml still forwards a Telegram secret');
 });
 test('an in-play post can never reach the PRE-MATCH channel', () => {
   // chatIdForSignal returns the in-play id or null; null skips. A regression
