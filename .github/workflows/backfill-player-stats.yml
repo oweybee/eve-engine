@@ -1,0 +1,86 @@
+name: Backfill Player Statistics
+
+# Pulls /fixtures/players for every finished fixture in `matches` and stores
+# one row per player per fixture in player_match_stats (migration 160). This is
+# what feeds player_form(): the shots / shots on target / cards / fouls hit
+# rates on the match card.
+#
+# COST
+# One call per fixture. The first runs clear the backlog (current + previous
+# season, ~17k fixtures on 19 Oct 2026) at up to 10k calls a run; after that
+# each run only finds what finished since the last one. The script stops on its
+# own when the vendor's remaining-today header falls under PLAYER_STATS_RESERVE,
+# so it can never starve odds ingestion or the live loop.
+#
+# CADENCE
+# 03:40 UTC (overnight, after match stats starts at 03:20, combined pace stays
+# under the 450/min ceiling) and 22:40 UTC (so the evening's games are in by
+# morning). Idempotent and resumable on (fixture_id, player_id).
+
+on:
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: 'Comma-separated start years (blank = current + previous season)'
+        type: string
+        default: ''
+      max_calls:
+        description: 'Hard cap on API calls this run'
+        type: string
+        default: '10000'
+      rpm:
+        description: 'Calls per minute'
+        type: string
+        default: '150'
+      fixture:
+        description: 'One API fixture id: fetch it and print the parsed rows'
+        type: string
+        default: ''
+      dry_run:
+        description: 'Report what would be fetched without calling the API'
+        type: boolean
+        default: false
+  schedule:
+    - cron: '40 3 * * *'
+    - cron: '40 22 * * *'
+
+concurrency:
+  group: backfill-player-stats-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    name: Fetch per-player fixture statistics
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+      PLAYER_STATS_RESERVE:      '20000'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Backfill player statistics
+        shell: bash
+        run: |
+          set -o pipefail
+          ARGS="--max-calls ${{ inputs.max_calls || '10000' }} --rpm ${{ inputs.rpm || '150' }}"
+          if [ -n "${{ inputs.seasons }}" ]; then ARGS="$ARGS --seasons ${{ inputs.seasons }}"; fi
+          if [ -n "${{ inputs.fixture }}" ]; then ARGS="$ARGS --fixture ${{ inputs.fixture }}"; fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          echo "node backfillPlayerStats.js $ARGS"
+          node backfillPlayerStats.js $ARGS | tee -a "$GITHUB_STEP_SUMMARY"

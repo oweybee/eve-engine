@@ -185,7 +185,8 @@ await testAsync('a read failure still writes — a lost history is not a lost re
 
 console.log('the call sites — a tracker nothing reports to is a dead tracker');
 const REPORTERS = ['ingestLiveOdds.js', 'fetchLiveStats.js', 'ingestOdds.js',
-                   'fetchMatchDetails.js', 'fetchLineups.js', 'fetchTeamStats.js'];
+                   'fetchMatchDetails.js', 'fetchLineups.js', 'fetchTeamStats.js',
+                   'backfillPlayerStats.js'];
 test('every wired script reports its headers AND persists', () => {
   // Source assertions, because a reporter that stops reporting looks exactly
   // like a vendor that stopped sending the header. This repo has already
