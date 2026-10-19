@@ -107,7 +107,12 @@ test('fouls need detail and a non-null value', () => {
 });
 test('an empty fixture logs players=0 with every family off, so it is not asked again', () => {
   const l = logRow(5, [], undefined);
-  assert.deepStrictEqual([l.players, l.has_shots, l.has_cards, l.has_fouls, l.oriented_by], [0, false, false, false, null]);
+  assert.deepStrictEqual([l.players, l.has_shots, l.has_cards, l.has_fouls, l.has_detail, l.oriented_by], [0, false, false, false, false, null]);
+});
+
+test('detail coverage needs a pass count, a rating alone is not enough', () => {
+  assert.strictEqual(fixtureCoverage([{ rating: 7, passes_total: null }]).has_detail, false);
+  assert.strictEqual(fixtureCoverage([{ rating: 7, passes_total: 31, saves: null }]).has_detail, true);
 });
 
 console.log('quota');

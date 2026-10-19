@@ -199,6 +199,11 @@ function playerRows(meta, oriented, at = new Date().toISOString()) {
  *            detail, so a 0 there proves nothing on its own. These count only
  *            when the fixture also shows real player detail (a rating or a pass
  *            count) AND some non-null value in the family.
+ *   detail — some player has a pass count. Every covered match has passes, so
+ *            this is the coverage for the "full detail" stats: tackles, saves,
+ *            offsides and passes, where the vendor sends null for zero (a keeper
+ *            who made no saves, a game with no offsides). Added 19 Oct 2026 for
+ *            the second batch of player markets (migration 164).
  */
 function fixtureCoverage(rows) {
   const any = (f) => rows.some(f);
@@ -207,6 +212,7 @@ function fixtureCoverage(rows) {
     has_shots: any(r => r.shots_total != null),
     has_cards: detail && any(r => r.yellow != null || r.red != null),
     has_fouls: detail && any(r => r.fouls_committed != null || r.fouls_drawn != null),
+    has_detail: any(r => r.passes_total != null),
   };
 }
 
@@ -216,7 +222,7 @@ function logRow(fixtureId, rows, by, at = new Date().toISOString()) {
     fetched_at: at,
     players:    rows.length,
     oriented_by: rows.length ? by : null,
-    ...(rows.length ? fixtureCoverage(rows) : { has_shots: false, has_cards: false, has_fouls: false }),
+    ...(rows.length ? fixtureCoverage(rows) : { has_shots: false, has_cards: false, has_fouls: false, has_detail: false }),
   };
 }
 
@@ -333,7 +339,7 @@ async function main() {
   const take  = rateLimiter(RPM);
   let cursor = 0, calls = 0, fixturesDone = 0, playerCount = 0, empties = 0, failures = 0, stopped = null;
   const by = { team_id: 0, name: 0, order: 0 };
-  const cov = { has_shots: 0, has_cards: 0, has_fouls: 0 };
+  const cov = { has_shots: 0, has_cards: 0, has_fouls: 0, has_detail: 0 };
   let pendingPlayers = [], pendingLogs = [];
 
   async function flush() {
@@ -392,7 +398,7 @@ async function main() {
   console.log(`\n[playerStats] ${calls} call(s) · ${fixturesDone} fixture(s) logged · ${playerCount} player row(s) · ` +
               `${empties} with no player data · ${failures} failure(s)`);
   console.log(`[playerStats] of fixtures with players: shots reported ${pct(cov.has_shots)}, ` +
-              `cards ${pct(cov.has_cards)}, fouls ${pct(cov.has_fouls)}`);
+              `cards ${pct(cov.has_cards)}, fouls ${pct(cov.has_fouls)}, detail ${pct(cov.has_detail)}`);
   console.log(`[playerStats] home/away by team id ${by.team_id}, by name ${by.name}, by order ${by.order}`);
   console.log(`[playerStats] quota: ${persisted.written ? apiQuota.describeQuota(persisted.quota) : persisted.reason}`);
   if (stopped) console.log(`[playerStats] stopped early: ${stopped}. Re-run to continue; nothing logged is refetched.`);
