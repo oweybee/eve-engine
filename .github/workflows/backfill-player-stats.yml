@@ -1,7 +1,7 @@
 name: Backfill Player Statistics
 
 # Pulls /fixtures/players for every finished fixture in `matches` and stores
-# one row per player per fixture in player_match_stats (migration 134). This is
+# one row per player per fixture in player_match_stats (migration 160). This is
 # what feeds player_form(): the shots / shots on target / cards / fouls hit
 # rates on the match card.
 #

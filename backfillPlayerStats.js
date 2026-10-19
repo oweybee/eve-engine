@@ -6,7 +6,7 @@
  * target, cards and fouls per player over the last N games. API-Football serves
  * all of it from /fixtures/players on the plan we already pay for; until 19 Oct
  * 2026 nothing here called it. `lineups` held who played, nothing held what
- * they did. Migration 134 holds the tables and the public read, player_form().
+ * they did. migration 160 holds the tables and the public read, player_form().
  *
  * ONE SCRIPT, TWO JOBS
  *   - the BACKLOG: every finished fixture in the current + previous season

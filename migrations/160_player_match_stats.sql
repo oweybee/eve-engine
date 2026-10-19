@@ -1,4 +1,4 @@
--- 134 — per-player, per-fixture statistics, and the hit-rate read behind them.
+-- 160 — per-player, per-fixture statistics, and the hit-rate read behind them.
 --
 -- WHY
 -- The match card shows team stats only. NumbersGame-style player tables
@@ -23,7 +23,7 @@
 -- (shots / cards / fouls) was reported at all, and player_form only counts a
 -- game toward a stat's denominator when it was.
 --
--- ACCESS (superseded by 135: hit rates are paywalled)
+-- ACCESS (superseded by 161: hit rates are paywalled)
 -- Both tables are service-role only. The public read is player_form(), a
 -- security-definer function with bounded arguments, granted to anon and
 -- authenticated. Hit rates are treated as free shop-window content, like
@@ -223,4 +223,4 @@ revoke all on function public.player_form(integer[], integer, uuid) from public;
 grant execute on function public.player_form(integer[], integer, uuid) to anon, authenticated, service_role;
 
 comment on function public.player_form(integer[], integer, uuid) is
-  'Last-N player hit rates (shots, SOT, cards, fouls) for the current squads of up to 4 API-Football team ids. A game only counts toward a stat when that fixture reported the stat family (player_stats_fetch_log.has_*). See migration 134.';
+  'Last-N player hit rates (shots, SOT, cards, fouls) for the current squads of up to 4 API-Football team ids. A game only counts toward a stat when that fixture reported the stat family (player_stats_fetch_log.has_*). See migration 160.';

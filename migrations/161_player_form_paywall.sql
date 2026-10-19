@@ -1,6 +1,6 @@
--- 135 — player hit rates are a paid feature (owner ruling, 19 Oct 2026).
+-- 161 — player hit rates are a paid feature (owner ruling, 19 Oct 2026).
 --
--- 134 granted player_form() to anon as free shop-window content. Owen ruled
+-- 160 granted player_form() to anon as free shop-window content. Owen ruled
 -- the other way the same day: hit rates are paywalled. The rule is the one
 -- match_stats already uses (tiered_read_match_stats): paid tiers see any team;
 -- free and signed-out users see only the teams in the free preview fixture(s),
@@ -75,4 +75,4 @@ revoke all on function public.player_form(integer[], integer, uuid) from public;
 grant execute on function public.player_form(integer[], integer, uuid) to anon, authenticated, service_role;
 
 comment on function public.player_form(integer[], integer, uuid) is
-  'Paywalled last-N player hit rates. Paid tiers: any team. Free/anon: only the teams in today''s free preview fixture (same rule as match_stats), otherwise raises 42501 (PostgREST 403). Body is player_form_unchecked (service_role only). See migrations 134-135.';
+  'Paywalled last-N player hit rates. Paid tiers: any team. Free/anon: only the teams in today''s free preview fixture (same rule as match_stats), otherwise raises 42501 (PostgREST 403). Body is player_form_unchecked (service_role only). See migrations 160-161.';
