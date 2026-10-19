@@ -5,7 +5,7 @@
 const assert = require('assert');
 const { fetchMatchesForComputation } = require('./computeValues');
 
-function fakeClient(matches, odds) {
+function fakeClient(matches, odds, latest = []) {
   return {
     from(table) {
       const q = { filters: [], lim: Infinity };
@@ -13,13 +13,15 @@ function fakeClient(matches, odds) {
         select() { return api; },
         in(col, vals) { q.filters.push(r => vals.includes(r[col])); return api; },
         gte(col, v) { q.filters.push(r => r[col] >= v); return api; },
+        eq(col, v) { q.filters.push(r => r[col] === v); return api; },
+        range(a, b) { q.from = a; q.lim = b - a + 1; return api; },
         order() { return api; },
         limit(n) { q.lim = n; return api; },
         then(res, rej) {
-          let rows = (table === 'matches' ? matches : odds).filter(r => q.filters.every(f => f(r)));
+          let rows = (table === 'matches' ? matches : table === 'odds_latest' ? latest : odds).filter(r => q.filters.every(f => f(r)));
           if (table === 'odds') rows = rows.slice().sort((a, b) =>
             a.fetched_at < b.fetched_at ? -1 : a.fetched_at > b.fetched_at ? 1 : a.id < b.id ? -1 : 1);
-          return Promise.resolve({ data: rows.slice(0, q.lim), error: null }).then(res, rej);
+          return Promise.resolve({ data: rows.slice(q.from ?? 0, (q.from ?? 0) + q.lim), error: null }).then(res, rej);
         },
       };
       return api;

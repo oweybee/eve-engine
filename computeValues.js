@@ -212,9 +212,70 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled'], op
     oddsByMatch[o.match_id].push(o);
   }
 
+  const confirmedByMatch = await fetchH2hConfirmations(supabase, matchIds, freshCutoff);
+
   return matchData
-    .map(m => ({ ...m, odds: oddsByMatch[m.id] ?? [] }))
+    .map(m => ({ ...m, odds: oddsByMatch[m.id] ?? [], confirmed: confirmedByMatch.get(m.id) ?? null }))
     .filter(m => m.odds.length > 0);
+}
+
+/**
+ * WHEN WE LAST SAW EACH 1X2 QUOTE, not when it last MOVED (19 Oct 2026).
+ *
+ * `odds` records a price only when it changes, so `fetched_at` there is the
+ * time of the last MOVE. A Pinnacle 2.10 we re-read five minutes ago but that
+ * has not moved since breakfast stamped `odds_fetched_at` at breakfast, and
+ * `price_freshness_policy` (15 min imminent, 3h near) then withheld it. Over
+ * 7 days 20-77% of imminent/near board rows failed the freshness gate by
+ * hour of day while `odds_latest.confirmed_at` had them 2-9 minutes old:
+ * current prices, hidden as stale. ingestOdds.js has written `confirmed_at`
+ * for exactly this question since it existed; nothing here read it.
+ *
+ * Returns Map<match_id, Map<bookmaker, {confirmed_at, home, draw, away}>>.
+ * NON-FATAL: on any error the map is empty and the stamp falls back to the
+ * move time, which is the old behaviour (too strict, never too loose).
+ */
+async function fetchH2hConfirmations(supabase, matchIds, freshCutoff) {
+  const out = new Map();
+  try {
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabase
+        .from('odds_latest')
+        .select('match_id, bookmaker, home_odds, draw_odds, away_odds, confirmed_at')
+        .eq('market', 'h2h')
+        .gte('confirmed_at', freshCutoff)
+        .order('match_id', { ascending: true })
+        .order('bookmaker', { ascending: true })
+        .range(from, from + 999);
+      if (error) throw new Error(error.message);
+      for (const r of data ?? []) {
+        if (!matchIds.has(r.match_id)) continue;
+        if (!out.has(r.match_id)) out.set(r.match_id, new Map());
+        out.get(r.match_id).set(r.bookmaker, r);
+      }
+      if (!data || data.length < 1000) break;
+    }
+  } catch (err) {
+    console.warn(`[compute] odds_latest confirmations unavailable, stamping move time: ${err.message}`);
+    return new Map();
+  }
+  return out;
+}
+
+/**
+ * The time a book's quote was last SEEN: its confirmation, but only when the
+ * confirmed price is the same price the consensus used. A confirmation of a
+ * different price (the move has not reached `odds` in this window yet) says
+ * nothing about the row we priced from, so the move time stands.
+ */
+function seenAt(row, confirmed) {
+  const c = confirmed?.get(row.bookmaker);
+  if (!c?.confirmed_at) return row.fetched_at;
+  const same = (a, b) => (a == null && b == null) || (a != null && b != null && Number(a) === Number(b));
+  if (!same(c.home_odds, row.home_odds) || !same(c.draw_odds, row.draw_odds) || !same(c.away_odds, row.away_odds)) {
+    return row.fetched_at;
+  }
+  return Date.parse(c.confirmed_at) > Date.parse(row.fetched_at) ? c.confirmed_at : row.fetched_at;
 }
 
 // formatBookName USED TO LIVE HERE and it was the bug: a presentation
@@ -258,7 +319,7 @@ async function fetchMatchesForComputation(supabase, statuses = ['scheduled'], op
  * The returned SHAPE is unchanged, so every downstream consumer keeps working;
  * only what fills it has changed.
  */
-function computeConsensus(oddsRows) {
+function computeConsensus(oddsRows, confirmed = null) {
   const h2hRows = oddsRows.filter(r => (r.market ?? 'h2h') === 'h2h');
   if (!h2hRows.length) return null;
 
@@ -280,9 +341,10 @@ function computeConsensus(oddsRows) {
   const bettableRows = deduped.filter(r => BETTABLE_SET.has(r.bookmaker));
   const bookmakerCount = bettableRows.length;
 
-  const latestFetchedAt = deduped.reduce(
-    (best, r) => (!best || r.fetched_at > best ? r.fetched_at : best), null
-  );
+  const latestFetchedAt = deduped.reduce((best, r) => {
+    const t = seenAt(r, confirmed);
+    return !best || Date.parse(t) > Date.parse(best) ? t : best;
+  }, null);
 
   const oddsAgeMs = latestFetchedAt
     ? Date.now() - new Date(latestFetchedAt).getTime()
@@ -450,7 +512,7 @@ function computeConsensus(oddsRows) {
 }
 
 function computeMatch(match) {
-  const consensus = computeConsensus(match.odds);
+  const consensus = computeConsensus(match.odds, match.confirmed);
   if (!consensus) return { skipped: true };
 
   const { home, draw, away, bookmakerCount, latestFetchedAt } = consensus;
@@ -1304,6 +1366,7 @@ if (require.main === module) {
 // Exported so computeInplayValues.js can reuse the consensus core and the
 // signal-insert helpers (with phase='inplay') instead of duplicating them.
 module.exports = {
+  seenAt,
   // supermodelEdge is deliberately absent — see the note where it was deleted.
   fetchMatchesForComputation,
   computeConsensus,
