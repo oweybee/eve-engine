@@ -20,5 +20,10 @@ as $$ select null::void $$;
 comment on function public.refresh_player_recent() is
   'No-op since 19 Oct: pg_cron job player-recent-refresh refreshes player_recent_apps every 15 minutes (the API 8s timeout is too short for it). Kept so the backfill''s calls stay harmless.';
 
+-- THE SETTINGS ARE THE FIX, not decoration. The first scheduled run (19:37
+-- UTC) died at pg_cron's own 2-minute statement_timeout: the planner walked
+-- the 510MB player_match_stats table by index in player order, a random read
+-- per row. A sequential scan and a sort does the same work in ~9s, and the
+-- whole concurrent refresh in ~15s.
 select cron.schedule('player-recent-refresh', '7,22,37,52 * * * *',
-  $$refresh materialized view concurrently public.player_recent_apps$$);
+  $$set statement_timeout = '10min'; set enable_indexscan = off; set enable_bitmapscan = off; set work_mem = '64MB'; refresh materialized view concurrently public.player_recent_apps;$$);
