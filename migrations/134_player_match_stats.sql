@@ -23,7 +23,7 @@
 -- (shots / cards / fouls) was reported at all, and player_form only counts a
 -- game toward a stat's denominator when it was.
 --
--- ACCESS
+-- ACCESS (superseded by 135: hit rates are paywalled)
 -- Both tables are service-role only. The public read is player_form(), a
 -- security-definer function with bounded arguments, granted to anon and
 -- authenticated. Hit rates are treated as free shop-window content, like
