@@ -76,6 +76,10 @@ const MAX_CALLS     = num('--max-calls',   parseInt(process.env.PLAYER_STATS_MAX
 const RPM           = num('--rpm',         parseInt(process.env.PLAYER_STATS_RPM         || '150',   10));
 const CONCURRENCY   = num('--concurrency', parseInt(process.env.PLAYER_STATS_CONCURRENCY || '3',     10));
 const RESERVE       = num('--reserve',     parseInt(process.env.PLAYER_STATS_RESERVE     || '20000', 10));
+// The minute is shared (450/min): pause when fewer than this are left in it,
+// and give up only after this many per-minute refusals in one run.
+const MINUTE_FLOOR     = num('--minute-floor', parseInt(process.env.PLAYER_STATS_MINUTE_FLOOR || '60', 10));
+const MAX_MINUTE_WAITS = 200;
 const PAGE          = 1000;
 const WRITE_CHUNK   = 500;
 /** A fixture is only "finished" for our purposes once the vendor has had time to settle player stats. */
@@ -226,6 +230,22 @@ function logRow(fixtureId, rows, by, at = new Date().toISOString()) {
   };
 }
 
+/**
+ * The vendor's PER-MINUTE ceiling (450, shared with the live loop and odds
+ * ingestion) arrives as a 200 with "...requests per minute..." in `errors`.
+ * Unlike the daily allowance it clears within the minute, so it is a reason to
+ * wait and retry the fixture, never to end the run. (19 Oct 2026: the first
+ * full run stopped after 58 calls on exactly this, with 48k of the day left.)
+ */
+function isMinuteLimit(message) {
+  return /per minute/i.test(String(message ?? ''));
+}
+
+/** Leave this many calls of the shared minute to the live loop and odds jobs. */
+function minuteHeadroomLow(reading, floor) {
+  return Boolean(reading && Number.isFinite(reading.remainingMinute) && reading.remainingMinute < floor);
+}
+
 /** Should the run stop to protect the shared daily allowance? */
 function quotaTooLow(reading, reserve) {
   return Boolean(reading && Number.isFinite(reading.remainingDay) && reading.remainingDay < reserve);
@@ -338,6 +358,7 @@ async function main() {
   const queue = todo.slice(0, MAX_CALLS);
   const take  = rateLimiter(RPM);
   let cursor = 0, calls = 0, fixturesDone = 0, playerCount = 0, empties = 0, failures = 0, stopped = null;
+  let minuteWaits = 0, minuteYields = 0;
   const by = { team_id: 0, name: 0, order: 0 };
   const cov = { has_shots: 0, has_cards: 0, has_fouls: 0, has_detail: 0 };
   let pendingPlayers = [], pendingLogs = [];
@@ -360,6 +381,10 @@ async function main() {
         stopped = `vendor reports ${apiQuota.latestReading().remainingDay} left today, under the ${RESERVE} reserve`;
         return;
       }
+      if (minuteHeadroomLow(apiQuota.latestReading(), MINUTE_FLOOR)) {
+        minuteYields++;
+        await sleep(10_000);
+      }
       await take();
       calls++;
       try {
@@ -381,6 +406,14 @@ async function main() {
         pendingPlayers.push(...rows); pendingLogs.push(log);
         playerCount += rows.length; fixturesDone++;
       } catch (e) {
+        if (isMinuteLimit(e.message)) {
+          // Not a failure: put the fixture back and give the minute time to clear.
+          minuteWaits++;
+          if (minuteWaits > MAX_MINUTE_WAITS) { stopped = `per-minute limit hit ${minuteWaits} times`; return; }
+          queue.push(m);
+          await sleep(30_000);
+          continue;
+        }
         failures++;
         if (/quota|exceeded|request limit/i.test(e.message)) { stopped = `quota: ${e.message}`; return; }
         if (failures <= 20) console.log(`  warn fixture ${m.external_id}: ${e.message}`);
@@ -401,6 +434,9 @@ async function main() {
               `cards ${pct(cov.has_cards)}, fouls ${pct(cov.has_fouls)}, detail ${pct(cov.has_detail)}`);
   console.log(`[playerStats] home/away by team id ${by.team_id}, by name ${by.name}, by order ${by.order}`);
   console.log(`[playerStats] quota: ${persisted.written ? apiQuota.describeQuota(persisted.quota) : persisted.reason}`);
+  if (minuteWaits || minuteYields) {
+    console.log(`[playerStats] shared minute: ${minuteWaits} limit hit(s) retried, ${minuteYields} pause(s) to leave headroom`);
+  }
   if (stopped) console.log(`[playerStats] stopped early: ${stopped}. Re-run to continue; nothing logged is refetched.`);
   const remaining = todo.length - fixturesDone;
   if (remaining > 0) console.log(`[playerStats] ${remaining} fixture(s) still to do.`);
@@ -415,4 +451,4 @@ if (require.main === module) {
   main().catch(err => { console.error('[playerStats] FATAL:', err.message); process.exit(1); });
 }
 
-module.exports = { toNum, toInt, orientPlayerBlocks, playerRows, fixtureCoverage, logRow, quotaTooLow };
+module.exports = { toNum, toInt, orientPlayerBlocks, playerRows, fixtureCoverage, logRow, quotaTooLow, isMinuteLimit, minuteHeadroomLow };

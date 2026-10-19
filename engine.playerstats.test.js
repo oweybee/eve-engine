@@ -10,6 +10,7 @@
 const assert = require('assert');
 const { toNum, toInt, orientPlayerBlocks, playerRows, fixtureCoverage, logRow, quotaTooLow } =
   require('./backfillPlayerStats');
+const { isMinuteLimit, minuteHeadroomLow } = require('./backfillPlayerStats');
 
 let passed = 0;
 function test(n, f) {
@@ -116,6 +117,16 @@ test('detail coverage needs a pass count, a rating alone is not enough', () => {
 });
 
 console.log('quota');
+test('the per-minute refusal is a wait, the daily one is not', () => {
+  assert.strictEqual(isMinuteLimit('API error: Too many requests. You have exceeded the limit of requests per minute of your subscription.'), true);
+  assert.strictEqual(isMinuteLimit('API error: You have reached the request limit for the day'), false);
+  assert.strictEqual(isMinuteLimit(undefined), false);
+});
+test('pauses when the shared minute runs low, not when the header is missing', () => {
+  assert.strictEqual(minuteHeadroomLow({ remainingMinute: 40 }, 60), true);
+  assert.strictEqual(minuteHeadroomLow({ remainingMinute: 200 }, 60), false);
+  assert.strictEqual(minuteHeadroomLow(null, 60), false);
+});
 test('stops under the reserve, carries on above it or with no reading', () => {
   assert.strictEqual(quotaTooLow({ remainingDay: 19999 }, 20000), true);
   assert.strictEqual(quotaTooLow({ remainingDay: 20001 }, 20000), false);
