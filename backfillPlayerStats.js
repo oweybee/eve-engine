@@ -306,7 +306,26 @@ async function candidateFixtures(supabase, span) {
     .gte('kickoff_at', `${span.from}T00:00:00Z`)
     .lte('kickoff_at', settled)
     .order('kickoff_at', { ascending: false }), 'playerStats[candidates]');
-  return rows.filter(r => isApiFixtureId(r.external_id));
+  return uniqueFixtures(rows.filter(r => isApiFixtureId(r.external_id)));
+}
+
+/**
+ * One fixture id, one call. `matches` can hold the same API fixture twice
+ * (the 15 Oct duplicate-matches issue), and fetching it twice put the same
+ * (fixture_id, player_id) into one upsert, which Postgres refuses outright
+ * ("ON CONFLICT DO UPDATE command cannot affect row a second time"): the
+ * 19 Oct run died on it after 442 fixtures. Keeps the first (newest) row.
+ */
+function uniqueFixtures(rows) {
+  const seen = new Set();
+  return rows.filter(r => { const k = String(r.external_id); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+/** Last write wins per key, so one upsert never names a row twice. */
+function uniqueBy(rows, keyOf) {
+  const m = new Map();
+  for (const r of rows) m.set(keyOf(r), r);
+  return [...m.values()];
 }
 
 async function alreadyCovered(supabase, { refetchEmpty }) {
@@ -367,8 +386,9 @@ async function main() {
     if (!pendingLogs.length) return;
     const p = pendingPlayers, l = pendingLogs;
     pendingPlayers = []; pendingLogs = [];
-    await upsert(supabase, 'player_match_stats', p, 'fixture_id,player_id');
-    await upsert(supabase, 'player_stats_fetch_log', l, 'fixture_id');
+    // The vendor can also list one player twice in a fixture; same rule.
+    await upsert(supabase, 'player_match_stats', uniqueBy(p, r => `${r.fixture_id}:${r.player_id}`), 'fixture_id,player_id');
+    await upsert(supabase, 'player_stats_fetch_log', uniqueBy(l, r => r.fixture_id), 'fixture_id');
     console.log(`[playerStats] ${fixturesDone}/${queue.length} fixture(s) · ${playerCount} player row(s) written`);
   }
 
@@ -451,4 +471,4 @@ if (require.main === module) {
   main().catch(err => { console.error('[playerStats] FATAL:', err.message); process.exit(1); });
 }
 
-module.exports = { toNum, toInt, orientPlayerBlocks, playerRows, fixtureCoverage, logRow, quotaTooLow, isMinuteLimit, minuteHeadroomLow };
+module.exports = { toNum, toInt, orientPlayerBlocks, playerRows, fixtureCoverage, logRow, quotaTooLow, isMinuteLimit, minuteHeadroomLow, uniqueFixtures, uniqueBy };

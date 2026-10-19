@@ -10,7 +10,7 @@
 const assert = require('assert');
 const { toNum, toInt, orientPlayerBlocks, playerRows, fixtureCoverage, logRow, quotaTooLow } =
   require('./backfillPlayerStats');
-const { isMinuteLimit, minuteHeadroomLow } = require('./backfillPlayerStats');
+const { isMinuteLimit, minuteHeadroomLow, uniqueFixtures, uniqueBy } = require('./backfillPlayerStats');
 
 let passed = 0;
 function test(n, f) {
@@ -114,6 +114,18 @@ test('an empty fixture logs players=0 with every family off, so it is not asked 
 test('detail coverage needs a pass count, a rating alone is not enough', () => {
   assert.strictEqual(fixtureCoverage([{ rating: 7, passes_total: null }]).has_detail, false);
   assert.strictEqual(fixtureCoverage([{ rating: 7, passes_total: 31, saves: null }]).has_detail, true);
+});
+
+console.log('dedupe');
+test('a fixture listed twice in matches is fetched once', () => {
+  const u = uniqueFixtures([{ id: 'a', external_id: '9' }, { id: 'b', external_id: 9 }, { id: 'c', external_id: '10' }]);
+  assert.deepStrictEqual(u.map(r => r.id), ['a', 'c']);
+});
+test('one upsert never names the same player-fixture twice', () => {
+  const u = uniqueBy([{ fixture_id: '9', player_id: 1, m: 10 }, { fixture_id: '9', player_id: 1, m: 90 }, { fixture_id: '9', player_id: 2 }],
+    r => `${r.fixture_id}:${r.player_id}`);
+  assert.strictEqual(u.length, 2);
+  assert.strictEqual(u[0].m, 90);
 });
 
 console.log('quota');
