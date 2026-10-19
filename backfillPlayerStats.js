@@ -80,6 +80,8 @@ const RESERVE       = num('--reserve',     parseInt(process.env.PLAYER_STATS_RES
 // and give up only after this many per-minute refusals in one run.
 const MINUTE_FLOOR     = num('--minute-floor', parseInt(process.env.PLAYER_STATS_MINUTE_FLOOR || '60', 10));
 const MAX_MINUTE_WAITS = 200;
+// Refresh the sliders' snapshot every this many fixtures during a long run.
+const REFRESH_EVERY    = 1500;
 const PAGE          = 1000;
 const WRITE_CHUNK   = 500;
 /** A fixture is only "finished" for our purposes once the vendor has had time to settle player stats. */
@@ -349,6 +351,15 @@ async function upsert(supabase, table, rows, onConflict) {
   }
 }
 
+/** Rebuild the sliders' snapshot. A failure is logged, never fatal: the data is stored either way. */
+async function refreshRecent(supabase) {
+  const t0 = Date.now();
+  const { error } = await supabase.rpc('refresh_player_recent');
+  console.log(error
+    ? `[playerStats] warn: refresh_player_recent failed: ${error.message}`
+    : `[playerStats] refreshed player_recent_apps in ${Date.now() - t0}ms`);
+}
+
 // ── The run ─────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -378,6 +389,7 @@ async function main() {
   const take  = rateLimiter(RPM);
   let cursor = 0, calls = 0, fixturesDone = 0, playerCount = 0, empties = 0, failures = 0, stopped = null;
   let minuteWaits = 0, minuteYields = 0;
+  let lastRefreshAt = 0, refreshing = false;
   const by = { team_id: 0, name: 0, order: 0 };
   const cov = { has_shots: 0, has_cards: 0, has_fouls: 0, has_detail: 0 };
   let pendingPlayers = [], pendingLogs = [];
@@ -439,11 +451,22 @@ async function main() {
         if (failures <= 20) console.log(`  warn fixture ${m.external_id}: ${e.message}`);
       }
       if (pendingPlayers.length >= WRITE_CHUNK * 2 || pendingLogs.length >= 200) await flush();
+      // A long backlog run refreshes as it goes, so the board fills during it.
+      if (fixturesDone - lastRefreshAt >= REFRESH_EVERY && !refreshing) {
+        lastRefreshAt = fixturesDone;
+        refreshing = true;
+        await flush();
+        await refreshRecent(supabase);
+        refreshing = false;
+      }
     }
   }
 
   await Promise.all(Array.from({ length: Math.max(1, CONCURRENCY) }, worker));
   await flush();
+  // The Players sliders read player_recent_apps (migration 166), a snapshot of
+  // each player's last 20 games. Without a refresh the run's work is invisible.
+  if (fixturesDone > 0 && !ONE_FIXTURE) await refreshRecent(supabase);
   const persisted = await apiQuota.persistQuota(getClient());
 
   const withRows = fixturesDone - empties;
