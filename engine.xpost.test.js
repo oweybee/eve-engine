@@ -28,7 +28,7 @@ console.log('\ncompose — the rules that cannot be broken');
 it('every post carries the exact compliance footer', () => {
   const t = c.compose({ body: c.valueBody(ROW, 0), routeKey: 'value' });
   assert.ok(t.endsWith(c.FOOTER), 'footer missing or not last');
-  assert.strictEqual(c.FOOTER, '18+ | begambleaware | Pricing analysis, not advice');
+  assert.strictEqual(c.FOOTER, '18+ | BeGambleAware | Pricing analysis, not advice');
 });
 
 it('begambleaware is plain text, never a link', () => {

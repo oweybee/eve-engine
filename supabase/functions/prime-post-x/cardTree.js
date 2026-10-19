@@ -98,7 +98,7 @@ export function cardTree(d) {
     ]),
     el({ justifyContent: 'space-between', alignItems: 'center', borderTop: `1.5px solid ${C.line}`, paddingTop: 20 }, [
       t(`Prices move. Still PRIME at ${d.floor} or better.`, { fontSize: 22, fontWeight: 600 }),
-      t('18+ | BeGambleAware.org | Pricing analysis, not advice', { fontSize: 17, color: C.low }),
+      t('18+ | BeGambleAware | Pricing analysis, not advice', { fontSize: 17, color: C.low }),
     ]),
   ])
 }
