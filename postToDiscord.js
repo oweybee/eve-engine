@@ -23,6 +23,8 @@
  *   node postToDiscord.js results   Every settled signal that went out, win or
  *                                   loss, to #results and back into its thread.
  *   node postToDiscord.js weekly    The record card from performance_band.
+ *   node postToDiscord.js players   #hit-rates: player hit rates (last 10 games
+ *                                   played) for the next 24h of fixtures, 07:20 UK.
  *   node postToDiscord.js trends    #hit-rates: goals form for the next 24h of
  *                                   fixtures (settled scores only, no prices).
  *   node postToDiscord.js edge      #edge-table: clubs against their own
@@ -67,8 +69,8 @@ const {
   signalPost, resultPost, weeklyRecordPost, threadName, ComposeRefusal,
 } = require('./lib/discordCompose');
 const { postWebhook, postWebhookFiles, deleteWebhookMessage, channelEnabled } = require('./lib/discordClient');
-const { trendsPost, trendSections, moversPost, moverRows, edgePost, edgeFinding } = require('./lib/discordDigest');
-const { trendsCard, moversCard, edgeCard } = require('./lib/discordCards');
+const { trendsPost, trendSections, playersPost, playerSections, PLAYER_MARKETS, moversPost, moverRows, edgePost, edgeFinding } = require('./lib/discordDigest');
+const { trendsCard, playersCard, moversCard, edgeCard } = require('./lib/discordCards');
 const { edgeSummary, divisionLabel } = require('./lib/edgeTable');
 const { pageAll, inChunks } = require('./lib/pagedRead');
 
@@ -285,6 +287,23 @@ async function runTrends(supabase) {
     () => trendsCard(trendSections(fixtures, history)));
 }
 
+async function runPlayers(supabase) {
+  // player_rail treats the service role as paid (migration 168), so this is
+  // the whole next-24h slate. Settled appearances only, no prices.
+  const rowsByStat = {};
+  for (const { stat } of PLAYER_MARKETS) {
+    const { data, error } = await supabase.rpc('player_rail', {
+      p_stat: stat, p_last: 10, p_days: 1, p_limit: 12, p_min_rate: 80,
+    });
+    if (error) throw new Error(`players ${stat}: ${error.message}`);
+    rowsByStat[stat] = data ?? [];
+  }
+  const counts = Object.entries(rowsByStat).map(([k, v]) => `${k}=${v.length}`).join(' ');
+  console.log(`[postToDiscord] players: ${counts}`);
+  return postDigest(playersPost(rowsByStat), process.env.DISCORD_WEBHOOK_HITRATES, 'players',
+    () => playersCard(playerSections(rowsByStat)));
+}
+
 async function runMovers(supabase) {
   const fixtures = await upcomingFixtures(supabase);
   const ids = fixtures.map(f => f.id);
@@ -359,6 +378,7 @@ async function run(mode = process.argv[2] ?? 'signals') {
   if (mode === 'results') return runResults(supabase);
   if (mode === 'weekly') return runWeekly(supabase);
   if (mode === 'trends') return runTrends(supabase);
+  if (mode === 'players') return runPlayers(supabase);
   if (mode === 'movers') return runMovers(supabase);
   if (mode === 'edge') return runEdge(supabase);
   throw new Error(`unknown mode "${mode}"`);

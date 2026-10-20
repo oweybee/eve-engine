@@ -24,7 +24,7 @@ const DISPATCH =
   "https://api.github.com/repos/oweybee/eve-engine/actions/workflows/post-to-discord.yml/dispatches";
 
 // No `delete` here: that is a by-hand operation, never a clock.
-const MODES = new Set(["signals", "results", "weekly", "trends", "movers", "edge"]);
+const MODES = new Set(["signals", "results", "weekly", "trends", "players", "movers", "edge"]);
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
