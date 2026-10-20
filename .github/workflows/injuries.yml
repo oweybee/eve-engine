@@ -1,0 +1,74 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MaxEdge — injuries and suspensions for the coming fixtures
+#
+# Writes API-Football's per-fixture injury list into `player_injuries`. Player
+# Props and the match page's Player Stats tag a listed player OUT or DOUBT
+# through `player_availability()` (migration 173), which prefers the confirmed
+# lineup once fetchLineups.js has it.
+#
+# EVERY THREE HOURS: one call per scheduled fixture in the next 72h, ~300 a
+# run, ~2,400 a day against a 75,000 allowance. Team news moves on a timescale
+# of hours (press conferences, the day-before squad), and the lineup job covers
+# the last hour before kickoff.
+#
+# THE CRON IS A REQUEST, NOT A PROMISE: GitHub delays scheduled runs, so the
+# real gap is longer than three hours. The script asks the soonest kickoffs
+# first so the fixtures that matter most are never the ones the budget drops.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: MaxEdge Injuries
+
+on:
+  schedule:
+    - cron: '23 */3 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Read and report the tally without writing'
+        type: boolean
+        default: false
+
+concurrency:
+  group: injuries-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  injuries:
+    name: Write the injury lists
+    runs-on: ubuntu-latest
+    # The script's own budget is 420s and stops itself; this is the outer bound.
+    timeout-minutes: 12
+
+    env:
+      SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Unit tests
+        run: node engine.injuries.test.js
+
+      - name: Fetch the injury lists
+        shell: bash
+        run: |
+          set -o pipefail
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          node fetchInjuries.js ${{ inputs.dry_run && '--dry-run' || '' }} | tee -a "$GITHUB_STEP_SUMMARY"
+          status=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit $status
