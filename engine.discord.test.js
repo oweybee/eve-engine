@@ -229,6 +229,39 @@ t('digests never read value_signals (they go to channels everyone can see)', () 
   assert(!digestIo.includes('value_signals'));
 });
 
+
+// ── Player hit rates (#hit-rates) ──────────────────────────────────────────
+const { playerSections, playersPost } = require('./lib/discordDigest');
+const railRow = (name, hits, games = 10) => ({
+  player_name: name, team_name: 'Barcelona', opponent: 'PSG', league: 'UEFA Champions League',
+  kickoff_at: '2026-10-20T19:00:00Z', hits, games,
+  run: Array.from({ length: games }, (_, i) => i >= games - hits),
+});
+
+t('player sections keep only 8/10+ over 8+ games, four a market', () => {
+  const s = playerSections({ sot1: [railRow('A', 10), railRow('B', 9), railRow('C', 8), railRow('D', 9), railRow('E', 9), railRow('F', 7), railRow('G', 6, 6)] });
+  assert.strictEqual(s.length, 1);
+  assert.deepStrictEqual(s[0].list.map(p => p.name), ['A', 'B', 'C', 'D']);
+});
+
+t('player post carries counts, 18+, and no price', () => {
+  const p = playersPost({ ga: [railRow('Lamine Yamal', 9)] });
+  const txt = all(p);
+  assert(txt.includes('9/10') && txt.includes('18+'));
+  assert(!/\b\d\.\d\d\b/.test(txt.replace(/<t:\d+:t>/g, '')), 'no decimal prices');
+});
+
+t('at most six player markets, the reserve only when one is empty', () => {
+  const full = Object.fromEntries(['sot1','ga','card','foul1','tkl1','sv3','fd1'].map(k => [k, [railRow(k, 9)]]));
+  assert.deepStrictEqual(playerSections(full).map(s => s.stat), ['sot1','ga','card','foul1','tkl1','sv3']);
+  delete full.card;
+  assert.deepStrictEqual(playerSections(full).map(s => s.stat), ['sot1','ga','foul1','tkl1','sv3','fd1']);
+});
+
+t('no strong player runs means no player post', () => {
+  assert.strictEqual(playersPost({ sot1: [railRow('X', 5)] }), null);
+});
+
 // Image cards: async, so they run after the sync checks.
 (async () => {
   const { trendsCard, moversCard } = require('./lib/discordCards');
@@ -236,6 +269,9 @@ t('digests never read value_signals (they go to channels everyone can see)', () 
   const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
   const a = await trendsCard(trendSections([fx], hist));
   assert(a.subarray(0, 4).equals(PNG) && a.length > 10000, 'trends card is a real PNG'); n++; console.log(`ok ${n} trends card renders`);
+  const { playersCard } = require('./lib/discordCards');
+  const pc = await playersCard(playerSections({ sot1: [railRow('A', 10)], ga: [railRow('B', 9)] }));
+  assert(pc.subarray(0, 4).equals(PNG) && pc.length > 10000, 'players card is a real PNG'); n++; console.log(`ok ${n} players card renders`);
   const b = await moversCard(moverRows(oddsRows, [fx]));
   assert(b.subarray(0, 4).equals(PNG) && b.length > 10000, 'movers card is a real PNG'); n++; console.log(`ok ${n} movers card renders`);
   console.log(`\n${n} passed`);

@@ -20,9 +20,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'signals | results | weekly | trends | movers | edge | delete'
+        description: 'signals | results | weekly | trends | players | movers | edge | delete'
         type: choice
-        options: [signals, results, weekly, trends, movers, edge, delete]
+        options: [signals, results, weekly, trends, players, movers, edge, delete]
         default: signals
       edge_season:
         description: 'edge only: season to post, e.g. 2025/26 (blank = newest)'
