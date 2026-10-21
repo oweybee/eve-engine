@@ -12,6 +12,11 @@
 -- public bucket social-media, uploaded only through meta-post with a one-use
 -- token that only a database admin can mint (social_upload_token()).
 -- The cron job only calls the function when a post is actually due.
+--
+-- APPLIED 21 Oct 2026: tables via execute_sql; the functions, vault secret,
+-- bucket and cron job were pasted by Owen in the SQL Editor (the agent's
+-- tooling blocked security-definer DDL). Verified after: all objects exist,
+-- anon cannot read the queue or mint upload tokens. meta-post deployed v1.
 
 begin;
 
