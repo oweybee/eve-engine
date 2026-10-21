@@ -15,7 +15,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.45.4'
 import { cardTree, W, H } from './cardTree.js'
 import { oauthHeader } from './oauth1.ts'
 
-const FOOTER = '18+ | BeGambleAware | Pricing analysis, not advice'
+const FOOTER = '18+ | GamCare 0808 8020 133 | Pricing analysis, not advice'
 const say = (msg: string, status = 200) =>
   new Response(msg + '\n', { status, headers: { 'content-type': 'text/plain; charset=utf-8' } })
 

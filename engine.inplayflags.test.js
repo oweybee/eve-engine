@@ -108,7 +108,7 @@ t('X text: facts, footer, no link, and every frame a different shape', () => {
   const shapes = new Set();
   for (let i = 0; i < FRAMES.length; i++) {
     const s = xFlagText(m, f, i);
-    assert(s.endsWith('18+ | BeGambleAware | Live match facts, not advice'));
+    assert(s.endsWith('18+ | GamCare 0808 8020 133 | Live match facts, not advice'));
     assert(s.includes('Manchester United 1-0 Tottenham'));
     assert(!/https?:|maxedge\.live/i.test(s));
     assert(s.length <= 280, `frame ${i} is ${s.length} chars`);
