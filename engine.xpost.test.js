@@ -28,14 +28,14 @@ console.log('\ncompose — the rules that cannot be broken');
 it('every post carries the exact compliance footer', () => {
   const t = c.compose({ body: c.valueBody(ROW, 0), routeKey: 'value' });
   assert.ok(t.endsWith(c.FOOTER), 'footer missing or not last');
-  assert.strictEqual(c.FOOTER, '18+ | BeGambleAware | Pricing analysis, not advice');
+  assert.strictEqual(c.FOOTER, '18+ | GamCare 0808 8020 133 | Pricing analysis, not advice');
 });
 
-it('begambleaware is plain text, never a link', () => {
+it('the helpline line is plain text, never a link', () => {
   // A linked .org is suppressed by X's algorithm, and a suppressed compliance
   // line is a missing one.
-  assert.ok(!/begambleaware\.org/i.test(c.FOOTER));
-  assert.ok(!/https?:\/\/\S*gambleaware/i.test(c.FOOTER));
+  assert.ok(!/gambleaware/i.test(c.FOOTER));
+  assert.ok(!/https?:\/\//i.test(c.FOOTER));
 });
 
 it('refuses a post containing an emoji', () => {
