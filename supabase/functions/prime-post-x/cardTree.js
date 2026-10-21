@@ -1,5 +1,10 @@
 // PRIME post card: 1200x675 (16:9, shows uncropped in the X timeline).
 // Same tree as functions/prime-card/cardTree.js; keep the two in step.
+//
+// d: { selection, fixture, league, koLabel, odds, floor, fair, book, checked,
+//      edge, score }  (strings pre-formatted)
+//
+// No club crest: the ASA rule is no crest beside a price, pick, rung or edge.
 
 export const W = 1200
 export const H = 675
@@ -12,13 +17,14 @@ const C = {
   mid: '#a1a4ab',
   low: '#6f737b',
   green: '#a6e47e',
+  greenDim: 'rgba(166,228,126,0.16)',
   greenInk: '#10200a',
 }
 
 const el = (style, children) => ({ type: 'div', props: { style: { display: 'flex', ...style }, children } })
 const t = (content, style) => el(style, content)
-const img = (src, size, style = {}) => ({ type: 'img', props: { src, width: size, height: size, style: { objectFit: 'contain', ...style } } })
 
+// Where the fair, floor and checked prices sit on the scale (0..1).
 function scale(d) {
   const fair = Number(d.fair), floor = Number(d.floor), odds = Number(d.odds)
   if (![fair, floor, odds].every(Number.isFinite) || odds <= fair) return null
@@ -84,9 +90,6 @@ export function cardTree(d) {
         t(d.selection, { fontSize: long ? 56 : 68, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.02 }),
         t(d.fixture, { fontSize: 26, color: C.mid }),
       ]),
-      d.crest
-        ? el({ width: 168, height: 168, borderRadius: 84, background: C.panel, border: `1.5px solid ${C.line}`, alignItems: 'center', justifyContent: 'center' }, [img(d.crest, 104)])
-        : null,
     ].filter(Boolean)),
     el({ alignItems: 'flex-end', gap: 48 }, [
       el({ flexDirection: 'column', gap: 2, width: 300 }, [

@@ -50,19 +50,9 @@ function b64(bytes: Uint8Array) {
   return btoa(s)
 }
 
-async function crestDataUrl(url: string | null) {
-  if (!url) return null
-  try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(2500) })
-    const type = r.headers.get('content-type') ?? 'image/png'
-    if (!r.ok || !/png|jpe?g|svg/.test(type)) return null
-    return `data:${type};base64,${b64(new Uint8Array(await r.arrayBuffer()))}`
-  } catch { return null }
-}
-
 async function cardPng(d: any) {
-  const [f, crest] = await Promise.all([loadFonts(), crestDataUrl(d.crestUrl)])
-  const img = new ImageResponse(cardTree({ ...d, crest }) as any, { width: W, height: H, fonts: f })
+  const f = await loadFonts()
+  const img = new ImageResponse(cardTree(d) as any, { width: W, height: H, fonts: f })
   return new Uint8Array(await img.arrayBuffer())
 }
 
