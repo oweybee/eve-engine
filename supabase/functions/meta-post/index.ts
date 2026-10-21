@@ -13,7 +13,9 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4'
 
 const G = 'https://graph.facebook.com/v23.0'
-const PAGE_ID = Deno.env.get('META_PAGE_ID') ?? '61595589209014'
+// The Page is found from the token (/me/accounts) rather than typed: the id in a
+// new-style Page URL is the profile id, which the Graph API refuses as a Page.
+const PAGE_ID_HINT = Deno.env.get('META_PAGE_ID') ?? null
 const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 const json = (o: unknown, status = 200) =>
   new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json' } })
@@ -29,14 +31,17 @@ async function graph(path: string, params: Record<string, string>, method: 'GET'
   return j
 }
 
-let ctxCache: { name: string; pageToken: string; igId: string | null; igUser: string | null } | null = null
+let ctxCache: { pageId: string; name: string; pageToken: string; igId: string | null; igUser: string | null } | null = null
 async function ctx() {
   if (ctxCache) return ctxCache
   const sys = Deno.env.get('META_PAGE_TOKEN')
   if (!sys) throw new Error('META_PAGE_TOKEN is not set in Edge Function secrets')
-  const p = await graph(`/${PAGE_ID}`, { fields: 'name,access_token,instagram_business_account{id,username}', access_token: sys })
-  if (!p.access_token) throw new Error('The token cannot act as the MaxEdge Page (assign the Page to the system user and include pages_manage_posts)')
-  ctxCache = { name: p.name, pageToken: p.access_token, igId: p.instagram_business_account?.id ?? null, igUser: p.instagram_business_account?.username ?? null }
+  const r = await graph('/me/accounts', { fields: 'id,name,access_token,instagram_business_account{id,username}', limit: '50', access_token: sys })
+  const pages: any[] = r.data ?? []
+  const p = pages.find((x) => x.id === PAGE_ID_HINT) ?? (pages.length === 1 ? pages[0] : pages.find((x) => /maxedge/i.test(x.name)))
+  if (!p) throw new Error(`The token sees ${pages.length} Page(s) and none is MaxEdge: assign the Page to the system user and include pages_show_list`)
+  if (!p.access_token) throw new Error('The token cannot act as the MaxEdge Page (include pages_manage_posts)')
+  ctxCache = { pageId: p.id, name: p.name, pageToken: p.access_token, igId: p.instagram_business_account?.id ?? null, igUser: p.instagram_business_account?.username ?? null }
   return ctxCache
 }
 
@@ -44,9 +49,9 @@ async function publish(row: any) {
   const c = await ctx()
   const t = c.pageToken
   if (row.platform === 'facebook') {
-    if (row.media_type === 'text') return { post_id: (await graph(`/${PAGE_ID}/feed`, { message: row.caption, access_token: t }, 'POST')).id }
-    if (row.media_type === 'image') return { post_id: (await graph(`/${PAGE_ID}/photos`, { url: row.media_url, caption: row.caption, access_token: t }, 'POST')).id }
-    return { post_id: (await graph(`/${PAGE_ID}/videos`, { file_url: row.media_url, description: row.caption, access_token: t }, 'POST')).id }
+    if (row.media_type === 'text') return { post_id: (await graph(`/${c.pageId}/feed`, { message: row.caption, access_token: t }, 'POST')).id }
+    if (row.media_type === 'image') return { post_id: (await graph(`/${c.pageId}/photos`, { url: row.media_url, caption: row.caption, access_token: t }, 'POST')).id }
+    return { post_id: (await graph(`/${c.pageId}/videos`, { file_url: row.media_url, description: row.caption, access_token: t }, 'POST')).id }
   }
   if (!c.igId) throw new Error('No Instagram professional account is linked to the MaxEdge Page')
   const params: Record<string, string> = row.media_type === 'image'
@@ -119,7 +124,7 @@ Deno.serve(async (req) => {
   if (!authed) return json({ error: 'unauthorised' }, 401)
 
   if (action === 'check') {
-    try { const c = await ctx(); return json({ ok: true, page: c.name, instagram: c.igUser, instagram_id: c.igId }) }
+    try { const c = await ctx(); return json({ ok: true, page: c.name, page_id: c.pageId, instagram: c.igUser, instagram_id: c.igId }) }
     catch (e) { return json({ ok: false, error: String(e) }) }
   }
   if (action === 'run') return json({ ok: true, results: await run() })
