@@ -9,7 +9,7 @@ Answers must be checked against matches and raw player_match_stats rows (deduped
 import json, os, re, sys, shutil
 import numpy as np, soundfile as sf
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from site_kit import CSS, JS, FIT, WORDMARK, tt_check, no_em, SR, plain, nsent, voice_segments, write_script
+from site_kit import CSS, JS, FIT, WORDMARK, tt_check, no_em, SR, plain, nsent, voice_segments, write_script, badge, END_LINES, END_CSS, add_end, write_cuts
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODE, DATA, OUT = sys.argv[1], sys.argv[2], sys.argv[3]; os.makedirs(OUT, exist_ok=True)
@@ -26,7 +26,7 @@ THINK = 3.0
 def lines():
     out = [HOOK_SAY]
     for q in Q: out += [q[2], q[6]]
-    return out + [BONUS_SAY, END_SAY]
+    return out + [BONUS_SAY, END_SAY] + END_LINES
 
 def tick(f=1500, d=.05):
     x = np.arange(int(d * SR)) / SR; return (0.22 * np.sin(2 * np.pi * f * x) * np.exp(-x * 60)).astype(np.float32)
@@ -114,24 +114,19 @@ def build():
                    f'<div class="res"><div class="r" data-row=".2"><div class="n">1</div><div class="tx"><b>Who is he?</b><s>Answer pinned tomorrow</s></div></div>'
                    f'<div class="r" data-row=".3"><div class="n">2</div><div class="tx"><b>Your score out of 8</b><s>Easy to knows ball</s></div><div class="pill num">?/8</div></div></div>'
                    f'<div class="follow" data-in=".6">Follow for tomorrow\'s quiz</div>'))
-    total = round(en, 2)
-    texts = [h for _, _, h in scenes] + [x[2] for x in subs] + ls
+    texts = [h for _, _, h in scenes] + [x[2] for x in subs] + ls[:-len(END_LINES)]
     no_em(*texts); tt_check(*[plain(x) for x in texts])
-    wav = audio[:int(total * SR)]; wav = (wav / max(1, np.max(np.abs(wav)) / .95)).astype(np.float32)
-    sf.write(os.path.join(OUT, KEY + ".wav"), wav, SR)
-    body = "".join(f'<div class="scene" data-s="{a:.3f}" data-e="{b:.3f}">{h}</div>' for a, b, h in scenes)
     fit2 = """<script>document.querySelectorAll('.fit2').forEach(e=>{let s=parseFloat(getComputedStyle(e).fontSize);while(e.scrollHeight>260&&s>48){s-=2;e.style.fontSize=s+'px';}});</script>"""
-    html = (f'<!doctype html><html><head><meta charset="utf-8"><style>{CSS}{QCSS}</style></head><body><div class="bar">{WORDMARK}</div>'
+    fin = add_end(scenes, say, scenes[-1][1])
+    page = lambda body, total, subs: (f'<!doctype html><html><head><meta charset="utf-8"><style>{CSS}{QCSS}{END_CSS}</style></head><body><div class="bar">{WORDMARK}</div>'
             f'{body}<div class="subs"><span id="sb"></span></div>'
             f'<div class="foot"><span>{D["date_label"]} · Football quiz</span><span id="sn"></span></div><div class="prog"><i id="pg"></i></div>'
             f'<script>window.TOTAL={total};window.SUBS={json.dumps(subs)};</script>{fit2}{JS}{QJS}</body></html>')
-    open(os.path.join(OUT, KEY + ".html"), "w").write(html)
-    return {"html": KEY + ".html", "wav": KEY + ".wav", "total": total, "out": D["file"],
-            "scenes": [(round(a, 2), round(b, 2)) for a, b, _ in scenes]}
+    return write_cuts(OUT, KEY, D["file"], scenes, subs, audio, fin, page)
 
 if __name__ == "__main__":
     shutil.copy(os.path.join(HERE, "onest.woff2"), os.path.join(OUT, "onest.woff2"))
     if MODE == "script":
         print(write_script(KEY, lines(), OUT))
     else:
-        m = build(); json.dump({"videos": [m]}, open(os.path.join(OUT, "manifest.json"), "w"), indent=1); print(m["out"], m["total"])
+        m = build(); json.dump({"videos": m}, open(os.path.join(OUT, "manifest.json"), "w"), indent=1); [print(x["out"], x["total"]) for x in m]

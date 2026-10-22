@@ -14,7 +14,7 @@ Layouts by rank (#5..#1): hit-rate card, bar chart, match-log table, fixture car
 import json, os, re, sys, shutil
 import numpy as np, soundfile as sf
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from site_kit import CSS, JS, FIT, WORDMARK, tt_check, no_em, tick, hit, SR, plain, voice_segments, write_script
+from site_kit import CSS, JS, FIT, WORDMARK, tt_check, no_em, tick, hit, SR, plain, voice_segments, write_script, badge, END_LINES, END_CSS, add_end, write_cuts
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODE, DATA, OUT = sys.argv[1], sys.argv[2], sys.argv[3]; os.makedirs(OUT, exist_ok=True)
@@ -46,7 +46,7 @@ def script(v):
         ls.append(f"{lead} A {POS_WORD[p['pos']]}. {plain(h)} against {plain(a)}.")
         ls.append(f"It's {plain(p['name'])}. {p.get('fact') or v['run_say']}.")
     ls.append(f"{v['ask']} Comment the number.")
-    return ls
+    return ls + END_LINES
 
 CSS = """@font-face{font-family:Onest;src:url(onest.woff2) format('woff2');font-weight:100 900}
 :root{--s0:#0D1116;--s1:#191C22;--s2:#24282E;--s3:#303439;--line:#23272E;--soft:#171A20;--ink:#FFFFFF;--mid:#BCC0C5;--low:#9DA1A6;--dim:#85888E;
@@ -205,7 +205,7 @@ def lay_fixture(p, f0, step, rel, rk, N):
     pills = "".join(f'<i data-t="{t}">{x[3]}</i>' for t, x in zip(ts, g))
     return (name_block(p, rel, rk, N) +
             f'<div class="card fxc" data-in=".1" style="margin-top:6px"><div class="lg"><span>Tonight</span><span>{p["ko"]}</span></div>'
-            f'<div class="club"><div class="crest">{initials(h)}</div>{h}</div><div class="club"><div class="crest">{initials(a)}</div>{a}</div></div>'
+            f'<div class="club">{badge(h, 64)}{h}</div><div class="club">{badge(a, 64)}{a}</div></div>'
             f'<div class="card" data-in=".2" style="margin-top:20px"><div class="rl"><span>{p["pos"]} · {V["stat"]}, last {n}</span><b class="num" data-ticks="{json.dumps(ts)}">0/{n}</b></div>'
             f'<div class="frm">{pills}</div><div class="hfoot"><b>{p["per90"]:.2f} per 90</b>Every game, {p["line"]} or more</div></div>'), ts
 
@@ -273,25 +273,20 @@ def build(v):
                    f'<div class="pill num">{len(p["g"])}/{len(p["g"])}</div></div>' for k, p in enumerate(reversed(P)))
     scenes.append((s0, s0 + max(3.6, d + .7), f'<div class="eyebrow">Comment the number</div><h1 style="margin-top:12px">{ask}</h1>'
                    f'<div class="res">{opts}</div><div class="follow" data-in="{.3 + N * .08:.2f}">Follow for tomorrow\'s countdown</div>'))
-    total = round(scenes[-1][1], 2)
     texts = [x for _, _, x in scenes] + [x[2] for x in subs] + [hook]
     no_em(*texts); tt_check(*texts)
-    wav = audio[:int(total * SR)]; wav = (wav / max(1, np.max(np.abs(wav)) / .95)).astype(np.float32)
-    sf.write(os.path.join(OUT, v["key"] + ".wav"), wav, SR)
-    body = "".join(f'<div class="scene" data-s="{a:.3f}" data-e="{b:.3f}">{h}</div>' for a, b, h in scenes)
-    html = (f'<!doctype html><html><head><meta charset="utf-8"><style>{CSS}</style></head><body><div class="bar">{WORDMARK}</div>'
+    fin = add_end(scenes, lambda t0, cap: say(t0, None, cap), scenes[-1][1])
+    page = lambda body, total, subs: (f'<!doctype html><html><head><meta charset="utf-8"><style>{CSS}{END_CSS}</style></head><body><div class="bar">{WORDMARK}</div>'
             f'{body}<div class="subs"><span id="sb"></span></div>'
             f'<div class="foot"><span>{D["date_label"]} · Last {len(P[0]["g"])} games</span><span id="sn"></span></div><div class="prog"><i id="pg"></i></div>'
             f'<script>window.TOTAL={total};window.SUBS={json.dumps(subs)};</script>{FIT}{JS}</body></html>')
-    open(os.path.join(OUT, v["key"] + ".html"), "w").write(html)
-    return {"html": v["key"] + ".html", "wav": v["key"] + ".wav", "total": total, "out": v["file"],
-            "scenes": [(round(a, 2), round(b, 2)) for a, b, _ in scenes]}
+    return write_cuts(OUT, v["key"], v["file"], scenes, subs, audio, fin, page)
 
 if __name__ == "__main__":
     shutil.copy(os.path.join(HERE, "onest.woff2"), os.path.join(OUT, "onest.woff2"))
     if MODE == "script":
         for v in D["videos"]: prep(v); print(write_script(v["key"], script(v), OUT))
     else:
-        man = [build(v) for v in D["videos"]]
+        man = [m for v in D["videos"] for m in build(v)]
         json.dump({"videos": man}, open(os.path.join(OUT, "manifest.json"), "w"), indent=1)
         for m in man: print(m["out"], m["total"])

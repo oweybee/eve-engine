@@ -10,3 +10,11 @@ Social videos drawn as maxedge.live's own screens (Onest, the site's colour toke
 - `render_all.py`: renders `manifest.json` to MP4 (Playwright frames + ffmpeg)
 
 Each script has a `script` mode that writes `<key>_script.txt`. Send that text to Everygen in ONE generate_voiceover call per video (1 credit each on 22 Oct), save `<key>_astro.wav` and `<key>_astro.json` (`{"sentenceEnds": [...]}`), then run `build ... astro`. Font: `npm pack @fontsource-variable/onest`, copy `onest-latin-wght-normal.woff2` here as `onest.woff2`.
+
+
+## Rules added 22 Oct 2026 (Owen)
+- **Club badges are patterned discs in the club's kit colours** (solid, stripes, hoops, halves, centre stripe or sleeves, with a lower band in the second colour), never initials and never the real crest. `site_kit.badge(name, size, col)`. Big clubs are curated in `KITS` (with `ALIAS` for short names); anything else uses its most common `lineups.team_colors` (passed through `team_rows.sql` as `h_col`/`a_col`), then a neutral disc.
+- **Every video ends on the end card**: Like, Follow for more, maxedge.live. The script gains two lines (`END_LINES`), so the ONE Everygen call covers them. `write_cuts` writes two files from that one voiceover:
+  - `<file>.mp4` for X, Instagram and Facebook: speaks and shows maxedge.live.
+  - `<file>_TikTok.mp4`: stops after "Like and follow for more." and shows no site, because TikTok posts never carry the site link.
+  No extra credits: the TikTok cut is the same audio, cut one sentence early.

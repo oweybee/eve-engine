@@ -27,6 +27,8 @@ seq as (
   from hist where rn<=10 group by tid),
 j as (
   select to_char(fx.kickoff_at at time zone 'Europe/London','HH24:MI') ko, fx.hn, fx.an, fx.league, fx.country,
+    (select lu.team_colors from lineups lu where lu.team_name=fx.hn and lu.team_colors ? 'primary' group by lu.team_colors order by count(*) desc limit 1) h_col,
+    (select lu.team_colors from lineups lu where lu.team_name=fx.an and lu.team_colors ? 'primary' group by lu.team_colors order by count(*) desc limit 1) a_col,
     h.n hn_n, h.last_game h_last, h.o3 h_o3, h.bt h_bt, h.u2 h_u2, h.games h_games,
     a.n an_n, a.last_game a_last, a.o3 a_o3, a.bt a_bt, a.u2 a_u2, a.games a_games
   from fx join seq h on h.tid=fx.home_team_id join seq a on a.tid=fx.away_team_id, params
