@@ -272,49 +272,40 @@ def badge(name, size=76, col=None):
             f'<rect x="0" y="70" width="100" height="30" fill="{b}"/><rect x="0" y="68" width="100" height="3" fill="#0A0D11" opacity=".25"/></g>'
             f'<circle cx="50" cy="50" r="48" fill="none" stroke="{ring}" stroke-width="4"/></svg>')
 
-# ---------------------------------------------------------------- end card (rule, 22 Oct 2026)
-# Every video ends: Like + Follow for more + maxedge.live. ONE voiceover, TWO cuts:
-#   site cut (X, Instagram, Facebook): speaks and shows maxedge.live;
-#   tiktok cut: stops after "Like and follow for more." and shows no site (TikTok rule).
-END_LINES = ["Like and follow for more.", "Every match, every stat, at max edge dot live."]
+# ---------------------------------------------------------------- end card (rules, 22 Oct 2026)
+# Every video ends on Like + Follow for more. ONE video for TikTok, Instagram and Facebook (Owen, 22 Oct):
+# because the same file goes to TikTok, the end card neither shows nor speaks the site (TikTok rule).
+# maxedge.live goes in the Instagram and Facebook captions instead. No videos are made for X.
+END_LINES = ["Like and follow for more."]
 END_CSS = """.endc{text-align:center;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .endc .tag{font-size:34px;color:var(--mid);margin-top:26px}
-.endc .site{display:inline-block;margin-top:40px;background:var(--g);color:var(--plate);border-radius:999px;padding:22px 52px;font-size:58px;font-weight:700;letter-spacing:-1px}
 .endc .acts{display:flex;justify-content:center;gap:20px;margin-top:40px}
 .endc .acts div{border-radius:999px;padding:22px 40px;font-size:38px;font-weight:700;background:var(--s2);color:#fff}
 .endc .acts div.f{background:#fff;color:var(--plate)}"""
 _ENDMARK = "@@ENDCARD@@"
-def end_html(cut):
+def end_html(cut=None):
     wm = WORDMARK.replace('fill="#0A0D11"', 'fill="#FFFFFF"').replace('height="44"', 'height="70"')
-    site = '<div class="site" data-in=".3" data-pop>maxedge.live</div>' if cut == "site" else ""
-    return (f'<div class="endc">{wm}<div class="tag">Every match. Every stat.</div>{site}'
-            '<div class="acts" data-in=".5"><div>&#9829; Like</div><div class="f">Follow for more</div></div></div>')
+    return (f'<div class="endc">{wm}<div class="tag">Every match. Every stat.</div>'
+            '<div class="acts" data-in=".3"><div>&#9829; Like</div><div class="f">Follow for more</div></div></div>')
 
 def add_end(scenes, say, t):
-    """Append the end card. say(t0, caption) must speak the NEXT voice segment (END_LINES must be the last two
-    script lines) and return its duration. Returns the timing dict write_cuts needs."""
+    """Append the end card. say(t0, caption) must speak the NEXT voice segment (END_LINES must be the last
+    script line) and return its duration. Returns the timing dict write_cuts needs."""
     s0 = t + .1; d1 = say(s0 + .05, "Like and follow for more.")
-    c = s0 + .05 + d1 + .25; d2 = say(c, "Every match, every stat, at maxedge.live.")
-    site = round(c + d2 + 1.0, 2); tt = round(s0 + .05 + d1 + 1.4, 2)
-    scenes.append((s0, site, _ENDMARK))
-    return {"site": site, "tt": tt, "cut": c - .03}
+    end = round(s0 + .05 + d1 + 1.4, 2)
+    scenes.append((s0, end, _ENDMARK))
+    return {"end": end}
 
 def write_cuts(out, key, file, scenes, subs, audio, fin, page):
-    """Write both cuts. page(body_html, total, subs) -> full html. Returns two manifest entries."""
-    res = []
-    for cut in ("site", "tiktok"):
-        total = fin["site"] if cut == "site" else fin["tt"]
-        sc = [(a, (total if h == _ENDMARK else b), end_html(cut) if h == _ENDMARK else h) for a, b, h in scenes]
-        sb = subs if cut == "site" else [x for x in subs if x[0] < fin["cut"]]
-        w = audio[:int(total * SR)].copy()
-        if cut == "tiktok": w[int(fin["cut"] * SR):] = 0
-        w = (w / max(1, np.max(np.abs(w)) / .95)).astype(np.float32)
-        if cut == "tiktok": tt_check(*[plain(re.sub(r"<[^>]+>", " ", h)) for _, _, h in sc[-1:]])
-        k = key if cut == "site" else key + "_tt"
-        _sf.write(_os.path.join(out, k + ".wav"), w, SR)
-        body = "".join(f'<div class="scene" data-s="{a:.3f}" data-e="{b:.3f}">{h}</div>' for a, b, h in sc)
-        open(_os.path.join(out, k + ".html"), "w").write(page(body, total, sb))
-        res.append({"html": k + ".html", "wav": k + ".wav", "total": total,
-                    "out": file if cut == "site" else file.replace(".mp4", "_TikTok.mp4"),
-                    "cut": "X, Instagram, Facebook" if cut == "site" else "TikTok"})
-    return res
+    """Write the one video. page(body_html, total, subs) -> full html. Returns a one-entry manifest list
+    (kept as a list so the builders' callers do not change)."""
+    total = fin["end"]
+    sc = [(a, (total if h == _ENDMARK else b), end_html() if h == _ENDMARK else h) for a, b, h in scenes]
+    w = audio[:int(total * SR)].copy()
+    w = (w / max(1, np.max(np.abs(w)) / .95)).astype(np.float32)
+    tt_check(*[plain(re.sub(r"<[^>]+>", " ", h)) for _, _, h in sc[-1:]])
+    _sf.write(_os.path.join(out, key + ".wav"), w, SR)
+    body = "".join(f'<div class="scene" data-s="{a:.3f}" data-e="{b:.3f}">{h}</div>' for a, b, h in sc)
+    open(_os.path.join(out, key + ".html"), "w").write(page(body, total, subs))
+    return [{"html": key + ".html", "wav": key + ".wav", "total": total, "out": file,
+             "cut": "TikTok, Instagram, Facebook"}]
