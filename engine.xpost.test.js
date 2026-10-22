@@ -75,13 +75,13 @@ it('links only to routes that exist', () => {
   assert.throws(() => c.compose({ body: 'x', routeKey: 'accas' }), e => e.refusal === 'unknown-route');
   assert.throws(() => c.compose({ body: 'x', routeKey: 'signals' }), e => e.refusal === 'unknown-route');
   for (const k of Object.keys(c.ROUTES)) {
-    assert.ok(c.ROUTES[k].startsWith('https://www.maxedge.live/'), `${k} is not a site route`);
+    assert.ok(c.ROUTES[k].startsWith('https://maxedge.live/'), `${k} is not a site route`);
   }
 });
 
 it('measures length the way X does, counting a URL as 23', () => {
   const short = c.weightedLength('a https://x.co/1');
-  const long = c.weightedLength('a https://www.maxedge.live/value-bets');
+  const long = c.weightedLength('a https://maxedge.live/value-bets');
   assert.strictEqual(short, long, 'URL length leaked into the budget');
 });
 

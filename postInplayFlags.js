@@ -30,7 +30,7 @@
  *   X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET
  *   X_INPLAY_DAILY_CAP           X posts per UK day (default 6)
  *   X_INPLAY_LEAGUES             API-Football league ids for X (default: 14 leagues, see lib/inplayFlagsX)
- *   SITE_URL                     default https://www.maxedge.live
+ *   SITE_URL                     default https://maxedge.live
  *   DRY_RUN=1                    read and print, post nothing, write nothing
  */
 
@@ -66,7 +66,7 @@ async function send(webhook, match, flag, payload) {
   }]);
 }
 
-const SITE_URL = (process.env.SITE_URL || 'https://www.maxedge.live').replace(/\/$/, '');
+const SITE_URL = (process.env.SITE_URL || 'https://maxedge.live').replace(/\/$/, '');
 const LOOP_MIN = Number(process.env.INPLAY_FLAGS_LOOP_MIN) || 25;
 const POLL_SEC = Math.max(60, Number(process.env.INPLAY_FLAGS_POLL_SEC) || 180);
 const MAX_POSTS_PER_PASS = 15;
