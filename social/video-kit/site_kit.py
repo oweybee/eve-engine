@@ -197,3 +197,124 @@ def say_time(ko):
     if m == 15: return f"quarter past {words[h12]}"
     if m == 45: return f"quarter to {words[(h12 + 1) % 12]}"
     return f"{words[h12]} {m}"
+
+
+# ---------------------------------------------------------------- badges (rule, 22 Oct 2026)
+# Club badges are patterned discs in the club's kit colours, never initials and never the real crest.
+KITS = {
+ "Arsenal": ("sleeves", "#DB0007", "#FFFFFF"), "Chelsea": ("solid", "#034694", "#FFFFFF"), "Tottenham": ("solid", "#FFFFFF", "#132257"),
+ "Manchester City": ("solid", "#6CABDD", "#FFFFFF"), "Manchester United": ("solid", "#DA291C", "#111111"), "Liverpool": ("solid", "#C8102E", "#FFFFFF"),
+ "Brighton": ("stripes", "#0057B8", "#FFFFFF"), "Newcastle": ("stripes", "#111111", "#FFFFFF"), "Aston Villa": ("sleeves", "#670E36", "#95BFE5"),
+ "Brentford": ("stripes", "#E30613", "#FFFFFF"), "Everton": ("solid", "#003399", "#FFFFFF"), "Crystal Palace": ("stripes", "#C4122E", "#1B458F"),
+ "Bournemouth": ("stripes", "#DA291C", "#111111"), "Fulham": ("solid", "#FFFFFF", "#111111"), "Nottingham Forest": ("solid", "#DD0000", "#FFFFFF"),
+ "Leeds": ("solid", "#FFFFFF", "#1D428A"), "Sunderland": ("stripes", "#EB172B", "#FFFFFF"), "Coventry": ("solid", "#77B5E6", "#FFFFFF"),
+ "Hull City": ("stripes", "#F5A12D", "#111111"), "Ipswich": ("solid", "#0E63AD", "#FFFFFF"), "West Ham": ("sleeves", "#7A263A", "#1BB1E7"),
+ "Wolves": ("solid", "#FDB913", "#231F20"), "Barcelona": ("stripes", "#A50044", "#004D98"), "Real Madrid": ("solid", "#FFFFFF", "#FEBE10"),
+ "Atletico Madrid": ("stripes", "#CB3524", "#FFFFFF"), "Bayern München": ("solid", "#DC052D", "#FFFFFF"), "Borussia Dortmund": ("solid", "#FDE100", "#111111"),
+ "Bayer Leverkusen": ("solid", "#E32221", "#111111"), "Inter": ("stripes", "#0068A8", "#111111"), "AC Milan": ("stripes", "#FB090B", "#111111"),
+ "Juventus": ("stripes", "#111111", "#FFFFFF"), "Napoli": ("solid", "#12A0D7", "#FFFFFF"), "AS Roma": ("solid", "#8E1F2F", "#F0BC42"),
+ "Lazio": ("solid", "#87D8F7", "#FFFFFF"), "Paris Saint Germain": ("centre", "#004170", "#DA291C"), "Celtic": ("hoops", "#018749", "#FFFFFF"),
+ "Rangers": ("solid", "#1B458F", "#FFFFFF"), "Heart Of Midlothian": ("solid", "#8C1D40", "#FFFFFF"), "Aberdeen": ("solid", "#C8102E", "#FFFFFF"),
+ "SC Freiburg": ("solid", "#E2001A", "#111111"), "FC Augsburg": ("halves", "#BA3733", "#46714D"), "Borussia Mönchengladbach": ("solid", "#FFFFFF", "#111111"),
+ "RB Leipzig": ("solid", "#FFFFFF", "#DD0741"), "Eintracht Frankfurt": ("solid", "#111111", "#E1000F"), "VfB Stuttgart": ("solid", "#FFFFFF", "#E32219"),
+ "Benfica": ("solid", "#E83030", "#FFFFFF"), "FC Porto": ("stripes", "#00428C", "#FFFFFF"), "Sporting CP": ("hoops", "#008057", "#FFFFFF"),
+ "Ajax": ("centre", "#FFFFFF", "#D2122E"), "Feyenoord": ("halves", "#E3000B", "#FFFFFF"), "PSV Eindhoven": ("stripes", "#ED1C24", "#FFFFFF"),
+ "Marseille": ("solid", "#FFFFFF", "#2FAEE0"), "Lyon": ("solid", "#FFFFFF", "#DA0812"), "Monaco": ("halves", "#E7001E", "#FFFFFF"),
+ "Galatasaray": ("halves", "#A90432", "#FDB912"), "Fenerbahçe": ("stripes", "#163962", "#FFED00"), "Beşiktaş": ("stripes", "#111111", "#FFFFFF"),
+ "Real Betis": ("stripes", "#00954C", "#FFFFFF"), "Sevilla": ("solid", "#FFFFFF", "#D81E05"), "Villarreal": ("solid", "#FFE667", "#005187"),
+ "Athletic Club": ("stripes", "#EE2523", "#FFFFFF"),
+ "1899 Hoffenheim": ("solid", "#1961B5", "#FFFFFF"), "Werder Bremen": ("solid", "#1D9053", "#FFFFFF"), "FSV Mainz 05": ("solid", "#C3141E", "#FFFFFF"),
+ "Union Berlin": ("solid", "#EB1923", "#FFFFFF"), "VfL Wolfsburg": ("solid", "#65B32E", "#FFFFFF"), "1. FC Köln": ("solid", "#FFFFFF", "#ED1C24"),
+ "Hamburger SV": ("solid", "#FFFFFF", "#0A3F86"), "FC Schalke 04": ("solid", "#004D9D", "#FFFFFF"), "Lens": ("halves", "#FFE100", "#E1001A"),
+ "Lille": ("solid", "#E01E13", "#20325F"), "Nice": ("stripes", "#C8102E", "#111111"), "Rennes": ("solid", "#E13327", "#111111"),
+ "Strasbourg": ("solid", "#009FE3", "#FFFFFF"), "Trabzonspor": ("stripes", "#7A1E30", "#4AB7E8"), "Aston Villa": ("sleeves", "#670E36", "#95BFE5"), "Real Sociedad": ("stripes", "#0067B1", "#FFFFFF"), "Valencia": ("solid", "#FFFFFF", "#111111"),
+}
+
+def _pat(kind, b):
+    if kind == "stripes": return "".join(f'<rect x="{x}" y="0" width="12" height="100" fill="{b}"/>' for x in (14, 38, 62, 86))
+    if kind == "hoops": return "".join(f'<rect x="0" y="{y}" width="100" height="12" fill="{b}"/>' for y in (14, 38, 62, 86))
+    if kind == "halves": return f'<rect x="50" y="0" width="50" height="100" fill="{b}"/>'
+    if kind == "centre": return f'<rect x="36" y="0" width="28" height="100" fill="{b}"/>'
+    if kind == "sleeves": return f'<rect x="0" y="0" width="22" height="100" fill="{b}"/><rect x="78" y="0" width="22" height="100" fill="{b}"/>'
+    return ""
+
+ALIAS = {"bayern munich": "Bayern München", "bayern": "Bayern München", "man united": "Manchester United", "man utd": "Manchester United",
+         "man city": "Manchester City", "psg": "Paris Saint Germain", "paris": "Paris Saint Germain", "spurs": "Tottenham",
+         "tottenham hotspur": "Tottenham", "atletico": "Atletico Madrid", "atletico de madrid": "Atletico Madrid", "dortmund": "Borussia Dortmund",
+         "inter milan": "Inter", "milan": "AC Milan", "roma": "AS Roma", "besiktas": "Beşiktaş", "fenerbahce": "Fenerbahçe",
+         "leverkusen": "Bayer Leverkusen", "gladbach": "Borussia Mönchengladbach", "leipzig": "RB Leipzig", "freiburg": "SC Freiburg",
+         "augsburg": "FC Augsburg", "hearts": "Heart Of Midlothian", "porto": "FC Porto", "sporting": "Sporting CP", "psv": "PSV Eindhoven",
+         "stuttgart": "VfB Stuttgart", "frankfurt": "Eintracht Frankfurt", "forest": "Nottingham Forest", "wolverhampton": "Wolves",
+         "newcastle united": "Newcastle", "brighton & hove albion": "Brighton", "west ham united": "West Ham", "leeds united": "Leeds",
+         "betis": "Real Betis", "athletic bilbao": "Athletic Club", "hull": "Hull City"}
+
+def _kit(name, col=None):
+    if name in KITS: return KITS[name]
+    if plain(name).lower() in ALIAS: return KITS[ALIAS[plain(name).lower()]]
+    key = plain(name).lower().replace("fc ", "").strip()
+    for k, v in KITS.items():
+        kk = plain(k).lower()
+        if kk == key or kk.startswith(key + " ") or key.startswith(kk + " ") or kk.replace("fc ", "") == key: return v
+    if col and col.get("primary"):
+        a = "#" + col["primary"].lstrip("#"); b = "#" + (col.get("number") or col.get("border") or "FFFFFF").lstrip("#")
+        if b.upper() == a.upper(): b = "#FFFFFF" if a.upper() != "#FFFFFF" else "#111111"
+        return ("solid", a, b)
+    return ("solid", "#303439", "#85888E")
+
+def badge(name, size=76, col=None):
+    """Patterned club-colour disc with a lower band in the second colour (shirt over shorts).
+    col: optional lineups.team_colors dict, used when the club is not in KITS."""
+    kind, a, b = _kit(name, col); uid = abs(hash(name)) % 10**8
+    ring = "#30343A" if a.upper() in ("#FFFFFF", "#111111") else "rgba(255,255,255,.18)"
+    return (f'<svg class="badge" width="{size}" height="{size}" viewBox="0 0 100 100" aria-hidden="true" style="flex:none;display:block">'
+            f'<defs><clipPath id="c{uid}"><circle cx="50" cy="50" r="48"/></clipPath></defs>'
+            f'<g clip-path="url(#c{uid})"><rect width="100" height="100" fill="{a}"/>{_pat(kind, b)}'
+            f'<rect x="0" y="70" width="100" height="30" fill="{b}"/><rect x="0" y="68" width="100" height="3" fill="#0A0D11" opacity=".25"/></g>'
+            f'<circle cx="50" cy="50" r="48" fill="none" stroke="{ring}" stroke-width="4"/></svg>')
+
+# ---------------------------------------------------------------- end card (rule, 22 Oct 2026)
+# Every video ends: Like + Follow for more + maxedge.live. ONE voiceover, TWO cuts:
+#   site cut (X, Instagram, Facebook): speaks and shows maxedge.live;
+#   tiktok cut: stops after "Like and follow for more." and shows no site (TikTok rule).
+END_LINES = ["Like and follow for more.", "Every match, every stat, at max edge dot live."]
+END_CSS = """.endc{text-align:center;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.endc .tag{font-size:34px;color:var(--mid);margin-top:26px}
+.endc .site{display:inline-block;margin-top:40px;background:var(--g);color:var(--plate);border-radius:999px;padding:22px 52px;font-size:58px;font-weight:700;letter-spacing:-1px}
+.endc .acts{display:flex;justify-content:center;gap:20px;margin-top:40px}
+.endc .acts div{border-radius:999px;padding:22px 40px;font-size:38px;font-weight:700;background:var(--s2);color:#fff}
+.endc .acts div.f{background:#fff;color:var(--plate)}"""
+_ENDMARK = "@@ENDCARD@@"
+def end_html(cut):
+    wm = WORDMARK.replace('fill="#0A0D11"', 'fill="#FFFFFF"').replace('height="44"', 'height="70"')
+    site = '<div class="site" data-in=".3" data-pop>maxedge.live</div>' if cut == "site" else ""
+    return (f'<div class="endc">{wm}<div class="tag">Every match. Every stat.</div>{site}'
+            '<div class="acts" data-in=".5"><div>&#9829; Like</div><div class="f">Follow for more</div></div></div>')
+
+def add_end(scenes, say, t):
+    """Append the end card. say(t0, caption) must speak the NEXT voice segment (END_LINES must be the last two
+    script lines) and return its duration. Returns the timing dict write_cuts needs."""
+    s0 = t + .1; d1 = say(s0 + .05, "Like and follow for more.")
+    c = s0 + .05 + d1 + .25; d2 = say(c, "Every match, every stat, at maxedge.live.")
+    site = round(c + d2 + 1.0, 2); tt = round(s0 + .05 + d1 + 1.4, 2)
+    scenes.append((s0, site, _ENDMARK))
+    return {"site": site, "tt": tt, "cut": c - .03}
+
+def write_cuts(out, key, file, scenes, subs, audio, fin, page):
+    """Write both cuts. page(body_html, total, subs) -> full html. Returns two manifest entries."""
+    res = []
+    for cut in ("site", "tiktok"):
+        total = fin["site"] if cut == "site" else fin["tt"]
+        sc = [(a, (total if h == _ENDMARK else b), end_html(cut) if h == _ENDMARK else h) for a, b, h in scenes]
+        sb = subs if cut == "site" else [x for x in subs if x[0] < fin["cut"]]
+        w = audio[:int(total * SR)].copy()
+        if cut == "tiktok": w[int(fin["cut"] * SR):] = 0
+        w = (w / max(1, np.max(np.abs(w)) / .95)).astype(np.float32)
+        if cut == "tiktok": tt_check(*[plain(re.sub(r"<[^>]+>", " ", h)) for _, _, h in sc[-1:]])
+        k = key if cut == "site" else key + "_tt"
+        _sf.write(_os.path.join(out, k + ".wav"), w, SR)
+        body = "".join(f'<div class="scene" data-s="{a:.3f}" data-e="{b:.3f}">{h}</div>' for a, b, h in sc)
+        open(_os.path.join(out, k + ".html"), "w").write(page(body, total, sb))
+        res.append({"html": k + ".html", "wav": k + ".wav", "total": total,
+                    "out": file if cut == "site" else file.replace(".mp4", "_TikTok.mp4"),
+                    "cut": "X, Instagram, Facebook" if cut == "site" else "TikTok"})
+    return res

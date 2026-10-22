@@ -51,7 +51,8 @@ for key, col, fname, say, label, ask in STATS:
     items = []
     for r, hs, as_ in chosen:
         hn, an = short(r["hn"]), short(r["an"])
-        it = dict(home=hn, away=an, comp=COMP.get(r["league"], r["league"]), ko=r["ko"], hg=r["h_games"], ag=r["a_games"])
+        it = dict(home=hn, away=an, comp=COMP.get(r["league"], r["league"]), ko=r["ko"], hg=r["h_games"], ag=r["a_games"],
+                  home_col=r.get("h_col"), away_col=r.get("a_col"))   # kit colours from lineups, for the badge rule
         if hn in SAY: it["home_say"] = SAY[hn]
         if an in SAY: it["away_say"] = SAY[an]
         items.append(it)

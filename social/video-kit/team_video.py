@@ -16,7 +16,7 @@ data.json:
 import json, os, sys, shutil
 import numpy as np, soundfile as sf
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from site_kit import CSS, JS, FIT, WORDMARK, tt_check, no_em, tick, hit, SR, plain, voice_segments, write_script, say_time
+from site_kit import CSS, JS, FIT, WORDMARK, tt_check, no_em, tick, hit, SR, plain, voice_segments, write_script, say_time, badge, END_LINES, END_CSS, add_end, write_cuts
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODE, DATA, OUT = sys.argv[1], sys.argv[2], sys.argv[3]; os.makedirs(OUT, exist_ok=True)
@@ -68,11 +68,12 @@ def script(v):
         ls.append(f"{'And number one.' if rk == 1 else f'Number {ONES[rk]}.'} {it['comp_say']}, {it['ko_say']}.")
         ls.append(f"It's {it['home_say']} against {it['away_say']}. {ONES[it['tot']].capitalize()} from {ONES[it['n']]}.")
     ls.append(f"{v['ask']} Comment the number.")
-    return ls
+    return ls + END_LINES
 
+COLS = {}
 def crest(name, rel):
-    ini = "".join(x[0] for x in plain(name).split()[:2]).upper()
-    return f'<div class="crest"><span data-out="{rel:.2f}">?</span><span class="ci" data-in="{rel:.2f}" data-pop>{ini}</span></div>'
+    """Hidden '?' disc, then the club-colour badge pops in on the reveal (rule, 22 Oct 2026)."""
+    return f'<div class="crest"><span data-out="{rel:.2f}">?</span><span class="ci" data-in="{rel:.2f}" data-pop>{badge(name, 76, COLS.get(name))}</span></div>'
 
 def teamname(name, rel, cls="tn"):
     w = min(320, 40 + 22 * len(name))
@@ -161,6 +162,7 @@ table.mini td{font-size:27px;padding:14px 4px}table.mini td.op{max-width:250px;o
 JS2 = JS.replace("k+'/'+ts.length", "k+'/'+(c.dataset.of||ts.length)").replace("Math.round(k/ts.length*100)", "Math.round(k/(+(c.dataset.of)||ts.length)*100)")
 
 def build(v):
+    for it in v["items"]: COLS[it["home"]] = it.get("home_col"); COLS[it["away"]] = it.get("away_col")
     S = prep(v); ls = script(v); segs = iter(voice_segments(ls, v["key"], OUT, VOICE_MODE))
     N = len(v["items"]); audio = np.zeros(int(300 * SR), np.float32); subs, scenes = [], []
     def put(t, a): i = int(t * SR); audio[i:i + len(a)] += a
@@ -204,19 +206,14 @@ def build(v):
                    f'<div class="pill num">{it["tot"]}/{it["n"]}</div></div>' for k, it in enumerate(reversed(v["items"])))
     scenes.append((s0, s0 + max(3.6, d + .9), f'<div class="eyebrow">Comment the number</div><h1 style="margin-top:12px">{v["ask"]}</h1>'
                    f'<div class="res">{opts}</div><div class="follow" data-in="{.3 + N * .08:.2f}">Follow for tomorrow\'s countdown</div>'))
-    total = round(scenes[-1][1], 2)
-    texts = [x for _, _, x in scenes] + [x[2] for x in subs] + ls
+    texts = [x for _, _, x in scenes] + [x[2] for x in subs] + ls[:-len(END_LINES)]
     no_em(*texts); tt_check(*[plain(x) for x in texts])
-    wav = audio[:int(total * SR)]; wav = (wav / max(1, np.max(np.abs(wav)) / .95)).astype(np.float32)
-    sf.write(os.path.join(OUT, v["key"] + ".wav"), wav, SR)
-    body = "".join(f'<div class="scene" data-s="{a:.3f}" data-e="{b:.3f}">{h}</div>' for a, b, h in scenes)
-    html = (f'<!doctype html><html><head><meta charset="utf-8"><style>{CSS}{EXTRA_CSS}</style></head><body><div class="bar">{WORDMARK}</div>'
+    fin = add_end(scenes, say, scenes[-1][1])
+    page = lambda body, total, subs: (f'<!doctype html><html><head><meta charset="utf-8"><style>{CSS}{EXTRA_CSS}{END_CSS}</style></head><body><div class="bar">{WORDMARK}</div>'
             f'{body}<div class="subs"><span id="sb"></span></div>'
             f'<div class="foot"><span>{D["date_label"]} · Last 10 games each side</span><span id="sn"></span></div><div class="prog"><i id="pg"></i></div>'
             f'<script>window.TOTAL={total};window.SUBS={json.dumps(subs)};</script>{FIT}{JS2}</body></html>')
-    open(os.path.join(OUT, v["key"] + ".html"), "w").write(html)
-    return {"html": v["key"] + ".html", "wav": v["key"] + ".wav", "total": total, "out": v["file"],
-            "scenes": [(round(a, 2), round(b, 2)) for a, b, _ in scenes]}
+    return write_cuts(OUT, v["key"], v["file"], scenes, subs, audio, fin, page)
 
 if __name__ == "__main__":
     shutil.copy(os.path.join(HERE, "onest.woff2"), os.path.join(OUT, "onest.woff2"))
@@ -224,6 +221,6 @@ if __name__ == "__main__":
         for v in D["videos"]:
             prep(v); print(write_script(v["key"], script(v), OUT))
     else:
-        man = [build(v) for v in D["videos"]]
+        man = [m for v in D["videos"] for m in build(v)]
         json.dump({"videos": man}, open(os.path.join(OUT, "manifest.json"), "w"), indent=1)
         for m in man: print(m["out"], m["total"])
