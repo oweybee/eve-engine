@@ -271,6 +271,21 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_results != 'true' }}
         run: node fetchResults.js
 
+      # FOLLOWING (migration 180). Fetches /fixtures/players for the few
+      # completed fixtures a member follows a player on, runs settle_follows()
+      # in the database, then DMs members whose follow landed through the
+      # MaxEdge bot. DMs only send when FOLLOW_ALERTS_ENABLED is '1' (repo
+      # variable); otherwise it logs what it would send. Never gates the run.
+      - name: Settle follows
+        id: follows
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          DISCORD_BOT_TOKEN:     ${{ secrets.DISCORD_BOT_TOKEN }}
+          FOLLOW_ALERTS_ENABLED: ${{ vars.FOLLOW_ALERTS_ENABLED }}
+        run: node settleFollows.js
+
       # MARKET_ANCHORED_TOTALS — the Pinnacle-anchored rule on over/under,
       # PAPER-TRADED ONLY (migration 150). Writes `paper_trades` and nothing
       # else: no value_signals, no board, no Record, no broadcast. Logs every

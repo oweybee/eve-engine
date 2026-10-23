@@ -474,4 +474,6 @@ if (require.main === module) {
   main().catch(err => { console.error('[playerStats] FATAL:', err.message); process.exit(1); });
 }
 
-module.exports = { toNum, toInt, orientPlayerBlocks, playerRows, fixtureCoverage, logRow, quotaTooLow, isMinuteLimit, minuteHeadroomLow, uniqueFixtures, uniqueBy };
+module.exports = { toNum, toInt, orientPlayerBlocks, playerRows, fixtureCoverage, logRow, quotaTooLow, isMinuteLimit, minuteHeadroomLow, uniqueFixtures, uniqueBy,
+  // used by settleFollows.js to fetch the handful of fixtures someone follows
+  fetchPlayers, teamMap, upsert, apiErrors };
