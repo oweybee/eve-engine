@@ -50,6 +50,29 @@ const X_MAX_PER_PASS = 2;
 /** Card off with INPLAY_FLAGS_CARD=0; any other value (or unset) draws it. */
 const CARD_ON = process.env.INPLAY_FLAGS_CARD !== '0';
 
+// Kit colours for clubs the card's KITS table does not know, from the most
+// common lineups.team_colors row per team name. Read once per team per run;
+// a failed read just leaves the neutral disc.
+const TEAM_COLORS = new Map();
+async function loadTeamColors(supabase, tracker) {
+  const names = [...new Set(tracker.flatMap(m => [m.homeTeam, m.awayTeam]).filter(n => n && !TEAM_COLORS.has(n)))];
+  if (!names.length) return;
+  const { data, error } = await supabase.from('lineups').select('team_name, team_colors')
+    .in('team_name', names).not('team_colors', 'is', null).order('fetched_at', { ascending: false }).limit(names.length * 12);
+  if (error) { console.log(`[inplayFlags] team colours read failed (${error.message})`); return; }
+  for (const n of names) {
+    const tally = new Map();
+    for (const r of data ?? []) {
+      if (r.team_name !== n || !r.team_colors?.primary) continue;
+      const k = JSON.stringify(r.team_colors);
+      tally.set(k, (tally.get(k) ?? 0) + 1);
+    }
+    const best = [...tally.entries()].sort((a, b) => b[1] - a[1])[0];
+    TEAM_COLORS.set(n, best ? JSON.parse(best[0]) : null);
+  }
+}
+const cardOpts = m => ({ colors: { home: TEAM_COLORS.get(m.homeTeam) ?? null, away: TEAM_COLORS.get(m.awayTeam) ?? null } });
+
 /**
  * Post the square card with the embed; if the card cannot be drawn, post the
  * text embed alone. A failed render must never cost the post itself.
@@ -57,7 +80,7 @@ const CARD_ON = process.env.INPLAY_FLAGS_CARD !== '0';
 async function send(webhook, match, flag, payload) {
   if (!CARD_ON) return postWebhook(webhook, payload);
   let png = null;
-  try { png = await flagCard(match, flag); }
+  try { png = await flagCard(match, flag, cardOpts(match)); }
   catch (e) { console.log(`[inplayFlags] card render failed (${e.message}), posting text only`); }
   if (!png) return postWebhook(webhook, payload);
   return postWebhookFiles(webhook, withCard(payload, 'flag.png'), [{
@@ -100,6 +123,7 @@ async function pass(supabase, webhook, { discord = true, x = false } = {}) {
   const board = await getJson('/api/inplay');
   const tracker = Array.isArray(board?.tracker) ? board.tracker : [];
   const posted = await postedFor(supabase, tracker.map(m => m.id));
+  if (CARD_ON) await loadTeamColors(supabase, tracker).catch(e => console.log(`[inplayFlags] team colours: ${e.message}`));
   const todo = discord ? newFlags(tracker, posted).slice(0, MAX_POSTS_PER_PASS) : [];
   console.log(`[inplayFlags] ${tracker.length} live match(es), ${todo.length} new flag(s)`);
 
@@ -191,7 +215,7 @@ async function xPass(supabase, tracker) {
   if (ctx.today >= X_DAILY_CAP) { console.log(`[inplayFlags:x] daily cap ${ctx.today}/${X_DAILY_CAP}`); return 0; }
   const allowed = leaguesFrom();
   const todo = newFlags(tracker, ctx.posted)
-    .filter(({ match, flag }) => xEligible(flag, leagues.get(match.id), allowed))
+    .filter(({ match, flag }) => xEligible(flag, leagues.get(match.id), allowed, match))
     .slice(0, X_MAX_PER_PASS);
   console.log(`[inplayFlags:x] ${todo.length} flag(s) for X, ${ctx.today}/${X_DAILY_CAP} today`);
 
@@ -203,7 +227,7 @@ async function xPass(supabase, tracker) {
     if (DRY_RUN) { console.log(`[inplayFlags:x] would post:\n${pick.text}`); continue; }
 
     let png;
-    try { png = await flagCard(match, flag); }
+    try { png = await flagCard(match, flag, cardOpts(match)); }
     catch (e) { console.log(`[inplayFlags:x] card failed (${e.message}), skipping X for ${key}`); continue; }
 
     const { error: claimErr } = await supabase.from('inplay_flag_x_posts')
