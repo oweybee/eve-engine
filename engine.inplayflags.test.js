@@ -93,13 +93,25 @@ const { skeletonOf, mayPost } = require('./lib/xGuard');
 
 t('X takes only alert flags from listed leagues, matched by id', () => {
   const L = new Set(DEFAULT_LEAGUES);
-  assert(xEligible(flag('red-card', 'away'), '39', L));
-  assert(xEligible(flag('fav-trailing', 'home'), 39, L));
-  assert(!xEligible(flag('pressure', 'home'), '39', L));
-  assert(!xEligible(flag('goals-due', null), '39', L));
-  assert(!xEligible(flag('red-card', 'away'), '235', L));   // Russian "Premier League"
-  assert(!xEligible(flag('red-card', 'away'), '71', L));    // Brazilian "Serie A"
-  assert(!xEligible(flag('red-card', 'away'), null, L));
+  const m = match();   // Arsenal 0-1 Chelsea: the away side leads
+  assert(xEligible(flag('red-card', 'away'), '39', L, m));
+  assert(xEligible(flag('fav-trailing', 'home'), 39, L, m));
+  assert(!xEligible(flag('pressure', 'home'), '39', L, m));
+  assert(!xEligible(flag('goals-due', null), '39', L, m));
+  assert(!xEligible(flag('red-card', 'away'), '235', L, m));   // Russian "Premier League"
+  assert(!xEligible(flag('red-card', 'away'), '71', L, m));    // Brazilian "Serie A"
+  assert(!xEligible(flag('red-card', 'away'), null, L, m));
+});
+
+t('X takes a red card only when the side that got it is leading', () => {
+  const L = new Set(DEFAULT_LEAGUES);
+  assert(xEligible(flag('red-card', 'home'), '39', L, match({ homeGoals: 2, awayGoals: 1 })));
+  assert(!xEligible(flag('red-card', 'home'), '39', L, match({ homeGoals: 1, awayGoals: 1 })));   // level
+  assert(!xEligible(flag('red-card', 'home'), '39', L, match({ homeGoals: 0, awayGoals: 1 })));   // behind
+  assert(!xEligible(flag('red-card', 'away'), '39', L));                                          // no match row: refused
+  assert(!xEligible(flag('red-card', null), '39', L, match()));
+  // favourite-behind is unaffected by the scoreline rule
+  assert(xEligible(flag('fav-trailing', 'home'), '39', L, match({ homeGoals: 0, awayGoals: 1 })));
 });
 
 t('X text: facts, footer, no link, and every frame a different shape', () => {
