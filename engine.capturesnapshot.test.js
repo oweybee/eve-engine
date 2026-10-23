@@ -383,3 +383,46 @@ test('the boundary is exactly the closing window, not a second number', () => {
   assert.strictEqual(justInside, 1);
   assert.strictEqual(justOutside, 0);
 });
+
+/* ── Keyset paging (23 Oct 2026) ──────────────────────────────────────────
+   OFFSET paging made Postgres re-sort every earlier row on every page and
+   spilled ~12 TB of temp files to disk. pageAll now asks for rows AFTER the
+   last value seen. It must still return every row exactly once, in order. */
+
+test('KEYSET: pageAll walks by `> last`, returns every row once, in order', async () => {
+  const { pageAll, PAGE_SIZE } = require('./captureSnapshot');
+  const total = 2503;
+  const all = Array.from({ length: total }, (_, i) => ({ id: `r-${String(i).padStart(6, '0')}` }));
+  const calls = [];
+  const query = () => {
+    let after = null;
+    const b = {
+      gt: (col, v) => { after = v; return b; },
+      order: () => b,
+      range: async (from, to) => {
+        calls.push({ after, from });
+        const rows = after == null ? all : all.filter(r => r.id > after);
+        return { data: rows.slice(from, to + 1), error: null };
+      },
+    };
+    return b;
+  };
+  const out = await pageAll(query, 'id');
+  assert.deepStrictEqual(out.map(r => r.id), all.map(r => r.id));
+  assert.strictEqual(calls.length, Math.ceil(total / PAGE_SIZE));
+  assert.ok(calls.every(c => c.from === 0), 'no page uses an OFFSET');
+  assert.strictEqual(calls[1].after, all[PAGE_SIZE - 1].id);
+});
+
+test('KEYSET falls back to OFFSET when the paging column is not selected', async () => {
+  const { pageAll } = require('./captureSnapshot');
+  const all = Array.from({ length: 1500 }, (_, i) => ({ match_id: `m-${i}` }));
+  const query = () => {
+    const b = { gt: () => { throw new Error('must not filter on a column it cannot see'); },
+      order: () => b,
+      range: async (from, to) => ({ data: all.slice(from, to + 1), error: null }) };
+    return b;
+  };
+  const out = await pageAll(query, 'id');
+  assert.strictEqual(out.length, 1500);
+});
