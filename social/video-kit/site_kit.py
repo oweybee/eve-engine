@@ -211,7 +211,7 @@ KITS = {
  "Hull City": ("stripes", "#F5A12D", "#111111"), "Ipswich": ("solid", "#0E63AD", "#FFFFFF"), "West Ham": ("sleeves", "#7A263A", "#1BB1E7"),
  "Wolves": ("solid", "#FDB913", "#231F20"), "Barcelona": ("stripes", "#A50044", "#004D98"), "Real Madrid": ("solid", "#FFFFFF", "#FEBE10"),
  "Atletico Madrid": ("stripes", "#CB3524", "#FFFFFF"), "Bayern München": ("solid", "#DC052D", "#FFFFFF"), "Borussia Dortmund": ("solid", "#FDE100", "#111111"),
- "Bayer Leverkusen": ("solid", "#E32221", "#111111"), "Inter": ("stripes", "#0068A8", "#111111"), "AC Milan": ("stripes", "#FB090B", "#111111"),
+ "Bayer Leverkusen": ("solid", "#E32221", "#111111"), "Inter": ("stripes", "#0068A8", "#111111"), "AC Milan": ("wide", "#FB090B", "#111111"),
  "Juventus": ("stripes", "#111111", "#FFFFFF"), "Napoli": ("solid", "#12A0D7", "#FFFFFF"), "AS Roma": ("solid", "#8E1F2F", "#F0BC42"),
  "Lazio": ("solid", "#87D8F7", "#FFFFFF"), "Paris Saint Germain": ("centre", "#004170", "#DA291C"), "Celtic": ("hoops", "#018749", "#FFFFFF"),
  "Rangers": ("solid", "#1B458F", "#FFFFFF"), "Heart Of Midlothian": ("solid", "#8C1D40", "#FFFFFF"), "Aberdeen": ("solid", "#C8102E", "#FFFFFF"),
@@ -231,6 +231,7 @@ KITS = {
 }
 
 def _pat(kind, b):
+    if kind == "wide": return "".join(f'<rect x="{x}" y="0" width="25" height="100" fill="{b}"/>' for x in (0, 50))
     if kind == "stripes": return "".join(f'<rect x="{x}" y="0" width="12" height="100" fill="{b}"/>' for x in (14, 38, 62, 86))
     if kind == "hoops": return "".join(f'<rect x="0" y="{y}" width="100" height="12" fill="{b}"/>' for y in (14, 38, 62, 86))
     if kind == "halves": return f'<rect x="50" y="0" width="50" height="100" fill="{b}"/>'
