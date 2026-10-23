@@ -142,7 +142,7 @@ function edgeBucket(edge) {
  * @returns {Promise<Set<string>>}
  */
 async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
-  // Existence is answered in the database (snapshot_match_ids, migration 180:
+  // Existence is answered in the database (snapshot_match_ids, migration 190:
   // one EXISTS probe per match). Paging every row to learn this pulled ~1.56M
   // rows per run with ORDER BY id OFFSET, and on 23 Oct 2026 it was the
   // project's largest disk IO cost by a factor of five.

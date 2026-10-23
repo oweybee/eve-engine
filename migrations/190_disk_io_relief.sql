@@ -1,4 +1,4 @@
--- 182: disk IO relief, 23-24 Oct 2026. ALREADY APPLIED to production (via the
+-- 190: disk IO relief, 23-24 Oct 2026. ALREADY APPLIED to production (via the
 -- Supabase MCP, migrations snapshot_existence_rpc + player_recent_refresh_gate
 -- and two direct statements). Recorded here so the repo matches the database.
 -- Nothing here changes what any page reads.
