@@ -86,10 +86,20 @@ function alertText(f) {
   ].filter(Boolean).join('\n');
 }
 
-/** Only ask the vendor about a fixture once it has had time to settle. */
+/**
+ * Only ask the vendor about a fixture once it has had time to settle, and
+ * then back off: every run for the first half hour, then once an hour (the
+ * first run past the top of the hour). A fixture the vendor never covers is
+ * not logged, so without the back-off it would cost one call every five
+ * minutes for the 36 hours before settle_follows() voids it.
+ */
 function readyToFetch(row, now = Date.now()) {
   const ko = Date.parse(row.kickoff_at);
-  return Number.isFinite(ko) && now - ko >= FETCH_AFTER_KICKOFF_MIN * 60e3;
+  if (!Number.isFinite(ko)) return false;
+  const age = now - ko;
+  if (age < FETCH_AFTER_KICKOFF_MIN * 60e3) return false;
+  if (age < (FETCH_AFTER_KICKOFF_MIN + 30) * 60e3) return true;
+  return new Date(now).getUTCMinutes() < 6;
 }
 
 /** Why a DM failed, in words /me can show. Discord 50007 = cannot send to this user. */
@@ -152,8 +162,12 @@ async function sendAlerts(supabase, { send }) {
     } catch (e) {
       note = dmFailureNote(e); failed++;
     }
+    // A closed DM or an unknown user is final. Anything else (a timeout, a
+    // 5xx) is left owed, so the next run tries again while the 24-hour
+    // window in follow_alerts_due lasts.
+    const final = note !== 'error';
     const { error: upErr } = await supabase.from('follows')
-      .update({ alerted_at: new Date().toISOString(), alert_note: note }).eq('id', f.id);
+      .update(final ? { alerted_at: new Date().toISOString(), alert_note: note } : { alert_note: note }).eq('id', f.id);
     if (upErr) console.log(`  warn alert ${f.id}: ${upErr.message}`);
   }
   return { due: due.length, sent, failed };

@@ -64,6 +64,11 @@ test(`a fixture is not asked about until ${FETCH_AFTER_KICKOFF_MIN} minutes afte
   assert.strictEqual(readyToFetch({ kickoff_at: '2026-10-24T15:00:00Z' }, now), true);
   assert.strictEqual(readyToFetch({ kickoff_at: null }, now), false);
 });
+test('after the first half hour it asks once an hour, not every run', () => {
+  const late = Date.parse('2026-10-24T22:20:00Z');
+  assert.strictEqual(readyToFetch({ kickoff_at: '2026-10-24T15:00:00Z' }, late), false);
+  assert.strictEqual(readyToFetch({ kickoff_at: '2026-10-24T15:00:00Z' }, Date.parse('2026-10-24T22:03:00Z')), true);
+});
 test('a closed DM is recorded as dms_closed, not retried', () => {
   assert.strictEqual(dmFailureNote({ code: 50007, status: 403 }), 'dms_closed');
   assert.strictEqual(dmFailureNote({ status: 403 }), 'dms_closed');
