@@ -146,6 +146,49 @@ async function fetchFollowedFixtures(supabase, { dry }) {
   return { asked, logged };
 }
 
+/**
+ * LIVE PLAYER COUNTS. The vendor updates /fixtures/players every minute in
+ * play, so each run asks about the live fixtures a member follows a player
+ * on and writes the counts to player_live_stats (migration 183). That table
+ * feeds the live bar only; settlement reads the full-time fetch above.
+ */
+function liveRows(fixtureId, playerRows, at = new Date().toISOString()) {
+  return playerRows.map((r) => ({
+    fixture_id: String(fixtureId), player_id: r.player_id, minutes: r.minutes,
+    shots_total: r.shots_total, shots_on: r.shots_on, fouls_committed: r.fouls_committed,
+    fouls_drawn: r.fouls_drawn, yellow: r.yellow, red: r.red, goals: r.goals, assists: r.assists,
+    fetched_at: at,
+  }));
+}
+
+async function fetchLivePlayers(supabase, { dry }) {
+  const { data, error } = await supabase.from('follow_live_fixtures').select('*').limit(60);
+  if (error) throw new Error(`follows[live]: ${error.message}`);
+  const live = data ?? [];
+  if (!live.length || !process.env.API_FOOTBALL_KEY) return { asked: 0, written: 0 };
+  const teams = await ps.teamMap(supabase);
+  let asked = 0, written = 0;
+  for (const m of live) {
+    asked++;
+    try {
+      const json = await ps.fetchPlayers(m.external_id);
+      if (ps.apiErrors(json).length) continue;
+      const home = teams.get(m.home_team_id) ?? {}, away = teams.get(m.away_team_id) ?? {};
+      const oriented = ps.orientPlayerBlocks(json.response, {
+        homeApiId: home.apiId, awayApiId: away.apiId, homeName: home.name, awayName: away.name,
+      });
+      const meta = { fixtureId: m.external_id, matchId: m.match_id, leagueId: m.league_id, kickoffAt: m.kickoff_at };
+      const rows = oriented ? liveRows(m.external_id, ps.playerRows(meta, oriented)) : [];
+      if (!rows.length || dry) continue;
+      await ps.upsert(supabase, 'player_live_stats', ps.uniqueBy(rows, (r) => `${r.fixture_id}:${r.player_id}`), 'fixture_id,player_id');
+      written += rows.length;
+    } catch (e) {
+      console.log(`  warn live fixture ${m.external_id}: ${e.message}`);
+    }
+  }
+  return { asked, written };
+}
+
 async function sendAlerts(supabase, { send }) {
   const { data, error } = await supabase.from('follow_alerts_due').select('*').limit(MAX_DMS);
   if (error) throw new Error(`follows[alerts]: ${error.message}`);
@@ -178,6 +221,9 @@ async function main() {
   const send = !dry && process.env.FOLLOW_ALERTS_ENABLED === '1';
   const supabase = getClient();
 
+  const live = await fetchLivePlayers(supabase, { dry });
+  console.log(`[follows] live player stats: ${live.asked} fixture(s), ${live.written} row(s)`);
+
   const fetched = await fetchFollowedFixtures(supabase, { dry });
   console.log(`[follows] player stats: asked ${fetched.asked}, logged ${fetched.logged}`);
 
@@ -196,4 +242,4 @@ if (require.main === module) {
   main().catch(err => { console.error('[follows] FATAL:', err.message); process.exit(1); });
 }
 
-module.exports = { followLabel, alertText, lineWords, readyToFetch, dmFailureNote, FETCH_AFTER_KICKOFF_MIN };
+module.exports = { followLabel, alertText, lineWords, readyToFetch, dmFailureNote, liveRows, FETCH_AFTER_KICKOFF_MIN };

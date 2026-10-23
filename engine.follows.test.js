@@ -12,7 +12,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { followLabel, alertText, lineWords, readyToFetch, dmFailureNote, FETCH_AFTER_KICKOFF_MIN } = require('./settleFollows');
+const { followLabel, alertText, lineWords, readyToFetch, dmFailureNote, liveRows, FETCH_AFTER_KICKOFF_MIN } = require('./settleFollows');
 
 let passed = 0;
 function test(n, f) {
@@ -73,6 +73,20 @@ test('a closed DM is recorded as dms_closed, not retried', () => {
   assert.strictEqual(dmFailureNote({ code: 50007, status: 403 }), 'dms_closed');
   assert.strictEqual(dmFailureNote({ status: 403 }), 'dms_closed');
   assert.strictEqual(dmFailureNote({ status: 500 }), 'error');
+});
+
+console.log('live counts');
+test('live rows carry only the counts the bar reads, keyed by fixture and player', () => {
+  const [r] = liveRows(123, [{ player_id: 7, minutes: 54, shots_total: 2, shots_on: 1, fouls_committed: null, fouls_drawn: 1, yellow: 0, red: 0, goals: null, assists: null, raw: {} }], 'T');
+  assert.deepStrictEqual(Object.keys(r).sort(), ['assists','fetched_at','fixture_id','fouls_committed','fouls_drawn','goals','minutes','player_id','red','shots_on','shots_total','yellow']);
+  assert.strictEqual(r.fixture_id, '123');
+  assert.strictEqual(r.shots_total, 2);
+});
+test('live counts never reach the settlement: they live in their own table', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'settleFollows.js'), 'utf8');
+  const live = src.slice(src.indexOf('async function fetchLivePlayers'), src.indexOf('async function sendAlerts'));
+  assert.ok(/'player_live_stats'/.test(live));
+  assert.ok(!/player_stats_fetch_log|'player_match_stats'/.test(live), 'the live fetch must not write the full-time tables');
 });
 
 console.log('one rule');
