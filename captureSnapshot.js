@@ -142,17 +142,22 @@ function edgeBucket(edge) {
  * @returns {Promise<Set<string>>}
  */
 async function prefetchSnapshotExistence(supabase, matchIds, since7dIso) {
-  // `id` and not `captured_at`: a whole cycle's rows share a timestamp to the
-  // millisecond, so paging on it would straddle a tie at every boundary.
-  const data = await inChunks(matchIds, 'id', 'prefetchSnapshotExistence',
-    (chunk) => supabase
-      .from('odds_snapshots')
-      .select('id, match_id')
-      .in('match_id', chunk)
-      .gte('captured_at', since7dIso));
-
-  // Deduplicate in JS — we only need existence, not row count.
-  return new Set(data.map(r => r.match_id));
+  // Existence is answered in the database (snapshot_match_ids, migration 190:
+  // one EXISTS probe per match). Paging every row to learn this pulled ~1.56M
+  // rows per run with ORDER BY id OFFSET, and on 23 Oct 2026 it was the
+  // project's largest disk IO cost by a factor of five.
+  // Chunked at IN_CHUNK so a chunk's result can never reach the 1,000-row cap.
+  const found = new Set();
+  for (let i = 0; i < matchIds.length; i += IN_CHUNK) {
+    const chunk = matchIds.slice(i, i + IN_CHUNK);
+    const { data, error } = await supabase.rpc('snapshot_match_ids', {
+      p_match_ids: chunk,
+      p_since: since7dIso,
+    });
+    if (error) throw new Error(`prefetchSnapshotExistence: ${error.message}`);
+    for (const r of data || []) found.add(typeof r === 'string' ? r : r.snapshot_match_ids);
+  }
+  return found;
 }
 
 /**
