@@ -1,5 +1,24 @@
 # Security Audit Report — Database Schema, Migrations & Compute Layer
 
+## Automated re-audit — 2026-10-11 (delta since 2026-10-04)
+
+**Scope:** `migrations/128–139` (new since last pass), `computeValues.js`, `lib/supabaseClient.js`. Static repo scan only (no production catalog queries this run). The task text names `engine/computeValues.js`; the file is `computeValues.js` at the repo root.
+
+### Result: previously reported issues A, B, C remain OPEN; no new issues introduced
+
+- **Check 1 — RLS on new tables:** PASS. All four tables created in 129–139 enable RLS and revoke client writes: `league_standings` (134, RLS + revoke write), `discord_links` (138, `revoke all`), `odds_latest` (139, `revoke all`), `inplay_flag_posts` (139, `revoke all`). Note two files share number 139 (`139_a_price_is_fresh_when_we_last_saw_it.sql`, `139_inplay_flags_post_once.sql`) and `128` is absent — see below.
+- **Check 2 — `ML_ENSEMBLE` / `Dixon-Coles` rows:** No migration in 129–139 changes policies/grants on `model_calibration`, `value_signals`, `computed_values`; prior PASS stands (RLS on, no client write, public read kept).
+- **Check 3 — `computeValues.js` guard:** PASS (no crash path). Client is obtained lazily in `main()` (line ~899) via `getClient()`, which fails fast on missing env; the client is stateless HTTP so a dropped connection yields a returned `{error}`, thrown by each helper and handled by the `main().catch` → exit 1. Low-severity robustness gap remains: `updateBetOfDay` (867–879) and `fetchStatsLookups` (797–808) ignore `error`, so a transient failure silently no-ops / returns empty stats instead of surfacing.
+
+### Still open (action needed)
+1. **Issue A/B/C (High/Med/Low) — remediation migration `128_*` was never written.** `anon`/`authenticated` still hold TRUNCATE/write grants on `price_freshness_policy`, internal tables (`engine_runs`, `league_refresh_scope`, `pipeline_heartbeat`, `refresh_tier_occupancy`) and on several views; two views are `SECURITY DEFINER`. Apply the SQL under "A/B/C — Remediation" below as a new migration (use number 140, since 128 is skipped).
+2. **`price_freshness_policy` has no tracked migration** (schema drift); add a `create table if not exists` migration with RLS + public SELECT policy + revoke.
+3. **12 legacy tables lack a tracked `ENABLE ROW LEVEL SECURITY`** (`recommendations`, `odds_snapshots`, `value_signals`, `performance_summary`, `engine_plan`, `posted_signals`, `team_statistics`, `referee_stats`, `team_elo`, `inplay_baseline`, `paper_models`, `mx_team_match`); production reportedly has RLS on. Add one idempotent migration restating it.
+4. **Hygiene:** duplicate migration number 139 (two files) and 038/110 duplicates — confirm the runner applies both deterministically.
+5. **`computeValues.js`:** check `error` in `updateBetOfDay` and `fetchStatsLookups`.
+
+---
+
 ## Automated re-audit — 2026-10-04 (supersedes the status table below where they conflict)
 
 **Scope:** `migrations/001–127`, live `MaxEdge Project` public schema (read-only catalog queries + Supabase security advisors), `computeValues.js`, `lib/supabaseClient.js`.
