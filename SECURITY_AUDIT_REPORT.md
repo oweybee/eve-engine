@@ -1,5 +1,77 @@
 # Security Audit Report — Database Schema, Migrations & Compute Layer
 
+## Automated re-audit — 2026-10-18 (supersedes the 2026-10-04 section where they conflict)
+
+**Scope:** `migrations/002–152`, live `MaxEdge Project` public schema (read-only catalog queries + Supabase security advisors), `computeValues.js`, `lib/supabaseClient.js`.
+
+### Result: the 2026-10-04 write/TRUNCATE findings are closed; 4 lower-severity issues remain (0 High, 1 Medium, 3 Low)
+
+**Verified closed in production:** zero public tables have RLS disabled; `anon` holds no INSERT/UPDATE/DELETE/TRUNCATE on any public object; `authenticated` holds writes only on the owner-scoped tables `bets`, `bankroll_transactions`, `preferences`, `user_bookmakers` (RLS `auth.uid() = user_id`) and `telegram_links`. Previous findings A (`performance_band`, `price_freshness_policy`), B (`engine_runs` etc.) and the view write grants (C) no longer reproduce.
+
+| # | Severity | Issue |
+|---|---|---|
+| 1 | Medium | Nine `SECURITY DEFINER` views readable by `anon` (advisor ERROR `security_definer_view`): `performance_signals`, `v_best_prices`, `v_best_prices_extra`, `v_league_base_rates`, `v_league_hit_rates`, `v_market_fair_probs`, `v_match_extras`, `v_odds_extra_history`, `v_price_curve`. They run with the owner's privileges and bypass RLS of the underlying tables. Count has grown from 2 (04 Oct) to 9 as migrations 117, 129–133 added views without `security_invoker`. |
+| 2 | Low | Live tables with **no tracked migration** (replay would not create them, so their RLS/grants cannot be audited from the repo): `bt_snap_16oct`, `predictor_entries`, `predictor_fixtures`, `predictor_rounds`, `x_mirror_posts`, `x_mirror_state`, `odds_refresh_runs`, `inplay_line_value`, `odds_latest_expired` (plus `archive.matches_dupes_20261015`). All currently have RLS on with no policy (fail-closed). `bt_snap_16oct` / `matches_dupes_*` look like ad-hoc snapshot tables that should be dropped or moved out of `public`. |
+| 3 | Low | `migrations/096_band_calibration_tracking.sql:66-67` creates `band_calibration_service_only` as `FOR ALL USING (true) WITH CHECK (true)` with no `TO service_role`, i.e. applies to `public`. It is only safe because line 68 revokes table grants; if a later `GRANT` or default-privilege change lands, the table becomes world-writable. |
+| 4 | Low | 12 older tables (`recommendations`, `odds_snapshots`, `value_signals`, `performance_summary`, `engine_plan`, `posted_signals`, `team_statistics`, `referee_stats`, `team_elo`, `inplay_baseline`, `paper_models`, `mx_team_match`) have no `ENABLE ROW LEVEL SECURITY` in any migration. Production has RLS on for all; a fresh replay would leave them open. (Carried over from the earlier audits.) |
+
+### Remediation
+
+**1 — definer views** (verify each read path as `anon` first; `v_*` views over public-read tables should be unaffected):
+```sql
+alter view public.performance_signals     set (security_invoker = true);
+alter view public.v_best_prices           set (security_invoker = true);
+alter view public.v_best_prices_extra     set (security_invoker = true);
+alter view public.v_league_base_rates     set (security_invoker = true);
+alter view public.v_league_hit_rates      set (security_invoker = true);
+alter view public.v_market_fair_probs     set (security_invoker = true);
+alter view public.v_match_extras          set (security_invoker = true);
+alter view public.v_odds_extra_history    set (security_invoker = true);
+alter view public.v_price_curve           set (security_invoker = true);
+```
+If a view must stay definer (to expose aggregates only), document why and keep it aggregate-shaped.
+
+**2 — untracked tables:** commit a migration (or `CREATE TABLE IF NOT EXISTS` baseline) for each, including `ENABLE ROW LEVEL SECURITY` and explicit `REVOKE ALL ... FROM anon, authenticated`; drop `bt_snap_16oct` and `archive.matches_dupes_20261015` if no longer needed. Add `alter default privileges in schema public revoke all on tables from anon, authenticated;` so new tables are not born writable.
+
+**3 — band_calibration policy:**
+```sql
+drop policy band_calibration_service_only on public.band_calibration;
+create policy band_calibration_service_only on public.band_calibration
+  for all to service_role using (true) with check (true);
+```
+
+**4 — idempotent RLS restatement:**
+```sql
+alter table public.recommendations      enable row level security;
+alter table public.odds_snapshots       enable row level security;
+alter table public.value_signals        enable row level security;
+alter table public.performance_summary  enable row level security;
+alter table public.engine_plan          enable row level security;
+alter table public.posted_signals       enable row level security;
+alter table public.team_statistics      enable row level security;
+alter table public.referee_stats        enable row level security;
+alter table public.team_elo             enable row level security;
+alter table public.inplay_baseline      enable row level security;
+alter table public.paper_models         enable row level security;
+alter table public.mx_team_match        enable row level security;
+```
+
+### Check 1 — RLS on new tables
+Every table created in `migrations/096–152` has `ENABLE ROW LEVEL SECURITY` (e.g. `match_events`, `match_event_fetches` in 152). Only the 12 legacy tables in issue 4 lack a tracked statement. Live: no public table has RLS disabled.
+
+### Check 2 — `ML_ENSEMBLE` / `DIXON_COLES` rows
+These are `model_architecture` values in `model_calibration`, `value_signals`, `computed_values` (live `model_calibration` currently holds a `DIXON_COLES` row, no `ML_ENSEMBLE` row). All carry RLS with no INSERT/UPDATE/DELETE/TRUNCATE for `anon`/`authenticated`; public read is preserved by SELECT policies/grants. **Pass** (see issue 3 for the one fragile policy pattern).
+
+### Check 3 — `computeValues.js` client guard
+`getClient()` is required lazily in `main()` (computeValues.js:1118) and `lib/supabaseClient.js` caches a singleton and throws a clear error on missing `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`. The client is a stateless HTTP (PostgREST) client with `persistSession: false`, so there is no persistent connection to drop; transient failures come back as `{error}`, per-match failures are isolated via `Promise.allSettled` (line ~1107), and `main().catch` logs and exits 1 (line ~1297). Secondary-signal insert is wrapped in try/catch (~1279). **Pass — no crash path.** Residual note from 04 Oct stands: some stats lookups ignore `error` and silently return empty.
+
+### Other advisor items (informational)
+24 functions with mutable `search_path`; 21 `SECURITY DEFINER` functions executable by `anon` (`preview_*_ids`, `model_record`, `model_detail`, `fixture_board*`, `results_board`, `result_payload`, etc.) and `settle_my_bets`, `export_my_data`, `bookmaker_prime_performance` by `authenticated` — confirm each is intentionally public and pin `search_path`.
+
+---
+
+## Earlier audit history
+
 ## Automated re-audit — 2026-10-04 (supersedes the status table below where they conflict)
 
 **Scope:** `migrations/001–127`, live `MaxEdge Project` public schema (read-only catalog queries + Supabase security advisors), `computeValues.js`, `lib/supabaseClient.js`.
