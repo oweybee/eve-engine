@@ -2,7 +2,7 @@
 // lib/inplayFlags — which tracker flags are new, and what a post may say.
 
 const assert = require('assert');
-const { flagKey, postable, newFlags, flagPost, withCard, MAX_FLAGS_PER_MATCH, LATEST_MINUTE } = require('./lib/inplayFlags');
+const { flagKey, postable, worthPosting, newFlags, flagPost, withCard, MAX_FLAGS_PER_MATCH, LATEST_MINUTE } = require('./lib/inplayFlags');
 const { teamMark } = require('./lib/discordCards');
 
 let n = 0;
@@ -137,6 +137,42 @@ t('the guard always finds a free frame after four posts', () => {
   const env = { X_POSTING_ENABLED: '1', X_DAILY_CAP: '6' };
   const free = FRAMES.map((_, i) => mayPost({ text: xFlagText(m, f, i), recentSkeletons: recent, postedToday: 4, env }).ok);
   assert(free.filter(Boolean).length >= 2);
+});
+
+t('pressure posts up to 60 minutes, not after', () => {
+  const f = flag('pressure', 'home');
+  assert(worthPosting(match({ minute: 34 }), f));
+  assert(worthPosting(match({ period: 'HT', minute: 45 }), f));
+  assert(worthPosting(match({ period: '2H', minute: 60 }), f));
+  assert(!worthPosting(match({ period: '2H', minute: 61 }), f));
+  assert(!worthPosting(match({ period: 'ET', minute: 95 }), f));
+});
+
+t('favourite behind posts in the first half and at half-time only', () => {
+  const f = flag('fav-trailing', 'home');
+  assert(worthPosting(match({ period: '1H', minute: 12 }), f));
+  assert(worthPosting(match({ period: 'HT', minute: 45 }), f));
+  assert(!worthPosting(match({ period: '2H', minute: 47 }), f));
+  assert(worthPosting(match({ period: null, minute: 40 }), f));
+  assert(!worthPosting(match({ period: null, minute: 50 }), f));
+});
+
+t('a red card skips only when the 11 men were long odds before kick-off', () => {
+  const f = flag('red-card', 'away');                       // away down to 10, home has 11
+  assert(!worthPosting(match({ pre: { home: 0.20, draw: 0.25, away: 0.55 } }), f));
+  assert(worthPosting(match({ pre: { home: 0.35, draw: 0.30, away: 0.35 } }), f));
+  assert(worthPosting(match({ pre: { home: 0.70, draw: 0.20, away: 0.10 } }), f));
+  assert(worthPosting(match({ pre: null }), f));              // no price: the fact still posts
+});
+
+t('goals expected and drift are not filtered', () => {
+  assert(worthPosting(match({ period: '2H', minute: 70 }), flag('goals-due', null)));
+  assert(worthPosting(match({ period: '2H', minute: 70 }), flag('drift', 'home')));
+});
+
+t('a filtered flag is not posted and does not use up the match cap', () => {
+  const m = match({ period: '2H', minute: 70, flags: [flag('pressure', 'home'), flag('fav-trailing', 'home'), flag('goals-due', null)] });
+  assert.deepStrictEqual(newFlags([m], new Map()).map(x => x.key), ['goals-due:match']);
 });
 
 console.log(`\n${n} passed`);
