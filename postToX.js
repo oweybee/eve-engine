@@ -336,7 +336,7 @@ async function fetchRecentSignals(supabase) {
     .select(`
       id, match_id, market, market_line, outcome, detected_odds, detected_edge, detected_mes, bookmaker,
       kickoff_at, detected_at, signal_category, is_mover, phase, model_architecture,
-      model_prob, market_prob, prob_gap, mxs, mxs_band, gap_basis,
+      model_prob, market_prob, prob_gap, mxs, mxs_band, gap_basis, rung,
       match:matches (
         goals_home, goals_away, minute,
         home_team:teams!matches_home_team_id_fkey ( name ),
@@ -493,6 +493,14 @@ function bandOf(signal) {
  * 21 Aug badge fix removed from the site.
  */
 function rungOf(signal) {
+  // THE STORED RUNG WINS. `value_signals.rung` is written by the database
+  // trigger (`set_signal_rung` -> `signal_rung(odds, edge, mxs, market)`), the
+  // same function the site and the record read. Working it out again here kept
+  // a second copy of the rules, and on 29 Oct 2026 that copy was two rules
+  // behind: Discord posted 80+ scored rows (EDGE on the site) as
+  // "PRIME · Counted in the published record". Recompute only for a row the
+  // trigger never stamped.
+  if (typeof signal?.rung === 'string' && signal.rung) return signal.rung;
   return rungFor({
     odds: signal.detected_odds,
     edge: signal.detected_edge,
@@ -523,6 +531,11 @@ function rungOf(signal) {
  * make `rungFor` return null and the channel would go silent without throwing.
  */
 function isBroadcastable(signal) {
+  // Same source as the printed word (see rungOf): the stored rung when the
+  // trigger wrote one, the recomputed ladder otherwise.
+  if (typeof signal?.rung === 'string' && signal.rung) {
+    return signal.rung === 'PRIME' || signal.rung === 'EDGE';
+  }
   const mxs = signal.mxs ?? rescore(signal).mxs;
   return isBacked({
     odds: signal.detected_odds,
