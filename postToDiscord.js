@@ -175,7 +175,7 @@ async function settledToAnnounce(supabase) {
   if (!ids.length) return [];
 
   const { data, error } = await supabase.from('value_signals')
-    .select(`id, market, market_line, outcome, detected_odds, detected_edge, mxs, mxs_band, gap_basis,
+    .select(`id, market, market_line, outcome, detected_odds, detected_edge, mxs, mxs_band, gap_basis, rung,
       model_prob, market_prob, prob_gap, closing_odds, result, kickoff_at,
       match:matches ( goals_home, goals_away,
         home_team:teams!matches_home_team_id_fkey ( name ),

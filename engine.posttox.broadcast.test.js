@@ -97,5 +97,36 @@ test('the broadcast gate in run() reads isBroadcastable, not a bare tier string'
   );
 });
 
+// 29 Oct 2026: Discord posted 80+ scored rows as "PRIME · Counted in the
+// published record" while the database (and so the site's record) had them as
+// EDGE. The poster now reads the stored `rung` the trigger wrote.
+test('rungOf prefers the stored rung over a recomputed one', () => {
+  const { rungOf } = require('./postToX.js');
+  const row = { detected_odds: 2.55, detected_edge: 0.0623, mxs: 85, gap_basis: 'devigged', rung: 'EDGE' };
+  assert.strictEqual(rungOf(row), 'EDGE');
+  assert.strictEqual(rungOf({ ...row, rung: 'PRIME', mxs: 66 }), 'PRIME');
+  assert.strictEqual(rungOf({ ...row, rung: 'WATCH' }), 'WATCH');
+});
+
+test('isBroadcastable follows the stored rung', () => {
+  const row = { detected_odds: 2.55, detected_edge: 0.0623, mxs: 66, gap_basis: 'devigged' };
+  assert.strictEqual(isBroadcastable({ ...row, rung: 'WATCH' }), false, 'a WATCH row must not broadcast');
+  assert.strictEqual(isBroadcastable({ ...row, rung: 'EDGE' }), true);
+  assert.strictEqual(isBroadcastable({ ...row, rung: 'PRIME' }), true);
+});
+
+test('with no stored rung, rungOf still falls back to the ladder', () => {
+  const { rungOf } = require('./postToX.js');
+  const r = rungOf({ detected_odds: 2.5, detected_edge: 0.06, mxs: 66, gap_basis: 'devigged' });
+  assert.ok(r === 'PRIME' || r === 'EDGE', `expected a backed rung, got ${r}`);
+});
+
+test('both Discord fetches select the stored rung', () => {
+  const x = fs.readFileSync(require.resolve('./postToX.js'), 'utf8');
+  const d = fs.readFileSync(require.resolve('./postToDiscord.js'), 'utf8');
+  assert.ok(/gap_basis, rung,/.test(x), 'fetchRecentSignals must select rung');
+  assert.ok(/gap_basis, rung,/.test(d), 'settledToAnnounce must select rung');
+});
+
 console.log(`\n${passed} passed`);
 if (process.exitCode) process.exit(process.exitCode);
