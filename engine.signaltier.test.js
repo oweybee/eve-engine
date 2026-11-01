@@ -70,6 +70,12 @@ test('the box picks the rung and the score can only demote', () => {
   assert.strictEqual(rungFor({ odds: 2.00, edge: 0.08, mxs: 99 }), 'EDGE');
   // Demotion inside the PRIME box.
   assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 60 }), 'PRIME');
+  // 25 Oct 2026: PRIME is 60-79; a PRIME-box row scoring 80+ is EDGE,
+  // matching signal_rung()/record_band(). The Chivas Under 11 corners row
+  // (1.80, 6.78%, mxs 90) went out as PRIME on Discord without this.
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 79 }), 'PRIME');
+  assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 80 }), 'EDGE');
+  assert.strictEqual(rungFor({ odds: 1.80, edge: 0.0678, mxs: 90 }), 'EDGE');
   assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 59 }), 'EDGE');
   assert.strictEqual(rungFor({ odds: 2.00, edge: 0.06, mxs: 40 }), 'SLIGHT');
   // No score is not a low score.
@@ -88,7 +94,10 @@ test('rungFor is monotonic in score and never promotes across the box', () => {
     for (let mxs = 0; mxs <= 100; mxs++) {
       const rung = rungFor({ odds, edge, mxs });
       const rank = order.indexOf(rung);
-      assert.ok(rank >= prev, `rung weakened as score rose at ${odds}/${edge}/${mxs}`);
+      // The one deliberate exception (25 Oct 2026): in the PRIME box a score of
+      // 80+ steps PRIME down to EDGE, and it must step to EDGE, nothing lower.
+      const ceilingStep = prev === order.indexOf('PRIME') && rung === 'EDGE' && mxs >= 80;
+      assert.ok(rank >= prev || ceilingStep, `rung weakened as score rose at ${odds}/${edge}/${mxs}`);
       prev = rank;
       const inPrimeBox = edge >= 0.05 && edge < 0.07 && odds >= 1.40 && odds < 3.00;
       const inEdgeBox  = edge >= 0.07 && edge < 0.10 && odds >= 1.40 && odds < 3.00;

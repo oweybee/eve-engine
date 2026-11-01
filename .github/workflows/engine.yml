@@ -109,6 +109,13 @@ jobs:
       SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       API_FOOTBALL_KEY:          ${{ secrets.API_FOOTBALL_KEY }}
+      # fetchResults.js asks the site to rebuild the cached /performance page
+      # after every settlement run. Without these two it logged "unset - page
+      # not revalidated" and the Record list froze until the next deploy
+      # (1 Nov 2026: two settled PRIME results missing from the page).
+      # REVALIDATE_SECRET must match the Vercel production value.
+      SITE_URL:                  https://www.maxedge.live
+      REVALIDATE_SECRET:         ${{ secrets.REVALIDATE_SECRET }}
       BETFAIR_APP_KEY:           ${{ secrets.BETFAIR_APP_KEY }}
       BETFAIR_USERNAME:          ${{ secrets.BETFAIR_USERNAME }}
       BETFAIR_PASSWORD:          ${{ secrets.BETFAIR_PASSWORD }}

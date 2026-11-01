@@ -175,7 +175,7 @@ async function settledToAnnounce(supabase) {
   if (!ids.length) return [];
 
   const { data, error } = await supabase.from('value_signals')
-    .select(`id, market, market_line, outcome, detected_odds, detected_edge, mxs, mxs_band, gap_basis,
+    .select(`id, match_id, market, market_line, outcome, detected_odds, detected_edge, mxs, mxs_band, gap_basis,
       model_prob, market_prob, prob_gap, closing_odds, result, kickoff_at,
       match:matches ( goals_home, goals_away,
         home_team:teams!matches_home_team_id_fkey ( name ),
@@ -184,7 +184,23 @@ async function settledToAnnounce(supabase) {
     .in('id', ids)
     .in('result', ['win', 'loss', 'void', 'push']);
   if (error) throw new Error(`settledToAnnounce signals: ${error.message}`);
-  return (data ?? []).map(s => ({ ...s, _thread: byId.get(s.id).thread }));
+
+  // Corners and cards settle on match totals, not goals, so the result card
+  // must show the number the bet was graded on. Same source settle_my_bets()
+  // and the follows settler grade from (migration 182).
+  const statIds = [...new Set((data ?? [])
+    .filter(s => s.market === 'corners' || s.market === 'bookings')
+    .map(s => s.match_id))];
+  const extra = new Map();
+  if (statIds.length) {
+    const { data: xs, error: e3 } = await supabase.from('match_extra_stats')
+      .select('match_id, corners, cards, yellow, red').in('match_id', statIds);
+    if (e3) throw new Error(`settledToAnnounce extra stats: ${e3.message}`);
+    for (const x of xs ?? []) extra.set(x.match_id, x);
+  }
+  return (data ?? []).map(s => ({
+    ...s, _thread: byId.get(s.id).thread, _extra: extra.get(s.match_id) ?? null,
+  }));
 }
 
 async function runResults(supabase) {

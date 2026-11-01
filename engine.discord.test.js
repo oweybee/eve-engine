@@ -262,6 +262,22 @@ t('no strong player runs means no player post', () => {
   assert.strictEqual(playersPost({ sot1: [railRow('X', 5)] }), null);
 });
 
+t('a corners result shows the corner total it was graded on', () => {
+  const sig = { ...base, market: 'corners', market_line: 11, outcome: 'under', result: 'win',
+    closing_odds: 1.79, detected_odds: 1.80, _extra: { corners: 9 } };
+  const f = resultPost(sig, 'EDGE').embeds[0].fields;
+  assert.ok(f.some(x => x.name === 'Total corners' && x.value === '9'));
+  assert.ok(f.some(x => x.name === 'Final score'));
+});
+
+t('a cards result falls back to yellow + red, and goals markets add nothing', () => {
+  const sig = { ...base, market: 'bookings', market_line: 3.5, outcome: 'over', result: 'win',
+    _extra: { cards: null, yellow: 4, red: 1 } };
+  assert.ok(resultPost(sig, 'PRIME').embeds[0].fields.some(x => x.name === 'Total cards' && x.value === '5'));
+  const goals = resultPost({ ...base, result: 'win' }, 'PRIME').embeds[0].fields;
+  assert.ok(!goals.some(x => /^Total /.test(x.name)));
+});
+
 // Image cards: async, so they run after the sync checks.
 (async () => {
   const { trendsCard, moversCard } = require('./lib/discordCards');
