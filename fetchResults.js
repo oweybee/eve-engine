@@ -106,6 +106,30 @@ async function fetchFixturesForDate(date, cache) {
   return fixtures;
 }
 
+// A FIXTURE MOVED TO ANOTHER DAY IS NOT ON ITS OLD DATE (12 Nov 2026).
+// The status sweep looks a fixture up in `/fixtures?date=<stored kickoff>`, so a
+// match the league moved — Tenerife v FC Andorra, stored for 1 Nov 20:00 and
+// played 2 Nov 13:00 — is never on the page it is searched for, stays
+// 'scheduled' for ever and strands every signal on it. A numeric id is
+// API-Football's own fixture id, so it is asked for directly. Cached per id,
+// and NOT cached on error, for the same reason as the date read above.
+// Bounded, because it costs API calls on every run: 71 fixtures were stuck on
+// 12 Nov, oldest from 2022. Only the last 120 days, at most 15 a run.
+const ID_LOOKUP_MAX_PER_RUN = Number(process.env.RESULTS_ID_LOOKUPS ?? 15);
+const ID_LOOKUP_MAX_AGE_MS = 120 * 24 * 3600 * 1000;
+
+async function fetchFixtureById(id, cache) {
+  const key = `id:${id}`;
+  if (cache.has(key)) return cache.get(key);
+  const url = `https://${API_FOOTBALL_HOST}/fixtures?id=${encodeURIComponent(id)}`;
+  const res = await fetch(url, { headers: { 'x-apisports-key': API_FOOTBALL_KEY } });
+  if (!res.ok) throw new Error(`API-Football id=${id}: HTTP ${res.status}`);
+  const json = await res.json();
+  const fx = (json?.response ?? [])[0] ?? null;
+  cache.set(key, fx);
+  return fx;
+}
+
 // Maps a finished fixture to the winning outcome: 'home' | 'draw' | 'away' | null.
 function fixtureOutcome(fx) {
   const status = fx?.fixture?.status?.short;
@@ -256,7 +280,7 @@ async function settleFinishedMatches(supabase, cache) {
     for (const d of done ?? []) settledKeys.add(dayKey(d.home_team_id, d.away_team_id, d.kickoff_at));
   }
 
-  let completed = 0, stillPending = 0, skippedDup = 0;
+  let completed = 0, stillPending = 0, skippedDup = 0, idLookups = 0;
   for (const m of matches) {
     const key = dayKey(m.home_team_id, m.away_team_id, m.kickoff_at);
     if (settledKeys.has(key)) { skippedDup++; continue; } // twin already scored
@@ -275,11 +299,28 @@ async function settleFinishedMatches(supabase, cache) {
     // Numeric external_id → exact API-Football fixture id (authoritative).
     // Otherwise (Betfair/Odds-API hash id) → match by team name on that date.
     const numeric = /^\d+$/.test(m.external_id ?? '');
-    const fx = numeric
+    let fx = numeric
       ? fixtures.find(f => String(f?.fixture?.id) === m.external_id)
       : fixtures.find(f =>
           namesMatch(m.home_team?.name, f?.teams?.home?.name) &&
           namesMatch(m.away_team?.name, f?.teams?.away?.name));
+
+    // Not on its stored date: the league moved it. Ask for the id itself.
+    if (!fx && numeric && idLookups < ID_LOOKUP_MAX_PER_RUN
+        && Date.now() - new Date(m.kickoff_at).getTime() < ID_LOOKUP_MAX_AGE_MS) {
+      idLookups++;
+      try {
+        fx = await fetchFixtureById(m.external_id, cache);
+      } catch (err) {
+        console.warn(`  [results] id lookup ${m.external_id}: ${err.message}`);
+        stillPending++;
+        continue;
+      }
+      const moved = fx?.fixture?.date;
+      if (moved && new Date(moved).toISOString() !== new Date(m.kickoff_at).toISOString()) {
+        console.log(`  [results] ${m.external_id} moved ${m.kickoff_at} -> ${moved} (${fx?.fixture?.status?.short ?? '?'})`);
+      }
+    }
 
     const outcome = fx ? fixtureOutcome(fx) : null;
     // fixtureOutcome only returns non-null when the fixture is FT/AET/PEN AND
@@ -294,6 +335,8 @@ async function settleFinishedMatches(supabase, cache) {
         goals_home: fx.goals.home,
         goals_away: fx.goals.away,
         result:     outcome,
+        // A moved fixture is recorded at the kickoff it was actually played at.
+        ...(fx?.fixture?.date ? { kickoff_at: new Date(fx.fixture.date).toISOString() } : {}),
       })
       .eq('id', m.id);
     if (upErr) {
@@ -305,7 +348,7 @@ async function settleFinishedMatches(supabase, cache) {
     completed++;
   }
 
-  console.log(`[results] match status: completed ${completed}, still pending ${stillPending}, dup-skipped ${skippedDup}`);
+  console.log(`[results] match status: completed ${completed}, still pending ${stillPending}, dup-skipped ${skippedDup}, id lookups ${idLookups}`);
   return { completed, pending: stillPending, skippedDup };
 }
 
