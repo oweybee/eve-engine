@@ -3,7 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 // lineup-dms
 //
-// Lineup alerts for Plus members (migration 196). When both confirmed XIs for
+// Lineup alerts for Plus members (migration 197). When both confirmed XIs for
 // a fixture are in, every Plus member who follows either side and has linked
 // Discord gets one DM from the MAXEDGE bot with both lineups.
 //

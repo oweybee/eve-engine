@@ -1,4 +1,5 @@
--- 196: Lineup alerts (Plus only).
+-- 197: Lineup alerts (Plus only). Applied to production as "196_lineup_alerts" (plus 196b, 196c) before
+-- the number was found taken by 196_prime_curve_points; the content is what is live.
 --
 -- A Plus member picks the teams they follow on the site (settings, Lineup
 -- alerts panel). When both confirmed XIs for one of those teams' fixtures land

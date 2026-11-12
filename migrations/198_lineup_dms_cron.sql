@@ -1,4 +1,4 @@
--- 197: the lineup-dms clock. Every 2 minutes; capture-lineups writes every 4,
+-- 198: the lineup-dms clock. Every 2 minutes; capture-lineups writes every 4,
 -- so a confirmed XI waits at most ~2 minutes for its DM. The function only
 -- does work when lineup_dms_due returns rows, so idle runs are one cheap query.
 select cron.unschedule('lineup-dms') where exists (select 1 from cron.job where jobname = 'lineup-dms');

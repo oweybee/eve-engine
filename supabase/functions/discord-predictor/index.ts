@@ -9,7 +9,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 //  1. Discord, at the app's Interactions Endpoint URL. Every request is
 //     Ed25519-signed; anything unsigned is refused. Handles /predict (two
 //     forms of up to 5 games, because a Discord form holds 5 boxes),
-//     /mypredictions and /leaderboard. Also /teams (migration 196): a private
+//     /mypredictions and /leaderboard. Also /teams (migration 197): a private
 //     reply with the member's lineup-alert teams and a button to the site's
 //     picker. Lineup alerts are Plus only; the DMs themselves are sent by the
 //     lineup-dms function.

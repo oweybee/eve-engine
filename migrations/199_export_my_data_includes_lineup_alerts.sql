@@ -1,4 +1,4 @@
--- 198: the GDPR export carries the lineup-alert data from 196: the teams a
+-- 199: the GDPR export carries the lineup-alert data from 197: the teams a
 -- member follows, their DM-blocked state, and the log of DMs sent to them.
 create or replace function public.export_my_data()
 returns json
