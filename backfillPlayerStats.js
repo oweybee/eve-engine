@@ -187,7 +187,6 @@ function playerRows(meta, oriented, at = new Date().toISOString()) {
         pen_scored:        toInt(st.penalty?.scored),
         pen_missed:        toInt(st.penalty?.missed),
         pen_saved:         toInt(st.penalty?.saved),
-        raw:               st,
         fetched_at:        at,
       });
     }
@@ -419,7 +418,7 @@ async function main() {
         const rows = oriented ? playerRows(meta, oriented) : [];
         const log  = logRow(m.external_id, rows, oriented?.by);
         if (ONE_FIXTURE) {
-          console.log(JSON.stringify({ oriented_by: oriented?.by, log, sample: rows.slice(0, 3).map(r => ({ ...r, raw: undefined })) }, null, 2));
+          console.log(JSON.stringify({ oriented_by: oriented?.by, log, sample: rows.slice(0, 3) }, null, 2));
         }
         if (!rows.length) empties++;
         else { by[oriented.by]++; for (const k of Object.keys(cov)) if (log[k]) cov[k]++; }
