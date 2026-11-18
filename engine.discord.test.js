@@ -31,6 +31,13 @@ t('fair price inverts edge = p·odds − 1', () => {
   assert.strictEqual(fairPrice('x', 0.1), null);
 });
 
+t('signal embed links to the match page, not the movers board', () => {
+  assert.strictEqual(signalPost({ ...base, match_id: 1234 }, 'PRIME').embeds[0].url, 'https://maxedge.live/match/1234');
+  assert.strictEqual(signalPost({ ...base, match_id: 99 }, 'EDGE').embeds[0].url, 'https://maxedge.live/match/99');
+  assert.strictEqual(signalPost(base, 'PRIME').embeds[0].url, 'https://maxedge.live/fixtures');
+  assert(!all(signalPost({ ...base, match_id: 1 }, 'PRIME')).includes('/market-pulse'));
+});
+
 t('every signal post prints the fair price, the book and 18+', () => {
   const p = signalPost(base, 'PRIME');
   assert(all(p).includes('Fair price'));
