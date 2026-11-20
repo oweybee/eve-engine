@@ -228,5 +228,31 @@ test('computeValues passes the census, so the diagnostic is not dead code', () =
   assert(/\[secondary\] \$\{market\}/.test(src), 'the census must be printed per market');
 });
 
+console.log('\nno goals-model signal above SECONDARY_MAX_ODDS');
+
+// The same sweep is run twice in child processes: once with the shipped cap and
+// once with it lifted. The lifted run must produce long-priced signals, or the
+// capped run proves nothing (an empty list passes any "none above 5" test).
+test('totals signals above 5.00 are withheld, and the sweep can produce them', () => {
+  const { execFileSync } = require('child_process');
+  const script = `
+    const sm = require(${JSON.stringify(require('path').join(__dirname, 'lib/secondaryMarkets'))});
+    const consensus = { home: { p_cons: 0.45 }, draw: { p_cons: 0.27 }, away: { p_cons: 0.28 } };
+    const stats = { corners_for_avg: 6, corners_against_avg: 5, cards_avg: 2 };
+    const out = [];
+    for (const [line, o, u] of [[0.5,12,1.03],[0.5,15,1.02],[0.5,1.01,26],[5.5,15,1.01],[6.5,21,1.005],[3.5,4.2,1.2]]) {
+      const match = { id: 'm' + line + o, odds: ['bet365','betvictor'].map(b => ({ market: 'totals', market_line: line, bookmaker: b, home_odds: o, away_odds: u, fetched_at: '2026-08-18T10:00:00Z' })) };
+      out.push(...sm.buildSecondarySignals(match, consensus, stats, stats, { cards_avg: 4 }).map(s => s.detected_odds));
+    }
+    console.log(JSON.stringify(out));`;
+  const run = (env) => JSON.parse(execFileSync(process.execPath, ['-e', script],
+    { env: { ...process.env, ...env }, encoding: 'utf8' }));
+  const lifted = run({ SECONDARY_MAX_ODDS: '1000' });
+  assert(lifted.some(o => o > 5), `the lifted sweep must produce a signal above 5.00, got ${JSON.stringify(lifted)}`);
+  const env = { ...process.env }; delete env.SECONDARY_MAX_ODDS;
+  const capped = JSON.parse(execFileSync(process.execPath, ['-e', script], { env, encoding: 'utf8' }));
+  assert(capped.every(o => o <= 5), `no signal may be priced above 5.00, got ${JSON.stringify(capped)}`);
+});
+
 console.log(`\n${failed === 0 ? '✓' : '✗'} market prob scale: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
