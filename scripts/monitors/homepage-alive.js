@@ -226,7 +226,7 @@ async function readApi() {
   try {
     const iso = new Date().toISOString()
     const res = await fetch(
-      `${url}/rest/v1/computed_values?select=match_id,match!inner(kickoff_at)` +
+      `${url}/rest/v1/computed_values?select=match_id,match:matches!inner(kickoff_at)` +
         `&match.kickoff_at=gt.${iso}&limit=50`,
       { headers: { apikey: key, authorization: `Bearer ${key}` } },
     )
