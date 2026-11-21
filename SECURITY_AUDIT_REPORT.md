@@ -68,3 +68,35 @@ These appear as `model_architecture` values (CHECK constraints in migrations 022
 ## Not checked
 
 Only the 12 tables above plus `computed_values`/`matches` were queried live. Tables that already have RLS statements in migrations were not re-verified against the live database.
+
+---
+
+## Addendum — re-audit 2026-11-01
+
+Live check (MaxEdge Project, `public` schema): **no table has RLS disabled and `anon` holds no INSERT/UPDATE/DELETE on any table.** No live exposure.
+
+### A. Findings 1 and 2 above are still open
+No migration after 191 adds the RLS backfill, and `computeValues.js` `fetchStatsLookups` (~1068, ~1074) and `updateBetOfDay` (~1149, ~1159) still ignore the `{ error }` result.
+
+### B. Additional repo-drift: ledger migrations (added after the first audit)
+`migrations/ledger/` (backfilled in #197) creates 17 more tables with no `ENABLE ROW LEVEL SECURITY` anywhere in the repo. All are RLS-on in the live database; a rebuild from the repo would leave them open to `anon` via PostgREST.
+
+| Table | Created in (`migrations/ledger/`) |
+|---|---|
+| team_stats_cache | 20260619164631_014_ml_ensemble_columns.sql |
+| edge_signals | 20260625103414_create_edge_signals.sql |
+| fixture_mapping | 20260625115327_create_fixture_mapping.sql |
+| match_predictions | 20260625115329_create_match_predictions.sql |
+| team_stats | 20260625115332_create_team_stats.sql |
+| lineups | 20260625115545_create_lineups.sql |
+| research_team_ids, research_match_ratings | 20260805170742_research_pi_ratings_layer.sql |
+| research_team_match, research_rolling | 20260805171110_research_rolling_form.sql |
+| research_model_probs | 20260805171310_research_model_probs_tbl.sql |
+| research_dc_params, research_dc_global | 20260805174014_research_dc_mle_fitter.sql |
+| research_dc_preds | 20260805174458_research_dc_predictions.sql |
+| research_disc_tm | 20260805174654_research_corners_cards.sql |
+| research_disc_roll, research_ref_roll | 20260805174717_research_disc_model.sql |
+
+Caveat: detection is a static scan for `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`; a few may be covered by dynamic SQL (e.g. `20260630160855_rls_policies_reference_tables.sql`). Confirm against the live catalog before shipping.
+
+Remediation: extend the proposed `192_rls_backfill.sql` with `alter table public.<t> enable row level security;` for each table above (no-op where already enabled), and add `service_role`-only policies for the `research_*` tables.
